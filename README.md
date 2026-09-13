@@ -51,7 +51,8 @@ boundary between them is the core design constraint.
 |-------------------------------------------------|-------------------------------------------------------------|
 | All code in `src/`, all tests, all workflow YAML | API key id, private key, signed headers, signatures          |
 | Aggregate counts printed by the audit            | Raw fill payloads, fill ids, order ids, trade ids            |
-| Synthetic fixtures in `tests/`                   | Tickers the owner traded, prices, contract counts, balances  |
+| Kalshi's public taxonomy and milestone catalogue | Tickers the owner traded, prices, contract counts, balances  |
+| Synthetic fixtures in `tests/`                   | The **competitions** of markets the owner traded             |
 
 Enforcement is structural, not just editorial:
 
@@ -108,24 +109,37 @@ are never used.
 
 ### Evidence hierarchy
 
-Classification uses Kalshi's own metadata first, and treats ticker text as
-supporting evidence except where an exact match makes it deterministic.
-Only *authoritative* evidence can decide a sport.
+Classification is built on the league identification Kalshi publishes, not on
+guessed tickers. Only *authoritative* evidence can decide a sport.
 
-| Rank | Signal                                                   | Strength      |
-|------|----------------------------------------------------------|---------------|
-| 1    | `series.tags` / `series.categories`                       | authoritative |
-| 2    | `series.category`, `event.category`, `market.category`    | authoritative |
-| 3    | `series.title`                                            | authoritative |
-| 4    | Exact `series_ticker` match in the series registry        | authoritative |
-| 5    | `event.title`, `event.sub_title`, market titles/subtitles | supporting    |
+| Level | Source | Decides? |
+|---|---|---|
+| **L1** | `GET /events/{ticker}/metadata` → **`competition`** | yes |
+| **L2** | `GET /search/filters_by_sport` → the sport owning that competition | yes |
+| **L3** | `GET /milestones` → competition linked to the event ticker | yes |
+| **L4** | series `tags` / `categories` / `category` / `title` | yes |
+| **L5** | exact series-ticker registry (our own unverified table) | last resort |
 
-Rank 4 is an **exact** match against
-[`series_registry.py`](src/kalshi_router/series_registry.py) — never a prefix or a
-fuzzy resemblance. A market ticker contributes only via its series prefix, which
-Kalshi forms as `SERIES-EVENT-OUTCOME`; `KXNFLGAMEXTRA-…` does not match
-`KXNFLGAME`. Registry entries are flagged as unverified (see §15 of the contract
-doc), and every audit reports how many classifications leaned on one.
+**L1 is the fix for the 72% problem.** `competition` distinguishes
+`"Pro Football"` from `"College Football"` and `"Pro Baseball"` from college
+baseball — the exact NFL/CFB ambiguity the first live audit had to refuse 144
+times. L2 maps tournament-shaped competitions (`ATP Madrid`, `US Open Men
+Singles`) to their sport, which is how tennis resolves without enumerating every
+tournament.
+
+Precedence and conflict rules:
+
+* The highest level producing a verdict wins.
+* A **present but unrecognized** competition is `UNRESOLVED`, not a licence to
+  fall through. A **null** competition does fall through — many events are not
+  sports.
+* A conflict between a competition verdict (L1–L3) and series metadata (L4) is
+  `UNRESOLVED`: both are real Kalshi metadata, so disagreement means we do not
+  understand the market.
+* The **L5 registry is our own table, not Kalshi's.** It never overrides a
+  contradictory higher level; it yields, and the disagreement is counted.
+* Ticker resemblance and prefix guessing remain forbidden. L5 matches a full
+  series ticker exactly or not at all.
 
 ## 6. Fail-closed policy
 
@@ -167,11 +181,14 @@ pip install -e ".[dev]"
 pytest
 ```
 
-164 tests cover authentication and secret redaction, missing-credential failure,
+261 tests cover authentication and secret redaction, missing-credential failure,
 pagination, duplicate fills, malformed responses, empty result sets, rate-limit
-and retry behaviour, metadata lookup, each of the six classifications, ambiguity
-handling, buy/sell, YES/NO, multi-fill orders, privacy-safe logging, the sensitive
-local mode, and the workflow's inability to print raw fill objects.
+and retry behaviour, metadata lookup, event-metadata competition resolution, the
+sport taxonomy (including malformed taxonomies), the milestone backstop and its
+privacy property, exact `Decimal` parsing of `count_fp` and the dollar price
+fields, each of the six classifications, every fail-closed path, buy/sell, YES/NO,
+multi-fill orders, privacy-safe logging, the sensitive local mode, and the
+workflow's inability to print raw fill objects.
 
 ## 9. How to run the safe GitHub Actions audit
 
@@ -233,6 +250,21 @@ Guarantees:
 | 2    | Configuration or credential problem; nothing was sent to Kalshi |
 | 3    | Kalshi API or schema failure                                    |
 | 4    | Sensitive output requested somewhere it is not allowed          |
+
+## 10a. Fixed-point quantities and prices
+
+Kalshi's Q1-2026 migration removed the integer `count` and price fields. Fills now
+carry decimal strings:
+
+* `count_fp` — **`"10.00"` is ten contracts**; fractional contracts are possible.
+* `yes_price_dollars` / `no_price_dollars` — dollars, with sub-penny ticks as fine
+  as $0.001.
+
+Everything is parsed into `decimal.Decimal` from the string form. **Binary
+floating point is never used for a financial quantity**, so values round-trip
+exactly and reconciliation against Kalshi's arithmetic stays possible. Phase 0.1
+parses and validates these and reports field-presence counts; it does **not** yet
+do position accounting.
 
 ## 11. Phase 1 requirements
 

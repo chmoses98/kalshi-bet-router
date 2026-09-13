@@ -5,14 +5,18 @@ from __future__ import annotations
 import pytest
 
 from kalshi_router.classify import (
+    EvidenceLevel,
     EvidenceStrength,
     MarketContext,
+    UnresolvedReason,
     classify_market,
     derive_series_ticker,
 )
+from kalshi_router.milestones import MilestoneIndex
 from kalshi_router.sports import Sport
+from kalshi_router.taxonomy import parse_filters_by_sport
 
-from .synthetic import make_event, make_market, make_series
+from .synthetic import make_event, make_event_metadata, make_market, make_series, make_taxonomy
 
 
 def context(
@@ -22,15 +26,208 @@ def context(
     series_extra=None,
     event_extra=None,
     market_extra=None,
+    competition=None,
+    competition_scope=None,
+    with_event_metadata=False,
     **kwargs,
 ):
+    metadata = None
+    if competition is not None or with_event_metadata:
+        metadata = make_event_metadata(competition, competition_scope)
     return MarketContext(
         market_ticker=market_ticker,
         market=make_market(market_ticker, event_ticker, **(market_extra or {})),
         event=make_event(event_ticker, series_ticker, **(event_extra or {})),
         series=make_series(series_ticker, **(series_extra or {})),
+        event_metadata=metadata,
         **kwargs,
     )
+
+
+TAXONOMY = parse_filters_by_sport(make_taxonomy({
+    "Baseball": ["Pro Baseball", "College Baseball"],
+    "Football": ["Pro Football", "College Football", "Semi-Pro Football"],
+    "Tennis": ["US Open Men Singles", "ATP Madrid"],
+    "Basketball": ["Pro Basketball (M)"],
+    "Soccer": ["Premier League"],
+}))
+
+
+# =============================== L1: event metadata competition ==============
+
+def test_pro_baseball_competition_resolves_to_mlb():
+    result = classify_market(context(competition="Pro Baseball", competition_scope="Game"))
+    assert result.sport is Sport.MLB
+    assert result.resolved_by is EvidenceLevel.L1_EVENT_COMPETITION
+    assert result.competition == "Pro Baseball"
+    assert result.competition_scope == "Game"
+
+
+def test_pro_football_competition_resolves_to_nfl():
+    result = classify_market(context(competition="Pro Football"))
+    assert result.sport is Sport.NFL
+    assert result.resolved_by is EvidenceLevel.L1_EVENT_COMPETITION
+
+
+def test_college_football_competition_resolves_to_cfb():
+    """The exact NFL/CFB split Phase 0 had to refuse."""
+    result = classify_market(context(competition="College Football"))
+    assert result.sport is Sport.CFB
+    assert result.resolved_by is EvidenceLevel.L1_EVENT_COMPETITION
+
+
+def test_pro_and_college_football_are_never_confused():
+    pro = classify_market(context(competition="Pro Football"))
+    college = classify_market(context(competition="College Football"))
+    assert pro.sport is Sport.NFL and college.sport is Sport.CFB
+
+
+def test_competition_matching_is_case_and_space_insensitive():
+    assert classify_market(context(competition="  pro   BASEBALL ")).sport is Sport.MLB
+
+
+def test_tennis_tour_competition_resolves_without_taxonomy():
+    result = classify_market(context(competition="ATP Madrid"))
+    assert result.sport is Sport.TENNIS
+
+
+def test_out_of_scope_competition_is_other():
+    result = classify_market(context(competition="Pro Basketball (M)"))
+    assert result.sport is Sport.OTHER
+    assert result.resolved_by is EvidenceLevel.L1_EVENT_COMPETITION
+
+
+# =============================== L2: sport taxonomy ==========================
+
+def test_tournament_competition_resolves_through_the_taxonomy():
+    result = classify_market(context(competition="US Open Men Singles"), taxonomy=TAXONOMY)
+    assert result.sport is Sport.TENNIS
+    assert result.resolved_by is EvidenceLevel.L2_SPORT_TAXONOMY
+
+
+def test_taxonomy_places_an_unknown_competition_out_of_scope():
+    result = classify_market(context(competition="Premier League"), taxonomy=TAXONOMY)
+    assert result.sport is Sport.OTHER
+
+
+def test_unrecognized_competition_in_an_ambiguous_sport_fails_closed():
+    """A new Football competition must never be guessed into NFL or CFB."""
+    result = classify_market(context(competition="Semi-Pro Football"), taxonomy=TAXONOMY)
+    assert result.sport is Sport.UNRESOLVED
+    assert result.unresolved_reason is UnresolvedReason.COMPETITION_UNKNOWN
+
+
+def test_unknown_competition_without_taxonomy_fails_closed():
+    result = classify_market(context(competition="Totally Unknown Cup"))
+    assert result.sport is Sport.UNRESOLVED
+    assert result.unresolved_reason is UnresolvedReason.COMPETITION_UNKNOWN
+
+
+def test_unknown_competition_does_not_fall_back_to_the_registry():
+    """Fail-closed beats a guessed registry: the competition is the stronger claim."""
+    result = classify_market(
+        context(
+            market_ticker="KXNFLGAME-SYNTH01-KC",
+            event_ticker="KXNFLGAME-SYNTH01",
+            series_ticker="KXNFLGAME",
+            competition="Semi-Pro Football",
+        ),
+        taxonomy=TAXONOMY,
+    )
+    assert result.sport is Sport.UNRESOLVED
+    assert result.unresolved_reason is UnresolvedReason.COMPETITION_UNKNOWN
+
+
+# =============================== null competition ============================
+
+def test_null_competition_falls_through_to_series_metadata():
+    result = classify_market(
+        context(with_event_metadata=True, series_extra={"category": "Sports", "tags": ["MLB"]})
+    )
+    assert result.sport is Sport.MLB
+    assert result.resolved_by is EvidenceLevel.L4_SERIES_METADATA
+
+
+def test_null_competition_with_nothing_else_is_competition_absent():
+    result = classify_market(context(with_event_metadata=True))
+    assert result.sport is Sport.UNRESOLVED
+    assert result.unresolved_reason is UnresolvedReason.COMPETITION_ABSENT
+
+
+# =============================== L3: milestones ==============================
+
+def test_milestone_competition_resolves_an_event_without_competition():
+    index = MilestoneIndex(event_to_competition={"KXTEST-SYNTH01": "College Football"})
+    result = classify_market(context(with_event_metadata=True), milestone_index=index)
+    assert result.sport is Sport.CFB
+    assert result.resolved_by is EvidenceLevel.L3_MILESTONE
+
+
+def test_milestone_is_ignored_when_the_event_is_not_indexed():
+    index = MilestoneIndex(event_to_competition={"SOMETHING-ELSE": "Pro Football"})
+    result = classify_market(context(with_event_metadata=True), milestone_index=index)
+    assert result.sport is Sport.UNRESOLVED
+
+
+# =============================== precedence ==================================
+
+def test_competition_overrides_a_contradictory_registry_entry():
+    """The registry is our table, not Kalshi's: it yields, and we count it."""
+    result = classify_market(
+        context(
+            market_ticker="KXNFLGAME-SYNTH01-KC",
+            event_ticker="KXNFLGAME-SYNTH01",
+            series_ticker="KXNFLGAME",
+            competition="College Football",
+        )
+    )
+    assert result.sport is Sport.CFB
+    assert result.resolved_by is EvidenceLevel.L1_EVENT_COMPETITION
+    assert result.lower_level_conflict is True
+
+
+def test_registry_never_overrides_a_contradictory_competition():
+    result = classify_market(
+        context(
+            market_ticker="KXMLBGAME-SYNTH01-NYY",
+            event_ticker="KXMLBGAME-SYNTH01",
+            series_ticker="KXMLBGAME",
+            competition="Pro Football",
+        )
+    )
+    assert result.sport is Sport.NFL
+    assert result.resolved_by is not EvidenceLevel.L5_SERIES_REGISTRY
+
+
+def test_competition_conflicting_with_series_category_is_unresolved():
+    """Two pieces of real Kalshi metadata disagreeing means we do not understand it."""
+    result = classify_market(
+        context(competition="Pro Baseball", series_extra={"category": "Sports", "tags": ["NFL"]})
+    )
+    assert result.sport is Sport.UNRESOLVED
+    assert result.unresolved_reason is UnresolvedReason.EVIDENCE_CONFLICT
+
+
+def test_competition_agreeing_with_series_metadata_resolves():
+    result = classify_market(
+        context(competition="Pro Baseball", series_extra={"category": "Sports", "tags": ["MLB"]})
+    )
+    assert result.sport is Sport.MLB
+    assert result.resolved_by is EvidenceLevel.L1_EVENT_COMPETITION
+
+
+def test_series_metadata_outranks_the_registry():
+    result = classify_market(
+        context(
+            market_ticker="KXNFLGAME-SYNTH01-KC",
+            event_ticker="KXNFLGAME-SYNTH01",
+            series_ticker="KXNFLGAME",
+            series_extra={"category": "Sports", "tags": ["College Football"]},
+        )
+    )
+    assert result.sport is Sport.CFB
+    assert result.resolved_by is EvidenceLevel.L4_SERIES_METADATA
+    assert result.lower_level_conflict is True
 
 
 # ------------------------------------------------------- the four sports
@@ -172,7 +369,7 @@ def test_generic_baseball_is_never_routed_to_mlb():
     assert result.sport is Sport.UNRESOLVED
 
 
-def test_conflicting_authoritative_evidence_is_unresolved():
+def test_series_metadata_beats_a_contradictory_registry_entry():
     result = classify_market(
         context(
             market_ticker="KXNFLGAME-SYNTH01-KC",
@@ -181,8 +378,16 @@ def test_conflicting_authoritative_evidence_is_unresolved():
             series_extra={"category": "Sports", "tags": ["Tennis"]},
         )
     )
+    assert result.sport is Sport.TENNIS
+    assert result.lower_level_conflict is True
+
+
+def test_two_series_tags_naming_different_leagues_is_unresolved():
+    result = classify_market(
+        context(series_extra={"category": "Sports", "tags": ["MLB"], "title": "NFL Game Winner"})
+    )
     assert result.sport is Sport.UNRESOLVED
-    assert "conflicting" in result.reason
+    assert result.unresolved_reason is UnresolvedReason.EVIDENCE_CONFLICT
 
 
 def test_supporting_evidence_alone_never_resolves():

@@ -1,32 +1,40 @@
-# Kalshi API contract used by Phase 0
+# Kalshi API contract used by the bet router
 
-This document records the exact API behaviour this code depends on, and — just as
-importantly — how confident we are in each item. Assumptions that were not
-verified against a live response are marked, so nobody later mistakes a
-reasonable inference for a confirmed fact.
+This document records the API behaviour this code depends on, and how each item
+was verified. Assumptions that remain unconfirmed are marked, so nobody later
+mistakes a reasonable inference for an established fact.
 
 ## Verification status
 
-The build environment for this work had **outbound egress to every Kalshi domain
-blocked** (`docs.kalshi.com`, `external-api.kalshi.com`, `api.elections.kalshi.com`,
-`trading-api.kalshi.com` all refused at the proxy). The contract below was
-therefore assembled from Kalshi's published API reference as surfaced through
-search, cross-checked across several independent secondary sources, rather than
-from a live request/response pair made here.
+Three sources back this document:
 
-Consequences, handled in code rather than hoped away:
+1. **Kalshi's published API reference** (`docs.kalshi.com`), consulted for each
+   endpoint below.
+2. **The first live credentialed audit**, run `34784811480` on main
+   `7c66dbc`, 200 real fills. This is empirical proof, not inference.
+3. Cross-checks against independent secondary documentation.
 
-* The base URL is configurable (`KALSHI_API_BASE_URL`) instead of hard-coded.
-* Both the integer-cent and decimal-dollar price field families are accepted.
-* Both `count` and `count_fp` are recognized, and an unverified fixed-point count
-  is **flagged rather than converted** to a contract quantity.
-* Series tickers are exact-match only, and reliance on an unverified registry
-  entry is reported as an aggregate counter.
-* Every response is schema-checked, so a shape we did not anticipate fails closed
-  with a clear error instead of producing a wrong number.
+The build environment has outbound egress to every Kalshi domain blocked, so no
+request was made from the development container; the live evidence comes from the
+GitHub Actions run, which prints aggregate counts only.
 
-Running the workflow against the real account is what converts the ✅-assumed rows
-below into confirmed ones.
+### Confirmed by the live run
+
+| Item | Evidence |
+|---|---|
+| Base URL `https://external-api.kalshi.com/trade-api/v2` | 331 requests, 0 transport failures |
+| RSA-PSS signing scheme and header names | 0 auth failures across 331 signed requests |
+| `GET /portfolio/fills` returns member fills | 200 fills returned |
+| Cursor pagination | 2 pages walked, 0 duplicates, no cursor fault |
+| `market -> event -> series` resolution | 154 unique markets, 0 lookup failures |
+| **`count_fp` has replaced integer `count`** | **200/200 fills carried no usable `count`** |
+
+### Disproven by the live run
+
+* *"Fills carry an integer `count`."* False for 100% of fills. See fixed point below.
+* *"Series tags/categories identify the league."* Not sufficient: classification
+  reached only 28% with **zero** `OTHER` verdicts across 154 markets, which is the
+  signature of no league-level series metadata being recognized at all.
 
 ## Base URL
 
@@ -34,156 +42,173 @@ below into confirmed ones.
 https://external-api.kalshi.com/trade-api/v2
 ```
 
-Override with `KALSHI_API_BASE_URL`. Kalshi has served the same `/trade-api/v2`
-path space from more than one host (`trading-api.kalshi.com` and
-`api.elections.kalshi.com` historically; `external-api.kalshi.com` is the
-currently documented production root). **Not live-verified here** — if dispatch
-fails with a DNS or 404 error, set the variable rather than editing code.
-
-The `/trade-api/v2` prefix is significant: it is part of the signed message.
+Overridable with `KALSHI_API_BASE_URL`. The `/trade-api/v2` prefix is part of the
+signed message.
 
 ## Authentication
 
-API-key authentication with RSA-PSS request signing.
+| Header | Value |
+|---|---|
+| `KALSHI-ACCESS-KEY` | API key id |
+| `KALSHI-ACCESS-TIMESTAMP` | Current time in **milliseconds** since epoch |
+| `KALSHI-ACCESS-SIGNATURE` | Base64 RSA-PSS signature |
 
-| Header                     | Value                                             |
-|----------------------------|---------------------------------------------------|
-| `KALSHI-ACCESS-KEY`        | API key id                                        |
-| `KALSHI-ACCESS-TIMESTAMP`  | Current time, **milliseconds** since epoch        |
-| `KALSHI-ACCESS-SIGNATURE`  | Base64 RSA-PSS signature (below)                  |
+Signed message: `{timestamp_ms}{HTTP_METHOD_UPPERCASE}{path}` where `path` starts
+at the API root, **includes** `/trade-api/v2`, and **excludes** the query string.
+PSS: SHA-256 digest, MGF1-SHA256, salt length 32. Unencrypted RSA key. Every retry
+re-signs with a fresh timestamp.
 
-Signed message:
+## Fixed-point representation (Q1-2026 migration)
 
-```
-{timestamp_ms}{HTTP_METHOD_UPPERCASE}{path}
-```
+This is the single most consequential schema fact for this system.
 
-* `path` starts at the API root and **includes** `/trade-api/v2`.
-* `path` **excludes** the query string. This implementation strips any `?…`
-  suffix defensively.
-* Example: `1703123456789GET/trade-api/v2/portfolio/fills`
+Kalshi migrated prices and quantities from integers to **decimal strings**, and
+**removed the legacy integer fields**:
 
-PSS parameters: SHA-256 digest, MGF1 with SHA-256, salt length equal to the digest
-length (32 bytes). The key must be an unencrypted RSA private key.
+| Field | Form | Meaning |
+|---|---|---|
+| `count_fp` | decimal string, e.g. `"10.00"` | **10 contracts.** Fractional contracts are representable. |
+| `yes_price_dollars` | decimal string, e.g. `"0.6500"` | price in **dollars**, not cents |
+| `no_price_dollars` | decimal string | price in dollars |
 
-Every retry re-signs with a fresh timestamp, because a stale timestamp is
-rejected.
+**`count_fp = "10.00"` represents ten contracts**, not one thousand and not ten
+hundredths. The value is a plain decimal count of contracts; the `_fp` suffix
+marks the *encoding* (a fixed-point decimal string), not a scaling factor.
+
+Some markets quote sub-penny ticks as fine as **$0.001**, so an integer-cent field
+cannot represent every price. That is why the `_dollars` fields exist and why
+reading prices from the legacy integer fields is lossy.
+
+### Internal representation rule
+
+`src/kalshi_router/fixedpoint.py` parses every one of these into
+`decimal.Decimal` **from its string form**. Binary floating point is never used
+for a quantity or a price. A JSON number is tolerated (routed through `repr` so no
+binary rounding is baked in) but counted in
+`fixed-point fields arriving as JSON numbers`, so a schema drift toward floats is
+visible in the next audit rather than silent.
 
 ## `GET /portfolio/fills`
 
-Retrieves the member's fills. **Read-only.** This is the only portfolio endpoint
-this code may reach.
+Read-only. The only portfolio endpoint this code may reach.
 
-### Query parameters
+Query parameters used: `limit` (default 100, max 1000; clamped to the remaining
+budget) and `cursor`. Also documented but unused here: `ticker`, `order_id`,
+`min_ts`, `max_ts`, `subaccount`.
 
-| Parameter  | Used here | Notes                                                     |
-|------------|-----------|-----------------------------------------------------------|
-| `limit`    | yes       | Default 100, maximum 1000. Clamped to the remaining budget |
-| `cursor`   | yes       | Opaque cursor from the previous response                   |
-| `ticker`   | no        | Filter by market ticker                                    |
-| `order_id` | no        | Filter by order                                            |
-| `min_ts`   | no        | Unix timestamp lower bound                                 |
-| `max_ts`   | no        | Unix timestamp upper bound                                 |
+Fields consumed:
 
-Phase 0 samples a **bounded recent window** (default 200 fills, ceiling 500)
-rather than the account lifetime, so one audit stays inside a single rate-limit
-budget and peak memory stays bounded.
+| Concept | Fields accepted | Required |
+|---|---|---|
+| Fill identity | `fill_id` (or `id`) | yes |
+| Market | `ticker` (or `market_ticker`) | yes |
+| Direction | `action` — `buy` \| `sell` | yes |
+| Contract leg | `side` (or `outcome_side`) — `yes` \| `no` | yes |
+| Order grouping | `order_id` | no |
+| Quantity | `count_fp`, else legacy `count` | one of |
+| Price | `yes_price_dollars`/`no_price_dollars`, else legacy cents | no |
+| Liquidity role | `is_taker` | no |
+| Time | `created_time`, else `ts` | no |
 
-### Pagination
+Unrecognized `action` or `side` tokens are rejected, not defaulted.
 
-Cursor-based. Each response carries a `cursor`; pass it as the `cursor` parameter
-of the next request. An empty string or an absent cursor ends the walk.
+Pagination guards: a repeated cursor raises; an empty page with a live cursor
+raises; a missing or non-list `fills` raises; a non-JSON or empty body raises —
+a proxy error page must never look like "this account has no fills".
 
-Fail-closed guards implemented on top of that contract:
+## Classification metadata endpoints
 
-* A repeated cursor raises rather than looping forever.
-* An empty page delivered with a live cursor raises.
-* A missing or non-list `fills` field raises.
-* A non-JSON or empty body raises — a proxy error page must never be mistaken for
-  "this account has no fills".
+### `GET /events/{event_ticker}/metadata` — the primary signal
 
-### Fill object
+Returns `image_url`, `featured_image_url`, `market_details`, `settlement_sources`,
+and critically:
 
-Fields consumed, with the aliases accepted:
+* **`competition`** — the league or tournament, e.g. `"Pro Football"`,
+  `"College Football"`, `"Pro Baseball"`, `"ATP Madrid"`.
+* **`competition_scope`** — the scope of the contract, e.g. `"Game"`. No exhaustive
+  enum is published, so this is treated as supporting/diagnostic evidence only.
 
-| Concept         | Fields accepted                                | Required |
-|-----------------|------------------------------------------------|----------|
-| Fill identity   | `fill_id` (or `id`)                             | yes      |
-| Market          | `ticker` (or `market_ticker`)                   | yes      |
-| Direction       | `action` — `buy` \| `sell`                      | yes      |
-| Contract leg    | `side` (or `outcome_side`) — `yes` \| `no`      | yes      |
-| Order grouping  | `order_id`                                      | no       |
-| Trade grouping  | `trade_id`                                      | no       |
-| Quantity        | `count`, else `count_fp`                        | one of   |
-| Price           | `yes_price`/`no_price` (cents), or `*_dollars`  | no       |
-| Liquidity role  | `is_taker`                                      | no       |
-| Time            | `created_time`, else `ts`                       | no       |
+`competition` is what separates **Pro Football** from **College Football**, which
+is exactly the NFL/CFB ambiguity the Phase 0 classifier had to refuse 144 times.
 
-Unrecognized `action` or `side` tokens are **rejected**, not defaulted —
-defaulting would silently corrupt future position accounting.
+The documented response carries these at the top level; a wrapped envelope is
+also accepted, since the envelope is the one part of this route not confirmed
+against a live response. A non-object response fails closed. A **null**
+`competition` is a valid shape (many events are not sports) and falls through to
+weaker evidence; a **present but unrecognized** competition fails closed.
 
-`count_fp` is a fixed-point encoding whose scale factor we could not verify. No
-contract quantity is inferred from it; such fills are counted under
-"fills whose contract count needs schema verification".
+### `GET /search/filters_by_sport` — the taxonomy
 
-### Historical fills
+```json
+{"filters_by_sports": {"<sport>": { "competitions": [...], "scopes": [...] }},
+ "sport_ordering": ["<sport>", ...]}
+```
 
-Kalshi also documents a separate historical-fills endpoint. Phase 0 does **not**
-use it: a bounded recent sample from `/portfolio/fills` is sufficient to prove the
-foundation, and the historical endpoint would widen the blast radius of a bug in a
-read path that touches private data.
+Public catalogue data: fetching it discloses nothing about the account, and it is
+fetched **once per audit** and cached in memory only.
 
-## Metadata endpoints
+It answers "which sport owns this competition?", which is what lets a tennis
+market whose competition is a tournament name (`ATP Madrid`, `US Open Men
+Singles`) resolve to TENNIS without hard-coding every tournament — and what tells
+us an unfamiliar competition sits under Football and must therefore fail closed.
 
-Fills reference only a market ticker, so each unique ticker is walked
-`market → event → series`. Results are cached per ticker, per event and per series
-for the lifetime of one audit, so metadata requests scale with unique markets, not
-fill volume.
+The exact inner shape of each sport's filter object is not fully pinned down in
+the published reference, so parsing is structural rather than positional: any
+competitions-like or scopes-like list is read, entries may be bare strings or
+objects carrying a name field, and unrecognized shapes are skipped and counted.
+A malformed top-level envelope raises.
 
-| Endpoint                     | Response object | Fields used                                       |
-|------------------------------|-----------------|---------------------------------------------------|
-| `GET /markets/{ticker}`      | `market`        | `event_ticker`, `series_ticker`, `category`, titles |
-| `GET /events/{event_ticker}` | `event`         | `series_ticker`, `event_ticker`, `category`, titles |
-| `GET /series/{series_ticker}`| `series`        | `tags`, `categories`, `category`, `title`, `ticker` |
+### `GET /milestones` — the backstop
 
-Kalshi organizes contracts as **Categories → Series → Events → Markets**, and a
-series carries discovery tags (Soccer, Basketball, …). `series.categories` — a
-list alongside the long-standing single `category` — is a recent addition; both
-are read, and `tags` entries are accepted either as bare strings or as
-`{"name": …}` objects.
+Filters: `category` (`Sports`, `Elections`, `Esports`, `Crypto`), `competition`
+(documented examples: *Pro Football*, *Pro Baseball*, *Pro Basketball (M)*,
+*Pro Hockey*, *College Football*), `type` (`football_game`, `baseball_game`,
+`basketball_game`, `hockey_match`, …), plus cursor pagination.
 
-A missing or failed metadata lookup is **not** fatal: the market degrades to
-`UNRESOLVED` and a counter is incremented.
+Each milestone carries `primary_event_tickers` / `related_event_tickers`, linking a
+real-world fixture to Kalshi event tickers.
+
+**Privacy property**: the index is built by asking Kalshi for the *public*
+milestone list of each competition we care about, then looking the account's event
+tickers up **locally**. The account's tickers are never sent to this endpoint.
+
+Scope: a bounded backstop, not a primary signal. It runs only when markets remain
+unresolved for a reason milestones could repair, sweeps only the three
+competitions that map onto a supported league, and is capped at 24 requests per
+audit. Tennis is intentionally not swept — its competitions are per-tournament, so
+there is no small fixed set to enumerate, and tennis resolves at the sport level.
+
+### `GET /markets/{ticker}`, `GET /events/{ticker}`, `GET /series/{ticker}`
+
+Retained for `event_ticker`, `series_ticker`, and the series `tags` / `categories`
+/ `category` / `title` used as level-4 evidence.
 
 ## Rate limits
 
-Kalshi meters requests with per-second token-cost budgets by tier (Basic is on the
-order of a couple of hundred read tokens per second). A throttled request returns
-**429 with no `Retry-After` and no `X-RateLimit-*` headers**, and there is no
-cooldown penalty — the bucket simply refills.
+Token-cost budgets per tier (Basic is on the order of a couple of hundred read
+tokens per second). A throttled request returns **429 with no `Retry-After` and no
+`X-RateLimit-*` headers**, and there is no cooldown penalty.
 
-Because there is no server-provided pacing signal, this client applies its own:
-bounded exponential backoff with full jitter (base 0.5 s, cap 8 s, default 4
-retries) on 429 and on 500/502/503/504, and on network-level failures. 401/403 and
-other 4xx statuses are **not** retried. Caching metadata by ticker is the main
-lever that keeps an audit well inside the budget.
+With no server-provided pacing signal, this client applies bounded exponential
+backoff with full jitter (base 0.5s, cap 8s, 4 retries) on 429 and 5xx and on
+network failures. 401/403 and other 4xx are not retried. Caching metadata per
+market, per event and per series is the main lever keeping an audit inside budget;
+the first live run issued 331 requests for 200 fills across 154 markets.
 
-`GET /account/limits` and `GET /account/endpoint_costs` expose the live budget;
-Phase 0 does not call them, as they are outside the read-only allowlist.
+## Remaining open questions
 
-## Open questions for live verification
-
-1. **Base URL.** Confirm `external-api.kalshi.com` answers for this account.
-2. **`count_fp` scale.** Confirm whether `count` is still present; if fills return
-   only `count_fp`, determine the scale factor before Phase 1 does any
-   quantity arithmetic.
-3. **Price fields.** Confirm which of the cent/dollar families the live account
-   returns.
-4. **Series tags.** Confirm that sports series expose league-level tags (e.g.
-   `MLB`, `NFL`, `College Football`) rather than only family-level ones
-   (`Baseball`, `Football`). If only families are exposed, the exact-ticker
-   registry carries more of the load and must be verified from live data.
-5. **Series ticker registry.** Confirm the real tickers and set `verified=True`;
-   prune entries that do not exist.
-6. **Subaccounts.** `/portfolio/fills` documents a `subaccount` parameter. Confirm
-   whether the account uses subaccounts before Phase 1 aggregates positions.
+1. **`competition_scope` value set.** No published enum. Observed: `"Game"`.
+   Treated as supporting evidence only, and its presence is reported as a count.
+2. **`filters_by_sport` inner object shape.** Parsed structurally; the next live
+   run's `competitions in taxonomy` counter will show whether it was read correctly
+   (a zero there with a non-zero sport count means the shape differs).
+3. **Event metadata envelope.** Top-level vs wrapped; both are accepted.
+4. **Coverage of `competition` on older events.** The `events with non-null
+   competition` counter measures this directly on the next run.
+5. **Price field family in practice.** The next run reports
+   `price from *_price_dollars` vs `price from legacy integer cents`.
+6. **Subaccounts.** `/portfolio/fills` documents a `subaccount` parameter; unused
+   and unexamined. Must be settled before Phase 1 aggregates positions.
+7. **Series ticker registry.** Still unverified (`verified=False` throughout). It
+   is now the last resort and can never override stronger evidence, and every
+   audit reports how many classifications leaned on it.

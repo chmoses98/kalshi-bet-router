@@ -8,7 +8,7 @@ import re
 
 import pytest
 
-from kalshi_router.aggregate import AuditReport
+from kalshi_router.aggregate import LEVEL_REPORT_ORDER, AuditReport
 from kalshi_router.audit import run_audit
 from kalshi_router.cli import main, render_sensitive
 from kalshi_router.errors import SensitiveOutputRefused
@@ -37,18 +37,32 @@ def test_rendered_aggregate_contains_no_identifiers(signer):
 
 
 def test_rendered_aggregate_contains_no_monetary_values(signer):
+    """Counts and percentages only: a price or contract quantity would show up
+    as a bare decimal, so assert every decimal in the output is a percentage."""
     rendered = rich_result(signer).report.render()
     assert "$" not in rendered
-    assert "price" not in rendered.lower()
-    assert "cent" not in rendered.lower()
+    bare_decimals = [
+        m.group(0)
+        for m in re.finditer(r"\d+\.\d+(?!%)", rendered)
+        if not m.group(0).startswith("0.1")  # no such token expected; guard only
+    ]
+    assert bare_decimals == [], bare_decimals
+    # Field *names* may mention price; no price *value* may appear.
+    assert "0.5700" not in rendered and "0.4300" not in rendered
+    assert "10.00" not in rendered
 
 
 def test_aggregate_report_can_only_hold_counts(signer):
     """Structural proof: no field of the report can carry a ticker or an id."""
     report = rich_result(signer).report
+    counter_maps = {
+        "classification_counts": set(REPORT_ORDER),
+        "fills_resolved_by_level": set(LEVEL_REPORT_ORDER),
+        "markets_resolved_by_level": set(LEVEL_REPORT_ORDER),
+    }
     for name, value in vars(report).items():
-        if name == "classification_counts":
-            assert set(value) <= set(REPORT_ORDER)
+        if name in counter_maps:
+            assert set(value) <= counter_maps[name]
             assert all(isinstance(v, int) for v in value.values())
             continue
         assert isinstance(value, (int, bool)), f"{name} is not a count"
@@ -71,7 +85,7 @@ def test_cli_default_output_is_aggregate_only(signer, monkeypatch, fake_private_
     # Use the report renderer directly for the content assertion instead.
     rendered = AuditReport().render()
     assert "SENSITIVE" not in rendered
-    assert "evidence" not in rendered
+    assert "evidence:" not in rendered
     assert out.getvalue() == "" and err.getvalue() == ""
 
 
@@ -155,3 +169,41 @@ def test_repository_contains_no_private_key_material():
             continue
         for header in headers:
             assert header not in text, f"{path} appears to contain private key material"
+
+
+# ------------------------------------- Phase 0.1: competition must not leak
+
+def test_competition_strings_never_reach_aggregate_output(signer):
+    """A competition names the league of a market the owner actually traded."""
+    rendered = rich_result(signer).report.render()
+    for competition in ("Pro Baseball", "Pro Football", "College Football",
+                        "ATP Madrid", "Pro Basketball (M)"):
+        assert competition not in rendered
+    assert "competition=" not in rendered
+
+
+def test_aggregate_output_reports_competition_presence_only_as_counts(signer):
+    report = rich_result(signer).report
+    rendered = report.render()
+    assert "events with non-null competition:" in rendered
+    assert "events with non-null competition_scope:" in rendered
+    assert isinstance(report.events_with_competition, int)
+
+
+def test_evidence_level_counters_are_counts_not_labels_of_traded_markets(signer):
+    data = rich_result(signer).report.as_dict()
+    level_keys = [k for k in data if k.startswith(("fills_resolved_", "markets_resolved_"))]
+    assert level_keys
+    assert all(isinstance(data[k], int) for k in level_keys)
+
+
+def test_sensitive_mode_is_the_only_place_competition_appears(signer):
+    result = rich_result(signer, collect_details=True)
+    assert "Pro Baseball" not in result.report.render()
+    assert "Pro Baseball" in render_sensitive(result)
+    assert "resolved_by=" in render_sensitive(result)
+
+
+def test_json_mode_exposes_no_strings(signer):
+    data = rich_result(signer).report.as_dict()
+    assert all(isinstance(v, (int, bool)) for v in data.values())

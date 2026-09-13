@@ -11,10 +11,12 @@ Everything in this module is pure and side-effect free: no I/O, no logging.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import Decimal
 from enum import Enum
 from typing import Any, Iterable
 
 from .errors import SchemaError
+from .fixedpoint import parse_fixed_point
 
 
 class Action(str, Enum):
@@ -38,11 +40,14 @@ class Side(str, Enum):
 
 @dataclass(frozen=True)
 class NormalizedFill:
-    """One execution, normalized and stripped of nothing (kept in memory only).
+    """One execution, normalized and kept in memory only.
+
+    Quantities and prices are :class:`~decimal.Decimal`, parsed exactly from
+    Kalshi's fixed-point decimal strings. Binary floating point is never used for
+    a financial quantity.
 
     Instances are never serialized to disk, never logged, and never emitted in
-    aggregate output.  They exist so classification and Phase 1 research can be
-    performed on a stable shape.
+    aggregate output.
     """
 
     fill_id: str
@@ -51,20 +56,24 @@ class NormalizedFill:
     side: Side
     order_id: str | None = None
     trade_id: str | None = None
-    count: int | None = None
-    count_fp_raw: str | None = None
-    price_cents: int | None = None
+    #: Contract quantity. ``count_fp`` of ``"10.00"`` parses to ``Decimal("10.00")``,
+    #: which is ten contracts; fractional contracts are representable.
+    count: Decimal | None = None
+    #: Which field the quantity came from: ``"count_fp"`` or legacy ``"count"``.
+    count_source: str | None = None
+    #: Execution price of the transacted leg, in dollars (e.g. ``Decimal("0.6500")``).
+    price_dollars: Decimal | None = None
+    #: ``"price_dollars"`` or legacy ``"price_cents"``.
+    price_source: str | None = None
+    #: True when a fixed-point field arrived as a JSON number rather than the
+    #: documented decimal string, so schema drift is observable in aggregate.
+    fixed_point_number_typed: bool = False
     is_taker: bool | None = None
     created_time: str | None = None
 
     @property
-    def count_needs_verification(self) -> bool:
-        """True when only an unverified fixed-point count was available.
-
-        The ``*_fp`` fixed-point encoding is not documented with a scale factor
-        we were able to verify, so no integer contract count is inferred from it.
-        """
-        return self.count is None and self.count_fp_raw is not None
+    def has_quantity(self) -> bool:
+        return self.count is not None
 
 
 def _first_present(raw: dict[str, Any], *keys: str) -> Any:
@@ -75,27 +84,40 @@ def _first_present(raw: dict[str, Any], *keys: str) -> Any:
     return None
 
 
-def _parse_price_cents(raw: dict[str, Any], side: Side) -> int | None:
-    """Resolve the execution price of the transacted leg, in integer cents.
+def _parse_quantity(raw: dict[str, Any]) -> tuple[Decimal | None, str | None, bool]:
+    """Resolve the contract quantity, preferring the current fixed-point field.
 
-    Kalshi has exposed both integer-cent fields (``yes_price``/``no_price``) and
-    decimal-dollar fields (``yes_price_dollars``/``no_price_dollars``).  Either is
-    accepted; neither is required, because Phase 0 never reports monetary values.
+    Kalshi's Q1-2026 migration removed the integer ``count``; ``count_fp`` is the
+    current field and is a decimal string of contracts. The legacy field is still
+    accepted so an older or replayed payload parses, but it is never preferred.
     """
-    cents_key = "yes_price" if side is Side.YES else "no_price"
-    dollars_key = "yes_price_dollars" if side is Side.YES else "no_price_dollars"
+    parsed = parse_fixed_point(raw.get("count_fp"), "count_fp")
+    if parsed is not None:
+        return parsed.value, "count_fp", parsed.source_type == "number"
 
+    legacy = raw.get("count")
+    if isinstance(legacy, int) and not isinstance(legacy, bool):
+        return Decimal(legacy), "count", False
+    return None, None, False
+
+
+def _parse_price(raw: dict[str, Any], side: Side) -> tuple[Decimal | None, str | None, bool]:
+    """Resolve the execution price of the transacted leg, in dollars.
+
+    Sub-penny markets use tick sizes as small as $0.001, so the ``*_dollars``
+    decimal string is the only field that can represent every price; the legacy
+    integer-cent field is a fallback and is converted exactly.
+    """
+    dollars_key = "yes_price_dollars" if side is Side.YES else "no_price_dollars"
+    parsed = parse_fixed_point(raw.get(dollars_key), dollars_key)
+    if parsed is not None:
+        return parsed.value, "price_dollars", parsed.source_type == "number"
+
+    cents_key = "yes_price" if side is Side.YES else "no_price"
     cents = raw.get(cents_key)
     if isinstance(cents, int) and not isinstance(cents, bool):
-        return cents
-
-    dollars = raw.get(dollars_key)
-    if isinstance(dollars, (str, float, int)) and not isinstance(dollars, bool):
-        try:
-            return round(float(dollars) * 100)
-        except (TypeError, ValueError):
-            return None
-    return None
+        return Decimal(cents) / Decimal(100), "price_cents", False
+    return None, None, False
 
 
 def normalize_fill(raw: dict[str, Any]) -> NormalizedFill:
@@ -133,14 +155,11 @@ def normalize_fill(raw: dict[str, Any]) -> NormalizedFill:
     except ValueError:
         raise SchemaError(f"fill carried an unrecognized side token; expected one of {[s.value for s in Side]}") from None
 
-    count = raw.get("count")
-    count_fp_raw = raw.get("count_fp")
-    if isinstance(count, bool) or not isinstance(count, int):
-        count = None
-    if count_fp_raw is not None and not isinstance(count_fp_raw, str):
-        count_fp_raw = str(count_fp_raw)
-    if count is None and count_fp_raw is None:
-        raise SchemaError("fill carried neither 'count' nor 'count_fp'")
+    count, count_source, count_was_number = _parse_quantity(raw)
+    if count is None:
+        raise SchemaError("fill carried neither 'count_fp' nor a legacy 'count'")
+
+    price, price_source, price_was_number = _parse_price(raw, side)
 
     order_id = _first_present(raw, "order_id")
     trade_id = _first_present(raw, "trade_id")
@@ -154,8 +173,10 @@ def normalize_fill(raw: dict[str, Any]) -> NormalizedFill:
         order_id=order_id if isinstance(order_id, str) else None,
         trade_id=trade_id if isinstance(trade_id, str) else None,
         count=count,
-        count_fp_raw=count_fp_raw,
-        price_cents=_parse_price_cents(raw, side),
+        count_source=count_source,
+        price_dollars=price,
+        price_source=price_source,
+        fixed_point_number_typed=count_was_number or price_was_number,
         is_taker=is_taker if isinstance(is_taker, bool) else None,
         created_time=_first_present(raw, "created_time", "ts"),
     )

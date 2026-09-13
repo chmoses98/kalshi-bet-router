@@ -33,6 +33,10 @@ A crucial modelling point for Phase 1: *buying NO* and *selling YES* express the
 same directional view but are **not** the same position, and Kalshi reports them
 differently. Collapsing them early will corrupt the ledger.
 
+> **Updated after the first live audit (run `34784811480`, 200 real fills).**
+> Multi-fill orders are confirmed real: 163 orders produced 200 fills, with 25
+> orders (15%) filling in more than one execution. Sell fills are real too.
+
 ### 4. How are partial fills represented?
 
 Not as a special field — as multiple fill records sharing one `order_id`, each
@@ -78,9 +82,15 @@ Confirmed as available from the fill schema:
 
 Still to be resolved before Phase 1 does quantity arithmetic:
 
-* **`count_fp` scale factor.** Unverified. Phase 0 flags such fills rather than
-  converting them; see `docs/API_CONTRACT.md`. Any arithmetic on a guessed scale
-  would be silently wrong by orders of magnitude.
+* ~~**`count_fp` scale factor.** Unverified.~~ **RESOLVED.** Kalshi's Q1-2026
+  fixed-point migration replaced integer `count` with `count_fp`, a decimal string
+  in which **`"10.00"` means ten contracts**; the `_fp` suffix marks the encoding,
+  not a scaling factor. The live audit confirmed the removal empirically: 200 of
+  200 fills carried no usable integer `count`. Quantities and prices are now
+  parsed into `Decimal` from their string form, never through binary float, so
+  Phase 1 can do exact arithmetic. Prices likewise come from
+  `yes_price_dollars` / `no_price_dollars`, which are the only fields able to
+  represent sub-penny ticks ($0.001).
 * **Settlement data.** Fills describe entry and exit, not outcome. Settlement will
   need market resolution, which is a separate read.
 * **Fees.** `fee_cost` appears in the documented fill schema and is not consumed by
@@ -94,9 +104,12 @@ Still to be resolved before Phase 1 does quantity arithmetic:
 
 ## What Phase 1 must add
 
-1. **Verified API facts.** Run the Phase 0 workflow against the live account and
-   close the open questions in `docs/API_CONTRACT.md` — especially the series-tag
-   availability that classification coverage depends on, and the `count_fp` scale.
+1. **Verified API facts.** Largely closed by the first live audit and by Phase
+   0.1: the base URL, signing, pagination, fixed-point semantics and the
+   competition-based evidence hierarchy are all settled. What remains is listed
+   under "Remaining open questions" in `docs/API_CONTRACT.md` — chiefly
+   `competition_scope` values, `competition` coverage on older events, and
+   subaccounts.
 2. **A verified series registry.** Replace the `verified=False` entries with real
    tickers observed from live data, and prune the rest. Audits already report how
    many classifications leaned on an unverified entry.
