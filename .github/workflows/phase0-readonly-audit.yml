@@ -1,0 +1,64 @@
+# Phase 0 credentialed audit.
+#
+# SECURITY NOTES (this repository is public):
+#   * Manual dispatch only. There is no schedule, no `pull_request`, and
+#     deliberately no `pull_request_target` -- fork code must never see these
+#     secrets.
+#   * `permissions: contents: read` only. The audit writes nothing: no commit,
+#     no artifact, no cache, no downstream dispatch.
+#   * The job prints aggregate counts only. The `--show-sensitive-details` flag
+#     is absent here and would refuse to run anyway, because the CLI hard-fails
+#     when it detects GITHUB_ACTIONS (see kalshi_router/safety.py).
+#   * Secrets are passed as env vars to a single step and are never echoed,
+#     written to a file, or passed on a command line.
+name: Phase 0 read-only audit
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_fills:
+        description: "Bounded recent fill sample size (1-500)"
+        required: false
+        default: "200"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phase0-readonly-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    name: Aggregate read-only audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Refuse to run credentialed code from an untrusted ref
+        run: |
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::error::This credentialed workflow may only run from refs/heads/main (got ${GITHUB_REF})."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package
+        run: python -m pip install --disable-pip-version-check --quiet .
+
+      - name: Run privacy-safe aggregate audit
+        env:
+          KALSHI_API_KEY_ID: ${{ secrets.KALSHI_API_KEY_ID }}
+          KALSHI_PRIVATE_KEY: ${{ secrets.KALSHI_PRIVATE_KEY }}
+          MAX_FILLS: ${{ inputs.max_fills }}
+        run: |
+          set -euo pipefail
+          python -m kalshi_router.cli audit --max-fills "${MAX_FILLS}"
+          echo "Audit completed. Exit code 0 covers a successful audit of an"
+          echo "account with no fills; an API or schema failure exits non-zero."
