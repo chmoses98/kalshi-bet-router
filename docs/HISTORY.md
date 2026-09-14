@@ -172,17 +172,44 @@ The real signature is therefore **replayed, absent from positions, and present
 in settlements**. An absence that *no* settlement explains is the only one that
 is evidence of a gap. The probe now counts those two separately.
 
+## The corrected measurement reconciles completely
+
+Re-run with `market_result` read correctly and the settlement signature fixed:
+
+```
+markets in the replay: 155
+markets only in the replay: 155
+  absent from positions, EXPLAINED by a settlement: 155
+  absent from positions, UNEXPLAINED:                 0
+
+settlement results observed: no, yes
+settlement economics coverage (of 755 rows):
+  value 755   revenue 755   yes_count_fp 755   no_count_fp 755
+  yes_total_cost_dollars 755   no_total_cost_dollars 755
+  fee_cost 755   settled_time 755
+```
+
+**Every replayed market is accounted for, with zero unexplained.** The window
+reconciles. Under the pre-correction rule it would have read as 155 of 155
+markets missing their history.
+
+All eight economics fields are present on **755 of 755** rows, which confirms a
+settlement is a complete accounting event rather than a notification: quantity,
+cost basis, fee, payout and timestamp all come from the exchange.
+
 ## Still open
 
 * **`/historical/cutoff` response shape** is unverified against a live response.
-* **Scalar settlements.** `market_result` values were not observed in the first
-  run (the probe was reading the wrong field), so the distribution is still
-  unknown for this account. The Tennis repo's finding that 1,836 of ~61k
-  finalized tennis markets settled scalar, strictly between 0 and 1, means a
-  binary payout assumption is known to be wrong; see `DOWNSTREAM_REPOS.md`.
+* **Scalar settlements are not disproven, just unobserved here.** This account's
+  755 settlements are all `yes` or `no`. That makes a binary payout assumption
+  *adequate for this account today* and still **wrong in general**: the Tennis
+  repo verified 1,836 of ~61k finalized tennis markets settling `scalar`,
+  strictly between 0 and 1. A router that assumed binary would be correct on
+  every row it has ever seen and wrong the first time tennis is enabled, so the
+  scalar path must be handled before tennis routes, not after.
 * **Whether 755 settlements cover the whole account.** The settlement walk is
   unbounded, but the fill sample is bounded at 200, so "every replayed market is
-  explained" is currently a statement about the window, not the account.
+  explained" is a statement about the window, not the account.
 * **Cost of a full replay.** The bounded 200-fill window already issued 486 API
   requests once metadata resolution ran for 155 markets. A full-history replay
   needs a request budget and a rate-limit strategy before it is run.
