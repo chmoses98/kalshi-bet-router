@@ -17,11 +17,13 @@ price, a quantity or a subaccount number.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Any, Iterable
 
 from .accounting.ordering import parse_execution_time
 from .errors import SchemaError
+from .fixedpoint import parse_fixed_point
 from .models import (
     MAX_SUBACCOUNT_NUMBER,
     MIN_SUBACCOUNT_NUMBER,
@@ -83,6 +85,25 @@ class SchemaCoverage:
     with_legacy_integer_price: int = 0
     legacy_price_unproven_fills: int = 0
 
+    # --- price MODEL discrimination
+    #
+    # Two mutually exclusive readings of the yes/no price pair are on the table
+    # and only live data can settle which one Kalshi actually sends:
+    #
+    #   unified     -- both fields carry the same single execution price, so
+    #                  they agree on every fill;
+    #   complementary -- they are the two legs' prices, so they sum to 1.00 and
+    #                  coincide only in the degenerate even-odds case.
+    #
+    # Counting both signatures separately lets the evidence decide instead of
+    # the assumption.  Splitting the equal case at $0.50 matters because an
+    # equal-at-even-odds pair is ALSO a complementary pair and proves nothing on its
+    # own.
+    price_pairs_complementary: int = 0
+    price_pairs_equal_at_half: int = 0
+    price_pairs_equal_off_half: int = 0
+    price_pairs_unexplained: int = 0
+
     # --- fee coverage
     with_fee_cost_string: int = 0
     with_fee_cost_integer: int = 0
@@ -98,8 +119,19 @@ class SchemaCoverage:
     with_ts_only: int = 0
     without_any_timestamp: int = 0
 
+    #: Co-occurrence counts of the two direction vocabularies, keyed
+    #: ``"{outcome_side}|{book_side}|{action}|{side}"``.  Every component is an
+    #: enum label or ``"?"`` -- never a value that could identify a wager.  This
+    #: is what establishes how the canonical pair maps onto the deprecated one,
+    #: rather than inferring the mapping from documentation alone.
+    direction_matrix: dict[str, int] = field(default_factory=dict)
+
     def as_dict(self) -> dict[str, int]:
-        return dict(vars(self))
+        """Flatten to a single level of ints, so JSON output stays scalar."""
+        out = {k: v for k, v in vars(self).items() if k != "direction_matrix"}
+        for combo, count in sorted(self.direction_matrix.items()):
+            out[f"direction_combo_{combo.replace('|', '_')}"] = count
+        return out
 
     def render(self) -> str:
         lines = [
@@ -133,6 +165,14 @@ class SchemaCoverage:
             f"    with legacy integer price: {self.with_legacy_integer_price}",
             f"    legacy price semantics unproven: {self.legacy_price_unproven_fills}",
             "",
+            "  price model evidence (yes/no pair):",
+            f"    complementary (sum to exactly 1.00): {self.price_pairs_complementary}",
+            f"    equal at even odds (consistent with both models): "
+            f"{self.price_pairs_equal_at_half}",
+            f"    equal away from even odds (unified model only): "
+            f"{self.price_pairs_equal_off_half}",
+            f"    neither complementary nor equal: {self.price_pairs_unexplained}",
+            "",
             "  fee fields:",
             f"    fee_cost as decimal string: {self.with_fee_cost_string}",
             f"    fee_cost as integer (legacy cents): {self.with_fee_cost_integer}",
@@ -148,6 +188,12 @@ class SchemaCoverage:
             f"    with ts only: {self.with_ts_only}",
             f"    with no usable timestamp: {self.without_any_timestamp}",
         ]
+        if self.direction_matrix:
+            lines.append("")
+            lines.append("  direction vocabulary co-occurrence")
+            lines.append("  (outcome_side | book_side | action | side):")
+            for combo, count in sorted(self.direction_matrix.items()):
+                lines.append(f"    {combo}: {count}")
         return "\n".join(lines)
 
 
@@ -159,6 +205,65 @@ def _decimal_like(value: Any) -> bool:
     return _is_nonempty_str(value) or (
         isinstance(value, (int, float)) and not isinstance(value, bool)
     )
+
+
+#: Direction enum labels we are willing to echo into a public log.  Anything
+#: else is recorded as ``"?"`` so an unexpected payload can never print a value.
+_OUTCOME_LABELS = frozenset({"yes", "no"})
+_BOOK_LABELS = frozenset({"bid", "ask"})
+_ACTION_LABELS = frozenset({"buy", "sell"})
+
+_HALF = Decimal("0.5")
+_ONE = Decimal("1")
+
+
+def _label(value: Any, allowed: frozenset[str]) -> str:
+    if not _is_nonempty_str(value):
+        return "-"
+    text = value.strip().lower()
+    return text if text in allowed else "?"
+
+
+def _quiet_decimal(raw: Any, field_name: str) -> Decimal | None:
+    """Parse for diagnostics only; an unparseable value is simply not evidence."""
+    try:
+        parsed = parse_fixed_point(raw, field_name)
+    except SchemaError:
+        return None
+    return None if parsed is None else parsed.value
+
+
+def _observe_price_model(raw: dict[str, Any], coverage: SchemaCoverage) -> None:
+    """Score the yes/no pair against each candidate model.
+
+    Only the pair's *relationship* is recorded -- never either price.
+    """
+    yes = _quiet_decimal(raw.get("yes_price_dollars"), "yes_price_dollars")
+    no = _quiet_decimal(raw.get("no_price_dollars"), "no_price_dollars")
+    if yes is None or no is None:
+        return
+
+    complementary = (yes + no) == _ONE
+    equal = yes == no
+    if complementary:
+        coverage.price_pairs_complementary += 1
+    if equal:
+        if yes == _HALF:
+            coverage.price_pairs_equal_at_half += 1
+        else:
+            coverage.price_pairs_equal_off_half += 1
+    if not complementary and not equal:
+        coverage.price_pairs_unexplained += 1
+
+
+def _observe_direction_matrix(raw: dict[str, Any], coverage: SchemaCoverage) -> None:
+    combo = "|".join((
+        _label(raw.get("outcome_side"), _OUTCOME_LABELS),
+        _label(raw.get("book_side"), _BOOK_LABELS),
+        _label(raw.get("action"), _ACTION_LABELS),
+        _label(raw.get("side"), _OUTCOME_LABELS),
+    ))
+    coverage.direction_matrix[combo] = coverage.direction_matrix.get(combo, 0) + 1
 
 
 def _classify_rejection(raw: dict[str, Any]) -> str:
@@ -231,6 +336,8 @@ def _observe_shape(raw: dict[str, Any], coverage: SchemaCoverage) -> None:
             coverage.price_fields_disagreed += 1
     if isinstance(raw.get("yes_price"), int) or isinstance(raw.get("no_price"), int):
         coverage.with_legacy_integer_price += 1
+    _observe_price_model(raw, coverage)
+    _observe_direction_matrix(raw, coverage)
 
     fee = raw.get("fee_cost")
     if _is_nonempty_str(fee):
