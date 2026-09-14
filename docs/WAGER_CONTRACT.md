@@ -147,7 +147,13 @@ An episode carries two independent claims, and they answer different questions:
 | Flag | Question | Cleared by |
 |---|---|---|
 | `provable` | Is the OPENING boundary established? | a bounded fill window |
+| `authority` | Is the POSITION STORY proven, and by what? | no reconciliation, a contradiction, or a conflict |
 | `outcome_provable` | Is the OUTCOME established? | settlement evidence that does not reach this episode, or a settlement that could not be applied |
+
+`provable` and `authority` are the two gates on `identity`: an episode exposes a
+`source_key` only when its opening is provable **and** its authority is earned.
+An importer therefore cannot obtain a key for a contradicted position at all —
+the refusal is structural, not a boolean to remember to check.
 
 `provable` gates **identity** — an unprovable opening means a
 `ProvisionalIdentity` and nothing may be imported. `outcome_provable` gates

@@ -459,9 +459,10 @@ def test_audit_measures_settlement_reach_and_bounds_what_it_cannot_prove(signer)
     assert result.accounting.episodes_with_an_unprovable_outcome == 1
     assert result.accounting.episodes_bounded_by_settlement_coverage == 1
     assert result.accounting.episodes_open_within_settlement_evidence == 1
-    # Bounded, not contradicted: a limit to state, not a defect to chase.
+    # Bounded, and still unearned: coverage explains why, never excuses it.
     assert result.accounting.position_state_bounded_by_settlement_coverage
-    assert not result.accounting.position_state_is_authoritative
+    assert result.accounting.fill_history_complete
+    assert not result.accounting.claims_complete_position_state
     assert result.reconciliation.markets_absent_but_outside_settlement_evidence == 1
     assert result.reconciliation.markets_absent_and_unexplained == 1
 

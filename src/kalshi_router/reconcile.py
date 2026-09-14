@@ -478,3 +478,35 @@ def probe_reconciliation(
     report.settlement_keys = _collect_keys(settlements)
     report.settlement_results = tuple(sorted(results))
     return report
+
+
+def exchange_position_view(
+    position_rows: Iterable[dict[str, Any]],
+) -> dict[str, Decimal | None]:
+    """The exchange's own current-position view, keyed by ticker.
+
+    This is the input that lets a replay EARN authority over an open position,
+    so its failure modes matter more than its successes:
+
+    * a row whose ticker will not parse is dropped, because a quantity with no
+      market to attach it to says nothing about any market;
+    * a row whose QUANTITY will not parse is kept with a ``None`` value rather
+      than dropped. Dropping it would make the market look absent, and absent is
+      how the exchange reports a market it has settled -- so a parse failure
+      would be read as a contradiction that was never observed. ``None`` means
+      "the exchange named this market and we could not read it", which fails
+      closed as a conflict instead.
+
+    A ticker the exchange does not mention at all is simply missing from the
+    mapping: that is the exchange saying the account holds nothing there.
+    """
+    view: dict[str, Decimal | None] = {}
+    for row in position_rows:
+        if not isinstance(row, dict):
+            continue
+        ticker = _row_ticker(row)
+        if ticker is None:
+            continue
+        quantity, _present = _row_quantity(row)
+        view[ticker] = quantity
+    return view

@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .engine import AccountingResult, HistoryCompleteness
-from .position import SettlementRefusal, TransitionKind
+from .position import PositionAuthority, SettlementRefusal, TransitionKind
 
 
 @dataclass
@@ -66,6 +66,15 @@ class AccountingDiagnostics:
     #: two episodes and Kalshi documents no allocation rule.
     episodes_with_ambiguous_fee_allocation: int = 0
     episodes_provable: int = 0
+    #: Episodes by POSITION AUTHORITY -- whether the position story is proven,
+    #: and by what.  The first three are earned; the last three are not, each
+    #: unearned for a different reason and repaired a different way.
+    episodes_closed_by_fills: int = 0
+    episodes_explained_settled: int = 0
+    episodes_reconciled_current: int = 0
+    episodes_unexplained: int = 0
+    episodes_conflicted: int = 0
+    episodes_not_reconciled: int = 0
     #: Open episodes sitting where the settlements route demonstrably had data.
     #: No settlement closed them and the route was exhausted, so these really
     #: are open -- and if the exchange also reports no position, that is a
@@ -104,7 +113,16 @@ class AccountingDiagnostics:
     #: no usable execution timestamp, which cannot be ordered deterministically).
     accounting_schema_failures: int = 0
 
+    #: The RAW fill-walk result: did both routes exhaust with nothing rejected?
+    #: Necessary for position authority, nowhere near sufficient, and named for
+    #: what it measures so it cannot be mistaken for the authority claim.
+    fill_history_complete: bool = False
+    #: The EFFECTIVE authority claim, already gated by reconciliation. There is
+    #: no ungated value under this name anywhere: object, dict and rendered
+    #: report all carry this one.
     claims_complete_position_state: bool = False
+    #: Whether the exchange's own position view was supplied at all.
+    exchange_view_supplied: bool = False
     #: The exchange's own view contradicts the replay's position state.
     #: A complete FILL history is necessary but not sufficient for authority:
     #: settlements close positions without a fill, and the settlement route
@@ -116,26 +134,9 @@ class AccountingDiagnostics:
     #: just as firmly, because a portfolio of unknown outcomes is not a
     #: portfolio.
     position_state_bounded_by_settlement_coverage: bool = False
-    history_is_complete: bool = False
-
-    @property
-    def position_state_is_authoritative(self) -> bool:
-        """The single place the authority claim is decided.
-
-        Three conditions, all necessary: the fill history is complete, the
-        exchange's own view does not contradict it, and no episode's outcome is
-        beyond what the available routes can establish.
-        """
-        return (
-            self.claims_complete_position_state
-            and not self.position_state_contradicted_by_exchange
-            and not self.position_state_bounded_by_settlement_coverage
-        )
 
     def as_dict(self) -> dict[str, int | bool]:
-        payload = dict(vars(self))
-        payload["position_state_is_authoritative"] = self.position_state_is_authoritative
-        return payload
+        return dict(vars(self))
 
     def render(self) -> str:
         lines = [
@@ -188,7 +189,18 @@ class AccountingDiagnostics:
             f"    closed within window: {self.episodes_closed}",
             f"    with complete cost basis: {self.episodes_with_complete_cost_basis}",
             f"    with complete exchange fees: {self.episodes_with_complete_fees}",
-            f"    provable from supplied history: {self.episodes_provable}",
+            f"    provable opening (from the fill history): "
+            f"{self.episodes_provable}",
+            "    position authority (is the position story proven, and by what):",
+            f"      EARNED, closed by observed fills: {self.episodes_closed_by_fills}",
+            f"      EARNED, closed by a settlement: {self.episodes_explained_settled}",
+            f"      EARNED, open and reconciled with the exchange: "
+            f"{self.episodes_reconciled_current}",
+            f"      UNEARNED, open and unexplained: {self.episodes_unexplained}",
+            f"      UNEARNED, conflicts with exchange truth: "
+            f"{self.episodes_conflicted}",
+            f"      UNEARNED, never reconciled (no exchange view): "
+            f"{self.episodes_not_reconciled}",
             f"    with an importable identity: {self.episodes_with_importable_identity}",
             f"    with ambiguous fee allocation (reversal): "
             f"{self.episodes_with_ambiguous_fee_allocation}",
@@ -201,9 +213,10 @@ class AccountingDiagnostics:
             f"  orders with incomplete fee data: {self.orders_missing_fees}",
             f"  account-level fee total is exact: {self.account_fee_total_complete}",
             "",
-            f"  history supplied is complete: {self.history_is_complete}",
+            f"  fill history is complete: {self.fill_history_complete}",
+            f"  exchange position view supplied: {self.exchange_view_supplied}",
             f"  position state claimed as authoritative: "
-            f"{self.position_state_is_authoritative}",
+            f"{self.claims_complete_position_state}",
         ]
         if self.position_state_contradicted_by_exchange:
             lines.append(
@@ -236,7 +249,7 @@ class AccountingDiagnostics:
                 "not a"
             )
             lines.append("  defect -- and it is not authority either.")
-        if not self.claims_complete_position_state:
+        if not self.fill_history_complete:
             lines += [
                 "",
                 "  NOTE: this replay ran over a bounded recent window, so the position",
@@ -263,7 +276,8 @@ def build_diagnostics(result: AccountingResult) -> AccountingDiagnostics:
         account_fee_total_complete=result.total_fees is not None,
         position_transitions=len(result.transitions),
         claims_complete_position_state=result.claims_complete_position_state,
-        history_is_complete=result.completeness is HistoryCompleteness.COMPLETE,
+        fill_history_complete=result.fill_history_complete,
+        exchange_view_supplied=result.exchange_view_supplied,
         settlements_applied=result.settlements_applied,
         settlements_without_a_position=result.settlements_without_a_position,
         settlements_refused_unreconciled=result.settlements_refused_unreconciled,
@@ -324,6 +338,24 @@ def build_diagnostics(result: AccountingResult) -> AccountingDiagnostics:
     diagnostics.episodes_with_ambiguous_fee_allocation = sum(
         1 for e in episodes if e.fee_allocation_ambiguous
     )
+    authority_counters = {
+        PositionAuthority.CLOSED_BY_FILLS: "episodes_closed_by_fills",
+        PositionAuthority.EXPLAINED_SETTLED: "episodes_explained_settled",
+        PositionAuthority.RECONCILED_CURRENT: "episodes_reconciled_current",
+        PositionAuthority.UNEXPLAINED: "episodes_unexplained",
+        PositionAuthority.CONFLICTED: "episodes_conflicted",
+        PositionAuthority.NOT_RECONCILED: "episodes_not_reconciled",
+    }
+    for episode in episodes:
+        name = authority_counters[episode.authority]
+        setattr(diagnostics, name, getattr(diagnostics, name) + 1)
+    # Derived from the episodes themselves rather than set by an orchestrator:
+    # a flag this load-bearing must not depend on a caller remembering to set it.
+    diagnostics.position_state_contradicted_by_exchange = any(
+        e.authority in (PositionAuthority.UNEXPLAINED, PositionAuthority.CONFLICTED)
+        for e in episodes
+    )
+
     diagnostics.settlement_floor_applied = result.settlement_floor is not None
     # Derived here, not by the caller: the replay already knows which episodes
     # it cannot follow, and a flag this important should not depend on an

@@ -38,7 +38,11 @@ from .models import (
     group_by_order,
     normalize_fill,
 )
-from .reconcile import ReconciliationReport, probe_reconciliation
+from .reconcile import (
+    ReconciliationReport,
+    exchange_position_view,
+    probe_reconciliation,
+)
 from .safety import safe_schema_name
 from .schema_probe import SchemaCoverage, probe_fills
 from .sports import REPORT_ORDER, Sport
@@ -230,9 +234,17 @@ def run_audit(
         )
         _probe_below_the_floor(client, settlement_coverage)
         _probe_settlement_archive(client, settlement_coverage)
+        # Fetched BEFORE the replay, not after it. Position authority is an
+        # input to the accounting, not a comment on it: an episode the exchange
+        # does not confirm must never be handed a stable identity in the first
+        # place, and a check that runs afterwards can only complain about one
+        # that already exists.
+        position_rows = list(client.iter_positions())
+        exchange_positions = exchange_position_view(position_rows)
     else:
         settlement_rows, settlements = [], []
         settlement_coverage = SettlementCoverage()
+        position_rows, exchange_positions = [], None
 
     # The replay is told exactly what the walks earned. A history is COMPLETE
     # only when both fill routes ran out of data rather than out of budget, so
@@ -247,6 +259,7 @@ def run_audit(
             history_evidence.completeness,
             settlements=settlements,
             settlement_floor=settlement_coverage.floor,
+            exchange_positions=exchange_positions,
         )
         accounting = build_diagnostics(replay)
     except SchemaError:
@@ -386,33 +399,15 @@ def run_audit(
     # empty replay would report every market as "missing from the replay" --
     # a fabricated finding.
     reconciliation = (
-        _probe_reconciliation(client, replay, settlement_rows)
+        _probe_reconciliation(replay, position_rows, settlement_rows)
         if reconcile and replay is not None
         else None
     )
 
-    # Authority over position state has to survive contact with the exchange's
-    # own view. A complete FILL history is necessary but not sufficient: a
-    # settlement closes a position without a fill, and the settlement route does
-    # not reach as far back as the archive fill route does. So a replay can walk
-    # every fill that ever existed, legitimately report COMPLETE, and still hold
-    # markets that settled before the settlement window -- markets the exchange
-    # has long since dropped. Claiming authority there would assert a portfolio
-    # the member does not have.
-    #
-    # Phase C.15 splits that gap in two, because the two halves demand opposite
-    # responses. A market the replay holds open INSIDE the period settlements
-    # demonstrably covered is a contradiction: something is wrong and it is not
-    # coverage. A market below the route's reach is a bounded limit: the route
-    # produced no evidence either way, and it never will.
-    #
-    # Both deny authority -- a portfolio containing markets of unknown outcome
-    # is not the member's position state -- but only the first is a defect.
-    # The bounded half is derived inside build_diagnostics, from the episodes
-    # themselves. Only the contradiction needs the exchange's own view, so only
-    # it is set here.
-    if reconciliation is not None and reconciliation.markets_absent_and_unexplained:
-        accounting.position_state_contradicted_by_exchange = True
+    # Position authority is decided inside the replay, from the exchange view
+    # fed into it above, and the diagnostics derive every authority flag from
+    # the episodes themselves. Nothing is set here after the fact: a claim this
+    # load-bearing must not depend on an orchestrator remembering to revoke it.
 
     return AuditResult(
         report=report,
@@ -622,7 +617,7 @@ def _markets_outside_settlement_evidence(replay) -> frozenset[str]:
 
 
 def _probe_reconciliation(
-    client: KalshiReadOnlyClient, replay, settlement_rows: list[dict]
+    replay, position_rows: list[dict], settlement_rows: list[dict]
 ) -> ReconciliationReport:
     """Measure the replay against the exchange's own position view.
 
@@ -638,7 +633,7 @@ def _probe_reconciliation(
         for (_subaccount, ticker), ledger in replay.ledgers.items()
     }
     return probe_reconciliation(
-        client.iter_positions(),
+        position_rows,
         settlement_rows,
         replayed,
         _markets_outside_settlement_evidence(replay),

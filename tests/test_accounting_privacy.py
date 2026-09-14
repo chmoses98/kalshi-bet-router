@@ -21,9 +21,21 @@ SENSITIVE_SCENARIO = [
 ]
 
 
-def result():
+def result(exchange_positions=None):
     fills = [normalize_fill(make_accounting_fill(**s)) for s in SENSITIVE_SCENARIO]
-    return AccountingEngine().replay(fills, HistoryCompleteness.COMPLETE)
+    return AccountingEngine().replay(
+        fills, HistoryCompleteness.COMPLETE, exchange_positions=exchange_positions
+    )
+
+
+def reconciled():
+    """The same replay, with the exchange confirming the position it holds.
+
+    The scenario buys 200 and sells 90, so 110 remain. Authority over an OPEN
+    position has to be earned from the exchange's own view; a complete fill
+    history alone never grants it.
+    """
+    return result(exchange_positions={SYNTH_TICKER: Decimal(110)})
 
 
 def rendered():
@@ -61,11 +73,15 @@ def test_rendered_output_exposes_no_pnl_or_cost_basis():
 
 
 def test_episode_identifiers_never_reach_rendered_output():
-    replay = result()
-    text = rendered()
+    # Checked on the RECONCILED replay, so the episodes actually have
+    # identifiers to leak; an unearned episode exposes none by construction.
+    replay = reconciled()
+    text = build_diagnostics(replay).render()
     for episode in replay.episodes:
+        assert episode.source_id is not None
         assert episode.source_id not in text
         assert episode.source_key not in text
+        assert episode.opening_fill_id not in text
 
 
 def test_diagnostics_dict_is_json_safe_counts_only():
@@ -82,8 +98,18 @@ def test_bounded_window_output_refuses_to_describe_account_positions():
     assert "NOT the account's position state" in text
 
 
-def test_complete_history_output_drops_the_disclaimer():
+def test_complete_history_alone_does_not_claim_position_state():
+    # The false green this replaces: complete fills, an open position nobody
+    # checked, and an authority claim anyway.
     text = rendered()
+    assert "fill history is complete: True" in text
+    assert "position state claimed as authoritative: False" in text
+    assert "NOT the account's position state" not in text  # not a bounded window
+
+
+def test_complete_history_plus_reconciliation_does_claim_position_state():
+    text = build_diagnostics(reconciled()).render()
+    assert "fill history is complete: True" in text
     assert "position state claimed as authoritative: True" in text
     assert "NOT the account's position state" not in text
 

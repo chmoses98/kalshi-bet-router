@@ -44,8 +44,12 @@ def fingerprint(result):
         tuple(sorted((k, l.position) for k, l in result.ledgers.items())),
         tuple(t.kind.value for t in result.transitions),
         tuple(t.fill_id for t in result.transitions),
+        # Keyed on the opening fill, because source_id is legitimately None for
+        # an episode whose position story is not yet earned -- and determinism
+        # has to be checkable for those too.
         tuple(sorted(
-            (e.source_id, e.remaining_quantity, e.realized_pnl, e.is_open)
+            (e.opening_fill_id, e.source_id or "", e.authority.value,
+             e.remaining_quantity, e.realized_pnl, e.is_open)
             for e in result.episodes
         )),
         tuple(sorted((o.order_id, o.total_quantity, o.vwap_price)
@@ -147,10 +151,26 @@ def test_bounded_history_refuses_to_claim_position_state():
     assert all(e.provable is False for e in result.episodes)
 
 
-def test_complete_history_claims_position_state():
+def test_complete_history_proves_the_openings_but_not_the_position_state():
+    # The distinction the whole model turns on. Complete fills prove where every
+    # episode BEGAN; they say nothing about what the account holds now.
     result = AccountingEngine().replay(build(), COMPLETE)
-    assert result.claims_complete_position_state is True
+    assert result.fill_history_complete is True
     assert all(e.provable is True for e in result.episodes)
+    assert result.claims_complete_position_state is False
+
+
+def test_complete_history_plus_a_matching_exchange_view_claims_position_state():
+    fills = build()
+    unreconciled = AccountingEngine().replay(fills, COMPLETE)
+    held = {
+        ticker: ledger.position
+        for (_sub, ticker), ledger in unreconciled.ledgers.items()
+        if ledger.position != 0
+    }
+    result = AccountingEngine().replay(fills, COMPLETE, exchange_positions=held)
+    assert result.fill_history_complete is True
+    assert result.claims_complete_position_state is True
 
 
 def test_completeness_defaults_to_bounded_so_the_safe_answer_is_the_default():
@@ -265,9 +285,25 @@ def test_requiring_an_importable_identity_refuses_a_bounded_episode():
         require_importable_identity(episode.identity)
 
 
-def test_a_provable_episode_yields_a_stable_importable_identity():
+def test_a_provable_episode_needs_a_proven_position_story_too():
+    # Provable opening, unproven position story: still not importable. This is
+    # the second gate, and it is structural rather than advisory.
     episode = AccountingEngine().replay(build([EARLY, LATER]), COMPLETE).episodes[0]
     assert episode.provable is True
+    assert episode.authority_is_earned is False
+    assert isinstance(episode.identity, ProvisionalIdentity)
+    assert episode.is_importable is False
+
+
+def test_a_provable_reconciled_episode_yields_a_stable_importable_identity():
+    result = AccountingEngine().replay(build([EARLY, LATER]), COMPLETE)
+    ticker = result.episodes[0].ticker
+    held = result.ledger_for(ticker, 0).position
+    episode = AccountingEngine().replay(
+        build([EARLY, LATER]), COMPLETE, exchange_positions={ticker: held}
+    ).episodes[0]
+    assert episode.provable is True
+    assert episode.authority_is_earned is True
     assert isinstance(episode.identity, StableIdentity)
     assert episode.is_importable is True
     assert require_importable_identity(episode.identity) == episode.source_key

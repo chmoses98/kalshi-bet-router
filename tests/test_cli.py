@@ -192,7 +192,7 @@ def test_audit_prints_the_shadow_accounting_block(monkeypatch, local_env):
 def test_audit_never_claims_position_state_from_a_bounded_window(monkeypatch, local_env):
     install_fake_api(monkeypatch, SAMPLE)
     _, out, _ = run(["audit"])
-    assert "history supplied is complete: False" in out
+    assert "fill history is complete: False" in out
     assert "position state claimed as authoritative: False" in out
     assert "NOT the account's position state" in out
 

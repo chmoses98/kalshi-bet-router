@@ -338,6 +338,33 @@ position list. Authority is still withheld — 951 episodes have outcomes the
 evidence cannot establish — but for a measured reason rather than an open one.
 See [`docs/HISTORY.md`](docs/HISTORY.md).
 
+## Position authority is earned, not inherited from the fill walk
+
+Three separate things, and the first does not imply the others:
+
+| | Question | Field |
+|---|---|---|
+| 1 | Did both fill routes exhaust with nothing rejected? | `fill_history_complete` |
+| 2 | Does the replayed position reconcile with exchange truth? | `PositionEpisode.authority` |
+| 3 | Is this episode proven enough for downstream use? | `PositionEpisode.is_importable` |
+
+`claims_complete_position_state` is the **effective** claim, already gated by
+reconciliation, and it is the same boolean in the object, in `as_dict()` and in
+the rendered report — there is no ungated value under that name anywhere.
+
+An episode exposes an importable identity only when its **opening is provable**
+*and* its **position story is earned** (closed by observed fills, closed by an
+authoritative settlement, or reconciled against the exchange's current
+position). Either gate failing yields a `ProvisionalIdentity` with no
+`source_key` attribute at all, so `require_importable_identity()` refuses it and
+a caller cannot bypass the gate by forgetting to check a flag.
+
+Withholding the account-level claim does not destroy per-market evidence: one
+unexplained historical market leaves every reconciled market its identity.
+
+> A complete walk of fills proves the fill history. It does not, by itself,
+> prove the position story.
+
 ## Documentation index
 
 * [`docs/API_CONTRACT.md`](docs/API_CONTRACT.md) — the exact Kalshi API contract used, and its verification status.
