@@ -263,3 +263,38 @@ def test_replaying_settlements_does_not_upgrade_history_completeness():
     )
     assert result.settlements_applied == 1
     assert not result.claims_complete_position_state
+
+
+def test_the_fee_counter_counts_settlements_as_well_as_fills():
+    """A settlement carries its own fee, so it is a fee-bearing event too.
+
+    The counter used to be named for fills. Once settlements started producing
+    transitions it was reporting 352 against 200 fills -- a correct total under
+    a wrong label, which is the kind of number that gets mistrusted or, worse,
+    trusted for the wrong thing.
+    """
+    from kalshi_router.accounting.diagnostics import build_diagnostics
+
+    result = replay(
+        [make_accounting_fill(index=1, quantity="10.00", yes_price="0.5600",
+                              fee="0.0100")],
+        [settlement_row()],
+    )
+    diagnostics = build_diagnostics(result)
+    assert diagnostics.events_with_fee_field == 2      # one fill + one settlement
+    assert diagnostics.events_missing_fee_field == 0
+    assert "fee-bearing events (fills + settlements): 2" in diagnostics.render()
+
+
+def test_a_settlement_without_a_fee_is_counted_as_missing_not_zero():
+    from kalshi_router.accounting.diagnostics import build_diagnostics
+
+    row = settlement_row()
+    del row["fee_cost"]
+    result = replay(
+        [make_accounting_fill(index=1, quantity="10.00", yes_price="0.5600",
+                              fee="0.0100")],
+        [row],
+    )
+    diagnostics = build_diagnostics(result)
+    assert diagnostics.events_missing_fee_field == 1
