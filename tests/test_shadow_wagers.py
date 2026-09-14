@@ -311,3 +311,72 @@ def test_the_game_date_source_split_is_reported():
     # what says whether that convention is load-bearing.
     assert diagnostics.game_date_from_event_ticker == 1
     assert diagnostics.game_date_from_event_field == 0
+
+
+# --------------------------------- spending the metadata budget where it counts
+
+def test_routable_markets_are_classified_before_unroutable_ones():
+    """A bounded sweep must look at the markets that could actually route.
+
+    The first live shadow run spent its whole budget on an alphabetical prefix
+    and never classified 549 of the 747 routable episodes -- so it could not say
+    whether the zero wagers were a classification problem or a sampling one.
+    """
+    from kalshi_router.audit import _classification_order
+
+    class FakeEpisode:
+        def __init__(self, ticker, importable):
+            self.ticker = ticker
+            self.is_importable = importable
+
+    class FakeReplay:
+        episodes = [
+            FakeEpisode("AAA", False),
+            FakeEpisode("MMM", True),
+            FakeEpisode("ZZZ", True),
+        ]
+
+    order = _classification_order(["AAA", "MMM", "ZZZ"], FakeReplay())
+    assert order == ["MMM", "ZZZ", "AAA"]
+
+
+def test_the_order_is_deterministic_within_each_group():
+    from kalshi_router.audit import _classification_order
+
+    class FakeEpisode:
+        def __init__(self, ticker, importable):
+            self.ticker = ticker
+            self.is_importable = importable
+
+    class FakeReplay:
+        episodes = [FakeEpisode("BBB", True), FakeEpisode("AAA", True)]
+
+    tickers = ["AAA", "BBB", "CCC"]
+    first = _classification_order(tickers, FakeReplay())
+    assert first == _classification_order(tickers, FakeReplay())
+    assert first == ["AAA", "BBB", "CCC"]
+
+
+def test_no_routable_market_leaves_the_order_untouched():
+    from kalshi_router.audit import _classification_order
+
+    class FakeReplay:
+        episodes = []
+
+    assert _classification_order(["B", "A"], FakeReplay()) == ["B", "A"]
+    assert _classification_order(["B", "A"], None) == ["B", "A"]
+
+
+def test_reordering_never_changes_how_many_markets_are_classified():
+    from kalshi_router.audit import _classification_order
+
+    class FakeEpisode:
+        def __init__(self, ticker, importable):
+            self.ticker = ticker
+            self.is_importable = importable
+
+    class FakeReplay:
+        episodes = [FakeEpisode("C", True)]
+
+    tickers = ["A", "B", "C", "D"]
+    assert sorted(_classification_order(tickers, FakeReplay())) == sorted(tickers)
