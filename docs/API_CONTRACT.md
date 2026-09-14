@@ -153,12 +153,24 @@ is exactly the NFL/CFB ambiguity the Phase 0 classifier had to refuse 144 times.
 Both fields are documented as `string | null`, and that contract is enforced
 explicitly rather than by duck-typing:
 
+The governing rule: **only an explicit null or an absent field may fall through**
+to weaker evidence. A field that is present but unusable is malformed — an
+authoritative field may never quietly demote itself into weaker evidence.
+
 | Value | Treatment |
 |---|---|
-| `null` or absent | valid absence; falls through to weaker evidence |
-| non-empty string | valid |
-| empty / whitespace-only string | still the documented *type* and asserts no competition, so treated as an absence |
-| any other non-null type (`123`, `[]`, `{}`, `true`) | **malformed**; fails closed to `UNRESOLVED` before any evidence is gathered, so it can never be rescued by L4 or L5. Never coerced. |
+| field absent | valid absence; falls through to weaker evidence |
+| `null` | valid absence; falls through |
+| non-empty string | valid value |
+| empty string `""` | **malformed** |
+| whitespace-only string `"   "` | **malformed** |
+| any other non-null type (`123`, `12.5`, `[]`, `{}`, `true`) | **malformed** |
+
+Every malformed case fails closed to `UNRESOLVED` with reason
+`malformed_event_metadata`, evaluated *before any evidence is gathered*, so it can
+never be rescued by L4 series metadata or the L5 registry. Nothing is coerced, and
+the error names the field and the shape problem only — never the offending value,
+which reaches a public log.
 
 The documented response carries these at the top level; a wrapped envelope is
 also accepted, since the envelope is the one part of this route not confirmed

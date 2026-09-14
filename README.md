@@ -150,7 +150,7 @@ is `UNRESOLVED` and an aggregate count — never a pick:
 |---|---|
 | One competition name claimed by **two sports** in the taxonomy | That competition resolves to nothing, for anyone. Not even our own direct rules may override the exchange's own ambiguity. Counted as `competitions claimed by >1 sport`. |
 | One event ticker appearing under **two competitions** in the milestone sweep | That event yields no competition. Once conflicted, always conflicted — sweep order cannot change the verdict. Counted as `events under >1 competition`. |
-| `competition` present but **wrong-typed** (`123`, `[]`, `{}`) | Malformed metadata. Fails closed *before any evidence is gathered*, so it cannot be rescued by L4 series metadata or the L5 registry. A genuine `null` is different: that is a valid absence and does fall through. |
+| `competition` present but **unusable** — wrong-typed (`123`, `[]`, `{}`) or empty/whitespace-only (`""`, `"   "`) | Malformed metadata. Fails closed *before any evidence is gathered*, so it cannot be rescued by L4 series metadata or the L5 registry. Only an explicit `null` or an absent field is a valid absence that falls through. |
 
 Both collision checks are **order-independent by construction**: claimants are
 collected first and resolved afterwards, so the result never depends on

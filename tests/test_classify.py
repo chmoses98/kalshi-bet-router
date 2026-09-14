@@ -624,18 +624,102 @@ def test_valid_string_competition_is_accepted():
     assert result.sport is Sport.MLB
 
 
-def test_empty_string_competition_is_treated_as_an_absence_not_corruption():
-    """An empty string is still the documented type and asserts no competition."""
+# ---- present-but-unusable competition: only null/absence may fall through ----
+#
+# The governing rule: a field that is present but carries nothing usable is
+# malformed, and an authoritative field may never quietly demote itself into
+# weaker evidence.
+
+
+def resolvable_context(**metadata):
+    """A market that L4 series metadata AND the L5 registry would both resolve.
+
+    Any UNRESOLVED result here therefore proves the competition field blocked
+    both fallbacks rather than merely lacking evidence of its own.
+    """
+    return MarketContext(
+        market_ticker="KXMLBGAME-SYNTH01-NYY",
+        market=make_market("KXMLBGAME-SYNTH01-NYY", "KXMLBGAME-SYNTH01"),
+        event=make_event("KXMLBGAME-SYNTH01", "KXMLBGAME"),
+        series=make_series("KXMLBGAME", category="Sports", tags=["MLB"]),
+        event_metadata=metadata if metadata else None,
+    )
+
+
+def test_absent_competition_field_falls_through():
+    result = classify_market(resolvable_context(competition_scope="Game"))
+    assert result.sport is Sport.MLB
+
+
+def test_null_competition_falls_through():
+    result = classify_market(resolvable_context(competition=None, competition_scope=None))
+    assert result.sport is Sport.MLB
+
+
+def test_valid_non_empty_competition_resolves():
+    result = classify_market(resolvable_context(competition="Pro Baseball"))
+    assert result.sport is Sport.MLB
+    assert result.resolved_by is EvidenceLevel.L1_EVENT_COMPETITION
+
+
+def test_empty_competition_is_malformed():
+    result = classify_market(resolvable_context(competition=""))
+    assert result.sport is Sport.UNRESOLVED
+    assert result.unresolved_reason is UnresolvedReason.MALFORMED_EVENT_METADATA
+
+
+@pytest.mark.parametrize("blank", ["   ", "\t", "\n", " \t\n "])
+def test_whitespace_only_competition_is_malformed(blank):
+    result = classify_market(resolvable_context(competition=blank))
+    assert result.sport is Sport.UNRESOLVED
+    assert result.unresolved_reason is UnresolvedReason.MALFORMED_EVENT_METADATA
+
+
+def test_empty_competition_cannot_be_rescued_by_l4_series_metadata():
+    """The series tags alone would say MLB; the empty competition must block it."""
+    context_ = resolvable_context(competition="")
+    assert context_.series["tags"] == ["MLB"]
+    result = classify_market(context_)
+    assert result.sport is Sport.UNRESOLVED
+    assert result.is_routable is False
+    assert result.evidence == ()
+
+
+def test_empty_competition_cannot_be_rescued_by_l5_registry():
+    """KXMLBGAME is an exact registry entry; the empty competition must block it."""
+    from kalshi_router.series_registry import lookup_series_ticker
+
+    assert lookup_series_ticker("KXMLBGAME") is not None
     result = classify_market(
         MarketContext(
             market_ticker="KXMLBGAME-SYNTH01-NYY",
             market=make_market("KXMLBGAME-SYNTH01-NYY", "KXMLBGAME-SYNTH01"),
-            series=make_series("KXMLBGAME", category="Sports", tags=["MLB"]),
-            event_metadata={"competition": "   ", "competition_scope": None},
+            event=make_event("KXMLBGAME-SYNTH01", "KXMLBGAME"),
+            event_metadata={"competition": "  "},
         )
     )
-    assert result.sport is Sport.MLB
-    assert result.unresolved_reason is None
+    assert result.sport is Sport.UNRESOLVED
+    assert result.resolved_by is None
+    assert result.series_ticker is None
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_empty_or_whitespace_competition_scope_is_also_malformed(blank):
+    result = classify_market(
+        resolvable_context(competition="Pro Baseball", competition_scope=blank)
+    )
+    assert result.sport is Sport.UNRESOLVED
+    assert result.unresolved_reason is UnresolvedReason.MALFORMED_EVENT_METADATA
+
+
+def test_malformed_empty_field_error_emits_no_private_value():
+    """The reason reaches a public log, so it names the field, not the content."""
+    result = classify_market(resolvable_context(competition="   ", competition_scope="Game"))
+    assert "competition" in result.reason
+    assert "present but empty" in result.reason
+    # Nothing about the market this fill belongs to may appear.
+    for private in ("KXMLBGAME", "KXMLBGAME-SYNTH01-NYY", "MLB Game", "Game"):
+        assert private not in result.reason
 
 
 def test_malformed_metadata_error_never_echoes_the_value():

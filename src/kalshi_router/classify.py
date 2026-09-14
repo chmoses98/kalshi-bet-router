@@ -114,17 +114,24 @@ def validate_metadata_string_field(
 
     Returns ``(value, error)``.
 
-    * **null / absent** -> ``(None, None)``.  A genuine absence is a valid shape:
-      most events are not sports, and the classifier falls through to weaker
-      evidence.
-    * **non-empty string** -> ``(value, None)``.
-    * **empty or whitespace-only string** -> ``(None, None)``.  Still the
-      documented *type*, and it asserts no competition, so it is treated as an
-      absence rather than as corruption.
-    * **any other non-null type** (int, bool, list, dict, ...) -> ``(None, error)``.
-      This is malformed metadata, and the caller must fail closed.  It is never
-      coerced, and it must never be allowed to fall through to weaker evidence:
-      a wrong-typed competition means we cannot trust this document at all.
+    The governing rule is that **only an explicit null or absence may fall
+    through** to weaker evidence.  A field that is present but unusable is
+    malformed metadata, and a present-but-unusable authoritative field must never
+    quietly demote itself into weaker evidence.
+
+    * **absent field** -> ``(None, None)``.  Valid absence.
+    * **JSON null** -> ``(None, None)``.  Valid absence: most events are not
+      sports, and the classifier falls through to weaker evidence.
+    * **non-empty string** -> ``(value, None)``.  Valid value.
+    * **empty string** -> ``(None, error)``.  Malformed: the field is present and
+      claims to carry a competition, but carries nothing usable.
+    * **whitespace-only string** -> ``(None, error)``.  Malformed, as above.
+    * **any other non-null type** (int, float, bool, list, dict, ...) ->
+      ``(None, error)``.  Malformed.  Never coerced.
+
+    Every ``error`` case must fail the classification closed.  The error text
+    names the field and the shape problem only -- never the offending value,
+    which is private account data and reaches a public log.
     """
     if not isinstance(metadata, dict) or key not in metadata:
         return None, None
@@ -133,7 +140,11 @@ def validate_metadata_string_field(
         return None, None
     if isinstance(raw, str):
         text = raw.strip()
-        return (text or None), None
+        if not text:
+            return None, (
+                f"{key} was present but empty, expected a non-empty string or null"
+            )
+        return text, None
     return None, f"{key} was {type(raw).__name__}, expected string or null"
 
 

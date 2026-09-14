@@ -339,3 +339,16 @@ def test_a_bad_quantity_fails_the_audit_closed(signer):
     bad["count_fp"] = "0.00"
     with _pytest.raises(SchemaError):
         run_audit(build_client([[bad]], signer))
+
+
+def test_empty_competition_is_counted_malformed_end_to_end(signer):
+    """An empty competition must not become a routable MLB fill via L4/L5."""
+    metadata = build_metadata()
+    metadata[f"{event_for('MLB')}/metadata"] = {"competition": "", "competition_scope": None}
+    pages = [[make_fill(1, ticker=market_for("MLB"))]]
+    report = run_audit(build_client(pages, signer, metadata=metadata)).report
+    assert report.classification_counts[Sport.MLB] == 0
+    assert report.classification_counts[Sport.UNRESOLVED] == 1
+    assert report.unresolved_malformed_event_metadata == 1
+    assert report.events_with_malformed_metadata == 1
+    assert report.events_with_competition == 0
