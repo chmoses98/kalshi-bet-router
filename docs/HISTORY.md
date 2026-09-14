@@ -120,14 +120,69 @@ Not added here: the reconciliation itself, and settlement replay. Those change
 what the engine claims to know, so they follow separately and are verified
 against live data before anything downstream is allowed to depend on them.
 
+## Settlement schema, verified
+
+From the first live reconciliation run (755 settlement rows):
+
+```
+event_ticker  exchange_index  fee_cost  market_result  no_count_fp
+no_total_cost_dollars  revenue  settled_time  ticker  value
+yes_count_fp  yes_total_cost_dollars
+```
+
+Two things this settles.
+
+**The result field is `market_result`, not `result`.** The probe's first run
+counted 755 of 755 rows as "no result" purely because of that guess. The field
+name was a guess; the count was the evidence that caught it.
+
+**A settlement is a complete accounting event, not a notification.** It carries
+its own per-leg quantities (`yes_count_fp` / `no_count_fp`), its own per-leg cost
+basis (`yes_total_cost_dollars` / `no_total_cost_dollars`), its own `fee_cost`,
+its `revenue`, its `value`, and `settled_time` for ordering. So replaying
+settlements does not require inventing a closing price — the exchange states the
+economics directly, which is exactly the rule this system already follows for
+fees.
+
+## Correction: a settled market leaves the positions response
+
+This document previously reasoned that a settled market would appear in
+`/portfolio/positions` with a **zero** quantity, and the probe counted a
+`replay open / exchange flat` signature on that basis. **That was wrong**, and
+the live run disproved it:
+
+```
+position rows: 0
+settlement rows: 755
+markets in the replay: 155
+markets only in the replay: 155
+replay says open, exchange says flat: 0
+```
+
+The account has **no** position rows at all. Settled markets are **absent** from
+the response, not flat within it. So the designed detector could never fire.
+
+The correction matters in the safety direction, not just the cosmetic one. Had
+the router shipped the rule "a replayed ticker missing from positions means
+missing history", it would have condemned an entire, intact account as
+unreconcilable — 155 of 155 markets — and refused to emit anything, while the
+history was complete and the markets had simply settled.
+
+The real signature is therefore **replayed, absent from positions, and present
+in settlements**. An absence that *no* settlement explains is the only one that
+is evidence of a gap. The probe now counts those two separately.
+
 ## Still open
 
 * **`/historical/cutoff` response shape** is unverified against a live response.
-* **Settlement schema** — field names, whether the value is a dollar string, and
-  whether a scalar settlement is distinguishable — is unverified here. The
-  Tennis repo's finding that 1,836 of ~61k finalized tennis markets settled
-  `result="scalar"` strictly between 0 and 1 means a binary payout assumption is
-  known to be wrong; see `DOWNSTREAM_REPOS.md`.
+* **Scalar settlements.** `market_result` values were not observed in the first
+  run (the probe was reading the wrong field), so the distribution is still
+  unknown for this account. The Tennis repo's finding that 1,836 of ~61k
+  finalized tennis markets settled scalar, strictly between 0 and 1, means a
+  binary payout assumption is known to be wrong; see `DOWNSTREAM_REPOS.md`.
+* **Whether 755 settlements cover the whole account.** The settlement walk is
+  unbounded, but the fill sample is bounded at 200, so "every replayed market is
+  explained" is currently a statement about the window, not the account.
 * **Cost of a full replay.** The bounded 200-fill window already issued 486 API
   requests once metadata resolution ran for 155 markets. A full-history replay
   needs a request budget and a rate-limit strategy before it is run.

@@ -6,14 +6,22 @@ external check, because it states the net position per ticker without depending
 on our reading of history.
 
 This module only **measures** the disagreement.  It changes no accounting and
-emits nothing downstream, because two of its inputs are still unverified:
+emits nothing downstream.
 
-* the settlement schema, and
-* whether settled markets remain in the positions response at all.
+The first live run answered both of the questions it was built to ask, and
+corrected this module's own assumptions in the process:
 
-Guessing either would produce a confident-looking reconciliation built on an
-assumption, which is worse than a measured gap.  So the shapes are observed
-first, exactly as the fill schema was.
+* the settlement result field is ``market_result``, not ``result`` -- 755 of 755
+  settlement rows were counted as "no result" purely because of that guess;
+* **a settled market is absent from the positions response entirely**, not
+  present with a zero quantity.  The account reported 0 position rows against
+  155 replayed markets and 755 settlements.
+
+So "replay says open, exchange says flat" can never fire, and the real settlement
+signature is *replayed, absent from positions, present in settlements*.  That is
+what is measured now.  Being wrong about this in the other direction -- assuming
+a missing ticker meant missing history -- would have condemned an entire, intact
+account as unreconcilable.
 
 Everything reported is a count or a public schema name.  No ticker, quantity,
 price or balance can reach this output: ticker-keyed comparisons are reduced to
@@ -34,6 +42,24 @@ from .safety import safe_schema_name
 #: bucketed, so an unexpected value cannot print itself into a public log.
 _KNOWN_RESULTS = frozenset({"yes", "no", "scalar", "void", "all_no", "all_yes", ""})
 
+#: Where the settlement outcome lives.  ``market_result`` is the observed live
+#: field; ``result`` is kept as a defensive alias, not as a guess.
+_RESULT_KEYS = ("market_result", "result")
+
+#: Settlement economics, verified present on the live rows.  A settlement
+#: carries its own per-leg quantities and cost, so it is a complete accounting
+#: event rather than a bare notification.
+_SETTLEMENT_ECONOMICS = (
+    "value",
+    "revenue",
+    "yes_count_fp",
+    "no_count_fp",
+    "yes_total_cost_dollars",
+    "no_total_cost_dollars",
+    "fee_cost",
+    "settled_time",
+)
+
 
 @dataclass
 class ReconciliationReport:
@@ -52,6 +78,9 @@ class ReconciliationReport:
     settlement_rows: int = 0
     settlement_rows_with_result: int = 0
     settlement_rows_without_result: int = 0
+    settlement_markets: int = 0
+    #: Per-field presence across settlement rows, so a schema drift is visible.
+    settlement_field_coverage: dict[str, int] = field(default_factory=dict)
 
     # --- comparison against the replay (set sizes, never tickers)
     replayed_markets: int = 0
@@ -60,8 +89,15 @@ class ReconciliationReport:
     markets_only_in_positions: int = 0
     markets_agreeing_on_quantity: int = 0
     markets_disagreeing_on_quantity: int = 0
-    #: Replayed non-zero, exchange says flat: the settlement signature.
+    #: Replayed non-zero, exchange says flat.  Observed to be ZERO on live data:
+    #: settled markets leave the positions response rather than going to zero.
     markets_replay_open_exchange_flat: int = 0
+    #: The real settlement signature: replayed, absent from positions, and
+    #: accounted for by a settlement row.
+    markets_absent_but_settled: int = 0
+    #: Replayed, absent from positions, and NOT explained by a settlement. This
+    #: is the one that would mean missing history.
+    markets_absent_and_unexplained: int = 0
 
     #: Observed schema, allowlisted.
     position_keys: tuple[str, ...] = ()
@@ -69,7 +105,11 @@ class ReconciliationReport:
     settlement_results: tuple[str, ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
-        return dict(vars(self))
+        """Flatten so every emitted value stays scalar or a name tuple."""
+        out = {k: v for k, v in vars(self).items() if k != "settlement_field_coverage"}
+        for name, count in sorted(self.settlement_field_coverage.items()):
+            out[f"settlement_field_{name}"] = count
+        return out
 
     def render(self) -> str:
         lines = [
@@ -83,6 +123,7 @@ class ReconciliationReport:
             f"    flat: {self.position_rows_zero}",
             "",
             f"  settlement rows: {self.settlement_rows}",
+            f"    distinct markets settled: {self.settlement_markets}",
             f"    with a result: {self.settlement_rows_with_result}",
             f"    without a result: {self.settlement_rows_without_result}",
             "",
@@ -95,15 +136,25 @@ class ReconciliationReport:
             f"    DISAGREEING on net quantity: {self.markets_disagreeing_on_quantity}",
             f"    replay says open, exchange says flat: "
             f"{self.markets_replay_open_exchange_flat}",
+            f"    absent from positions, EXPLAINED by a settlement: "
+            f"{self.markets_absent_but_settled}",
+            f"    absent from positions, UNEXPLAINED: "
+            f"{self.markets_absent_and_unexplained}",
             "",
             f"  position keys observed: {', '.join(self.position_keys) or '(none)'}",
             f"  settlement keys observed: {', '.join(self.settlement_keys) or '(none)'}",
             f"  settlement results observed: {', '.join(self.settlement_results) or '(none)'}",
+            "  settlement economics coverage:",
+            *(
+                f"    {name}: {self.settlement_field_coverage.get(name, 0)}"
+                for name in _SETTLEMENT_ECONOMICS
+            ),
             "",
-            "  NOTE: this is a MEASUREMENT, not a reconciliation verdict. The",
-            "        settlement schema is not yet verified, so a disagreement here",
-            "        does not yet distinguish missing history from a settled",
-            "        market. Nothing downstream may depend on these numbers.",
+            "  NOTE: this is a MEASUREMENT, not a reconciliation verdict. A",
+            "        settled market leaves the positions response entirely, so",
+            "        'absent' is only evidence of missing history when NO",
+            "        settlement explains it. Nothing downstream may depend on",
+            "        these numbers yet.",
         ]
         return "\n".join(lines)
 
@@ -185,20 +236,43 @@ def probe_reconciliation(
             exchange[ticker] = quantity
 
     results: dict[str, None] = {}
+    settled_tickers: set[str] = set()
     for row in settlements:
         report.settlement_rows += 1
-        result = row.get("result")
-        if isinstance(result, str) and result.strip():
+        result = None
+        for key in _RESULT_KEYS:
+            candidate = row.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                result = candidate.strip().lower()
+                break
+        if result is not None:
             report.settlement_rows_with_result += 1
-            label = result.strip().lower()
-            results[label if label in _KNOWN_RESULTS else "other"] = None
+            results[result if result in _KNOWN_RESULTS else "other"] = None
         else:
             report.settlement_rows_without_result += 1
+
+        for name in _SETTLEMENT_ECONOMICS:
+            if row.get(name) is not None:
+                report.settlement_field_coverage[name] = (
+                    report.settlement_field_coverage.get(name, 0) + 1
+                )
+
+        ticker = _row_ticker(row)
+        if ticker is not None:
+            settled_tickers.add(ticker)
+    report.settlement_markets = len(settled_tickers)
 
     report.replayed_markets = len(replayed)
     for ticker, net in replayed.items():
         if ticker not in exchange:
             report.markets_only_in_replay += 1
+            # Absent is not automatically "missing history": a settled market
+            # leaves the positions response. Only an absence that NO settlement
+            # explains is evidence of a gap.
+            if ticker in settled_tickers:
+                report.markets_absent_but_settled += 1
+            else:
+                report.markets_absent_and_unexplained += 1
             continue
         report.markets_in_both += 1
         if exchange[ticker] == net:
