@@ -38,10 +38,18 @@ from decimal import Decimal
 from enum import Enum
 from typing import Iterable
 
-from ..models import NormalizedFill
+from ..models import NormalizedFill, NormalizedSettlement
 from .execution import OrderAggregationStats, OrderExecution, aggregate_orders
 from .ordering import sort_fills
-from .position import MarketLedger, PositionEpisode, PositionTransition, TransitionKind, apply_fill
+from .position import (
+    MarketLedger,
+    PositionEpisode,
+    PositionTransition,
+    SettlementRefused,
+    TransitionKind,
+    apply_fill,
+    apply_settlement,
+)
 
 
 class HistoryCompleteness(str, Enum):
@@ -70,6 +78,14 @@ class AccountingResult:
     order_stats: OrderAggregationStats = field(default_factory=OrderAggregationStats)
     fills_replayed: int = 0
     duplicate_fills_ignored: int = 0
+    #: Settlements that closed a replayed position.
+    settlements_applied: int = 0
+    #: Named a ticker this replay never saw -- expected on a bounded window.
+    settlements_without_a_position: int = 0
+    #: Size disagreed with the replay, so the history is incomplete there.
+    settlements_refused_unreconciled: int = 0
+    #: The ticker is held in several subaccounts and settlements name none.
+    settlements_refused_ambiguous_subaccount: int = 0
     #: Exact sum of exchange-reported fees across every replayed fill, counted
     #: once each.  ``None`` if any fill lacked a fee field.
     total_fees: Decimal | None = None
@@ -107,6 +123,7 @@ class AccountingEngine:
         self,
         fills: Iterable[NormalizedFill],
         completeness: HistoryCompleteness = HistoryCompleteness.BOUNDED_WINDOW,
+        settlements: Iterable[NormalizedSettlement] | None = None,
     ) -> AccountingResult:
         """Build the full accounting view from a fill set.
 
@@ -151,7 +168,46 @@ class AccountingEngine:
         result.total_fees = fee_total if fees_complete else None
 
         result.orders = aggregate_orders(ordered, result.order_stats)
+
+        if settlements:
+            self._apply_settlements(result, settlements)
         return result
+
+    @staticmethod
+    def _apply_settlements(
+        result: AccountingResult, settlements: Iterable[NormalizedSettlement]
+    ) -> None:
+        """Close markets the exchange has already settled.
+
+        Applied after the fills rather than merged into them, because a market
+        settles at expiry and cannot take a fill afterwards -- so for any one
+        ticker every fill already precedes its settlement. Ordering settlements
+        among themselves by ``settled_time`` keeps the result deterministic.
+
+        A settlement naming a ticker held in more than one subaccount is
+        REFUSED: the live settlement schema carries no subaccount field, so
+        attributing it would merge two independent positions.
+        """
+        by_ticker: dict[str, list[tuple[int | None, str]]] = {}
+        for key in result.ledgers:
+            by_ticker.setdefault(key[1], []).append(key)
+
+        for settlement in sorted(settlements, key=lambda s: s.settled_time):
+            keys = by_ticker.get(settlement.ticker)
+            if not keys:
+                result.settlements_without_a_position += 1
+                continue
+            if len(keys) > 1:
+                result.settlements_refused_ambiguous_subaccount += 1
+                continue
+            ledger = result.ledgers[keys[0]]
+            try:
+                transition = apply_settlement(ledger, settlement)
+            except SettlementRefused:
+                result.settlements_refused_unreconciled += 1
+                continue
+            result.transitions.append(transition)
+            result.settlements_applied += 1
 
 
 def net_position(

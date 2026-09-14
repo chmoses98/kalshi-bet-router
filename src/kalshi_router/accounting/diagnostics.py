@@ -39,6 +39,13 @@ class AccountingDiagnostics:
     positions_reduced: int = 0
     positions_closed: int = 0
     positions_reversed: int = 0
+    #: The exchange closed the market itself at expiry, with no fill.
+    positions_settled: int = 0
+
+    settlements_applied: int = 0
+    settlements_without_a_position: int = 0
+    settlements_refused_unreconciled: int = 0
+    settlements_refused_ambiguous_subaccount: int = 0
 
     episodes_observed: int = 0
     episodes_open_at_end: int = 0
@@ -94,6 +101,15 @@ class AccountingDiagnostics:
             f"    reduced: {self.positions_reduced}",
             f"    closed: {self.positions_closed}",
             f"    reversed: {self.positions_reversed}",
+            f"    settled by the exchange: {self.positions_settled}",
+            "",
+            f"  settlements applied: {self.settlements_applied}",
+            f"    naming a market not in this window: "
+            f"{self.settlements_without_a_position}",
+            f"    REFUSED, size disagreed with the replay: "
+            f"{self.settlements_refused_unreconciled}",
+            f"    REFUSED, ticker held in several subaccounts: "
+            f"{self.settlements_refused_ambiguous_subaccount}",
             "",
             f"  position episodes observed: {self.episodes_observed}",
             f"    still open at end of window: {self.episodes_open_at_end}",
@@ -144,6 +160,12 @@ def build_diagnostics(result: AccountingResult) -> AccountingDiagnostics:
         position_transitions=len(result.transitions),
         claims_complete_position_state=result.claims_complete_position_state,
         history_is_complete=result.completeness is HistoryCompleteness.COMPLETE,
+        settlements_applied=result.settlements_applied,
+        settlements_without_a_position=result.settlements_without_a_position,
+        settlements_refused_unreconciled=result.settlements_refused_unreconciled,
+        settlements_refused_ambiguous_subaccount=(
+            result.settlements_refused_ambiguous_subaccount
+        ),
     )
 
     counters = {
@@ -152,6 +174,7 @@ def build_diagnostics(result: AccountingResult) -> AccountingDiagnostics:
         TransitionKind.REDUCE: "positions_reduced",
         TransitionKind.CLOSE: "positions_closed",
         TransitionKind.REVERSE: "positions_reversed",
+        TransitionKind.SETTLE: "positions_settled",
     }
     for transition in result.transitions:
         name = counters[transition.kind]
