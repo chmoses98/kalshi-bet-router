@@ -197,6 +197,46 @@ All eight economics fields are present on **755 of 755** rows, which confirms a
 settlement is a complete accounting event rather than a notification: quantity,
 cost basis, fee, payout and timestamp all come from the exchange.
 
+## Settlement payout units: dollars is refuted, cents is under test
+
+The payout reading decides every realized P&L on a settled wager, so it was
+measured rather than chosen. A binary contract pays $1 per winning contract, so
+"is `revenue` a dollar amount?" has a falsifiable answer: revenue would equal the
+winning leg's count exactly.
+
+Live, across 755 settlements:
+
+```
+revenue equals the winning leg count (binary par):  0
+revenue away from binary par:                     355
+revenue is zero:                                  400
+
+value equals one:                                   0
+value equals zero:                                396
+value strictly between zero and one (SCALAR):       0
+value above one:                                  359
+cost and counts both present:                     755
+```
+
+**Zero rows at dollar par**, so `revenue` is not dollars. And `value` is never
+`1` while being greater than `1` on 359 rows — so `value` is not a per-contract
+dollar price either.
+
+Both are consistent with **integer cents**: a winning contract pays `100`, and a
+payout of `1000` against 10 contracts is $1 each. Kalshi's own naming supports
+it — dollar-valued fields carry a `_dollars` suffix (`yes_total_cost_dollars`),
+and `revenue` and `value` do **not**. That is suggestive, not proof, so the cents
+reading is now a counter of its own rather than an adopted assumption.
+
+**Units are the highest-leverage place to be wrong here.** Reading cents as
+dollars misstates every settled payout by 100x, and it would do so silently,
+because the resulting numbers are all still well-formed decimals.
+
+One discrepancy is recorded rather than smoothed over: **400 rows report zero
+revenue but only 396 report zero value.** Those four rows disagree with
+themselves about whether the settlement paid out, and the probe now counts each
+direction of that disagreement separately.
+
 ## Still open
 
 * **`/historical/cutoff` response shape** is unverified against a live response.

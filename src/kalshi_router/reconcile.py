@@ -91,10 +91,28 @@ class ReconciliationReport:
     settlements_revenue_off_binary_par: int = 0
     settlements_revenue_zero: int = 0
     settlements_revenue_unparseable: int = 0
+    #: A non-binary result has no binary par to be at, so its revenue is not a
+    #: mismatch.  Counting it as one would make every scalar settlement look
+    #: like a fault the moment tennis is enabled.
+    settlements_revenue_non_binary_result: int = 0
+    #: The cents reading: a $1 contract pays 100 cents, so revenue would equal
+    #: the winning leg's count times 100.  Live data put ZERO rows at dollar
+    #: par, so this is the competing hypothesis and it is tested, not assumed.
+    settlements_revenue_at_cents_par: int = 0
     settlements_value_at_one: int = 0
     settlements_value_at_zero: int = 0
     settlements_value_strictly_between: int = 0
     settlements_value_above_one: int = 0
+    #: A negative settlement value is a different and more alarming fault than
+    #: an unexpectedly large one; they must not share a bucket.
+    settlements_value_negative: int = 0
+    #: One whole contract expressed in cents.
+    settlements_value_at_one_hundred: int = 0
+    #: revenue and value should agree about whether this settlement paid out.
+    #: They disagreed on some rows, so the disagreement is counted rather than
+    #: averaged away.
+    settlements_revenue_zero_value_nonzero: int = 0
+    settlements_value_zero_revenue_nonzero: int = 0
     settlements_cost_and_counts_both_present: int = 0
     #: Per-field presence across settlement rows, so a schema drift is visible.
     settlement_field_coverage: dict[str, int] = field(default_factory=dict)
@@ -148,6 +166,10 @@ class ReconciliationReport:
             f"    revenue equals the winning leg count (binary par): "
             f"{self.settlements_revenue_at_binary_par}",
             f"    revenue away from binary par: {self.settlements_revenue_off_binary_par}",
+            f"    revenue on a non-binary result (no par applies): "
+            f"{self.settlements_revenue_non_binary_result}",
+            f"    revenue equals the winning leg count x100 (CENTS par): "
+            f"{self.settlements_revenue_at_cents_par}",
             f"    revenue is zero: {self.settlements_revenue_zero}",
             f"    revenue unparseable: {self.settlements_revenue_unparseable}",
             f"    value equals one: {self.settlements_value_at_one}",
@@ -155,6 +177,13 @@ class ReconciliationReport:
             f"    value strictly between zero and one (SCALAR): "
             f"{self.settlements_value_strictly_between}",
             f"    value above one: {self.settlements_value_above_one}",
+            f"    value NEGATIVE: {self.settlements_value_negative}",
+            f"    value equals one hundred (a contract in cents): "
+            f"{self.settlements_value_at_one_hundred}",
+            f"    revenue zero but value non-zero: "
+            f"{self.settlements_revenue_zero_value_nonzero}",
+            f"    value zero but revenue non-zero: "
+            f"{self.settlements_value_zero_revenue_nonzero}",
             f"    cost and counts both present: "
             f"{self.settlements_cost_and_counts_both_present}",
             "",
@@ -233,6 +262,12 @@ def _collect_keys(rows: Iterable[dict[str, Any]], limit: int = 40) -> tuple[str,
 
 _ZERO = Decimal(0)
 _ONE_DOLLAR = Decimal(1)
+#: Kalshi marks dollar-valued fields with a ``_dollars`` suffix
+#: (``yes_total_cost_dollars``).  ``revenue`` and ``value`` carry no such
+#: suffix, and live data put zero rows at dollar par, so cents is the competing
+#: reading -- tested here rather than adopted on the strength of a naming
+#: convention alone.
+_CENTS_PER_DOLLAR = Decimal(100)
 
 
 def _quiet_decimal(raw: Any, name: str) -> Decimal | None:
@@ -267,10 +302,16 @@ def _observe_settlement_economics(
             report.settlements_revenue_unparseable += 1
     elif revenue == _ZERO:
         report.settlements_revenue_zero += 1
+    elif result not in ("yes", "no"):
+        # scalar, void, absent -- there is no $1-per-contract par to compare
+        # against, so this is not evidence either way about the unit.
+        report.settlements_revenue_non_binary_result += 1
     else:
-        winning = yes_count if result == "yes" else no_count if result == "no" else None
+        winning = yes_count if result == "yes" else no_count
         if winning is not None and revenue == winning:
             report.settlements_revenue_at_binary_par += 1
+        elif winning is not None and revenue == winning * _CENTS_PER_DOLLAR:
+            report.settlements_revenue_at_cents_par += 1
         else:
             report.settlements_revenue_off_binary_par += 1
 
@@ -282,8 +323,18 @@ def _observe_settlement_economics(
             report.settlements_value_at_zero += 1
         elif _ZERO < value < _ONE_DOLLAR:
             report.settlements_value_strictly_between += 1
+        elif value < _ZERO:
+            report.settlements_value_negative += 1
         else:
             report.settlements_value_above_one += 1
+            if value == _CENTS_PER_DOLLAR:
+                report.settlements_value_at_one_hundred += 1
+
+    if revenue is not None and value is not None:
+        if revenue == _ZERO and value != _ZERO:
+            report.settlements_revenue_zero_value_nonzero += 1
+        elif value == _ZERO and revenue != _ZERO:
+            report.settlements_value_zero_revenue_nonzero += 1
 
     has_cost = any(
         row.get(k) is not None
