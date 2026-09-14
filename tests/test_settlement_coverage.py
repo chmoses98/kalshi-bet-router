@@ -418,3 +418,68 @@ def test_a_settlement_naming_an_unheld_market_marks_nothing():
     assert SYNTH_TICKER not in result.tickers_with_settlement_evidence
     # Its own market saw no settlement row at all, so coverage still applies.
     assert by_ticker(result)[SYNTH_TICKER].outcome_bounded_by_settlement_coverage
+
+
+# ------------------------------------ which way did the disagreement run? ---
+
+def replay_against(stated_yes, held="10"):
+    """Replay a held position against a settlement stating a different size."""
+    fills = [normalize_fill(make_accounting_fill(1, held, created_time="2026-01-01T00:00:00Z"))]
+    return AccountingEngine().replay(
+        fills, COMPLETE, settlements=normalized(settlement_row(yes_count_fp=stated_yes))
+    )
+
+
+def shapes(result):
+    return build_diagnostics(result)
+
+
+def test_a_settlement_larger_than_the_replay_is_recorded_as_larger():
+    # Suggests fills the replay never saw, or a gross rather than net count.
+    d = shapes(replay_against("15.00"))
+    assert d.settlements_refused_settlement_larger == 1
+    assert d.settlements_refused_settlement_smaller == 0
+
+
+def test_a_settlement_smaller_than_the_replay_is_recorded_as_smaller():
+    # The opposite diagnosis, and the opposite repair -- which is exactly why
+    # one "refused" counter was not enough.
+    d = shapes(replay_against("7.00"))
+    assert d.settlements_refused_settlement_smaller == 1
+    assert d.settlements_refused_settlement_larger == 0
+
+
+def test_a_settlement_on_the_other_side_is_recorded_as_opposite():
+    # Held YES, settled as a NO position: a different kind of wrong from a size
+    # disagreement, and folding them together would hide it.
+    result = AccountingEngine().replay(
+        [normalize_fill(make_accounting_fill(1, "10", created_time="2026-01-01T00:00:00Z"))],
+        COMPLETE,
+        settlements=normalized(settlement_row(yes_count_fp="0.00", no_count_fp="10.00")),
+    )
+    d = build_diagnostics(result)
+    assert d.settlements_refused_opposite_direction == 1
+    assert result.settlements_refused_unreconciled == 1
+
+
+def test_every_refusal_lands_in_exactly_one_shape():
+    # The shapes must partition the refusals, or the diagnostic quietly loses
+    # cases and reads as though fewer things went wrong.
+    for stated in ("15.00", "7.00"):
+        result = replay_against(stated)
+        d = build_diagnostics(result)
+        total = (
+            d.settlements_refused_replay_flat
+            + d.settlements_refused_settlement_larger
+            + d.settlements_refused_settlement_smaller
+            + d.settlements_refused_opposite_direction
+        )
+        assert total == result.settlements_refused_unreconciled == 1
+
+
+def test_the_shapes_render_even_when_every_count_is_zero():
+    # A shape that only appears once it happens cannot be read as "none seen".
+    rendered = build_diagnostics(replay_with_floor(None)).render()
+    assert "refusal shapes (which way the disagreement ran):" in rendered
+    assert "settlement larger than the replay: 0" in rendered
+    assert "opposite direction: 0" in rendered

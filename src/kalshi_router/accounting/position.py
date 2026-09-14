@@ -117,6 +117,30 @@ def _sign(value: Decimal) -> int:
     return (value > 0) - (value < 0)
 
 
+class SettlementRefusal(str, Enum):
+    """The SHAPE of a refusal, so the population can be measured.
+
+    A count of refusals says how often reconciliation failed.  It does not say
+    what failed, and the repairs point in opposite directions: a settlement
+    LARGER than the replayed position suggests fills the replay never saw or a
+    gross rather than net count, while a SMALLER one suggests the opposite.
+    Guessing between them would be exactly the kind of assumption this codebase
+    keeps having to unlearn, so the shape is recorded and left to a live run to
+    decide.
+    """
+
+    #: The replay holds nothing, yet the exchange settled something.
+    REPLAY_FLAT = "replay_flat"
+    #: Same direction, settlement states MORE contracts than the replay holds.
+    SETTLEMENT_LARGER = "settlement_larger"
+    #: Same direction, settlement states FEWER.
+    SETTLEMENT_SMALLER = "settlement_smaller"
+    #: The settlement is on the opposite side of the YES axis entirely.
+    OPPOSITE_DIRECTION = "opposite_direction"
+    #: The settlement carries no subaccount and the ticker is held in several.
+    AMBIGUOUS_SUBACCOUNT = "ambiguous_subaccount"
+
+
 class SettlementRefused(Exception):
     """A settlement that cannot be applied safely, with the reason why.
 
@@ -125,9 +149,10 @@ class SettlementRefused(Exception):
     skipping silently would leave an episode open forever with no record of why.
     """
 
-    def __init__(self, reason: str) -> None:
+    def __init__(self, reason: str, refusal: SettlementRefusal) -> None:
         super().__init__(reason)
         self.reason = reason
+        self.refusal = refusal
 
 
 def apply_settlement(
@@ -159,13 +184,17 @@ def apply_settlement(
     """
     before = ledger.position
     if before == 0:
-        raise SettlementRefused("settlement for a market the replay shows as flat")
+        raise SettlementRefused(
+            "settlement for a market the replay shows as flat",
+            SettlementRefusal.REPLAY_FLAT,
+        )
 
     stated = settlement.settled_quantity
     if stated is not None and stated != before:
         raise SettlementRefused(
             "settlement quantity does not match the replayed position; the "
-            "history for this market is incomplete"
+            "history for this market is incomplete",
+            _refusal_shape(stated, before),
         )
 
     closed = abs(before)
@@ -219,6 +248,20 @@ def apply_settlement(
         ledger.current_episode = None
 
     return transition
+
+
+def _refusal_shape(stated: Decimal, replayed: Decimal) -> SettlementRefusal:
+    """Classify a size disagreement without interpreting it.
+
+    Direction first: a settlement on the other side of the YES axis is a
+    different kind of wrong from one that merely disagrees on size, and folding
+    them together would hide it.
+    """
+    if _sign(stated) != _sign(replayed):
+        return SettlementRefusal.OPPOSITE_DIRECTION
+    if abs(stated) > abs(replayed):
+        return SettlementRefusal.SETTLEMENT_LARGER
+    return SettlementRefusal.SETTLEMENT_SMALLER
 
 
 @dataclass(frozen=True)

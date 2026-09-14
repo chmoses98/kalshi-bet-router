@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .engine import AccountingResult, HistoryCompleteness
-from .position import TransitionKind
+from .position import SettlementRefusal, TransitionKind
 
 
 @dataclass
@@ -46,6 +46,16 @@ class AccountingDiagnostics:
     settlements_without_a_position: int = 0
     settlements_refused_unreconciled: int = 0
     settlements_refused_ambiguous_subaccount: int = 0
+    #: Refusals by SHAPE, one named counter each.  The vocabulary is closed and
+    #: known at import time, so it is spelled out rather than carried in a dict:
+    #: this dataclass guarantees structurally that no field can hold anything
+    #: but a count or a flag, and a mapping would quietly surrender that.
+    #: A count says how often reconciliation failed; only the shape says which
+    #: way, and the repairs point opposite ways.
+    settlements_refused_replay_flat: int = 0
+    settlements_refused_settlement_larger: int = 0
+    settlements_refused_settlement_smaller: int = 0
+    settlements_refused_opposite_direction: int = 0
 
     episodes_observed: int = 0
     episodes_open_at_end: int = 0
@@ -156,6 +166,14 @@ class AccountingDiagnostics:
             f"{self.settlements_refused_unreconciled}",
             f"    REFUSED, ticker held in several subaccounts: "
             f"{self.settlements_refused_ambiguous_subaccount}",
+            "    refusal shapes (which way the disagreement ran):",
+            f"      replay flat: {self.settlements_refused_replay_flat}",
+            f"      settlement larger than the replay: "
+            f"{self.settlements_refused_settlement_larger}",
+            f"      settlement smaller than the replay: "
+            f"{self.settlements_refused_settlement_smaller}",
+            f"      opposite direction: "
+            f"{self.settlements_refused_opposite_direction}",
             "",
             f"  position episodes observed: {self.episodes_observed}",
             f"    still open in the replay: {self.episodes_open_at_end}",
@@ -251,6 +269,24 @@ def build_diagnostics(result: AccountingResult) -> AccountingDiagnostics:
         settlements_refused_unreconciled=result.settlements_refused_unreconciled,
         settlements_refused_ambiguous_subaccount=(
             result.settlements_refused_ambiguous_subaccount
+        ),
+        settlements_refused_replay_flat=result.settlements_refused_by_shape.get(
+            SettlementRefusal.REPLAY_FLAT, 0
+        ),
+        settlements_refused_settlement_larger=(
+            result.settlements_refused_by_shape.get(
+                SettlementRefusal.SETTLEMENT_LARGER, 0
+            )
+        ),
+        settlements_refused_settlement_smaller=(
+            result.settlements_refused_by_shape.get(
+                SettlementRefusal.SETTLEMENT_SMALLER, 0
+            )
+        ),
+        settlements_refused_opposite_direction=(
+            result.settlements_refused_by_shape.get(
+                SettlementRefusal.OPPOSITE_DIRECTION, 0
+            )
         ),
     )
 

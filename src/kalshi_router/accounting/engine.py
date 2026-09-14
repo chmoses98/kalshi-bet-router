@@ -46,6 +46,7 @@ from .position import (
     MarketLedger,
     PositionEpisode,
     PositionTransition,
+    SettlementRefusal,
     SettlementRefused,
     TransitionKind,
     apply_fill,
@@ -87,6 +88,11 @@ class AccountingResult:
     settlements_refused_unreconciled: int = 0
     #: The ticker is held in several subaccounts and settlements name none.
     settlements_refused_ambiguous_subaccount: int = 0
+    #: Every refusal by SHAPE.  A count says how often reconciliation failed;
+    #: only the shape says which way, and the repairs point opposite ways.
+    settlements_refused_by_shape: dict[SettlementRefusal, int] = field(
+        default_factory=dict
+    )
     #: Exact sum of exchange-reported fees across every replayed fill, counted
     #: once each.  ``None`` if any fill lacked a fee field.
     total_fees: Decimal | None = None
@@ -263,13 +269,15 @@ class AccountingEngine:
             result.tickers_with_settlement_evidence.add(settlement.ticker)
             if len(keys) > 1:
                 result.settlements_refused_ambiguous_subaccount += 1
+                _count_refusal(result, SettlementRefusal.AMBIGUOUS_SUBACCOUNT)
                 _mark_outcome_unprovable(result, settlement.ticker)
                 continue
             ledger = result.ledgers[keys[0]]
             try:
                 transition = apply_settlement(ledger, settlement)
-            except SettlementRefused:
+            except SettlementRefused as refused:
                 result.settlements_refused_unreconciled += 1
+                _count_refusal(result, refused.refusal)
                 # A refused settlement is NOT an open position. The exchange
                 # settled the market; the replay simply cannot reconcile the
                 # size, so the outcome is unresolved rather than pending.
@@ -278,6 +286,12 @@ class AccountingEngine:
                 continue
             result.transitions.append(transition)
             result.settlements_applied += 1
+
+
+def _count_refusal(result: AccountingResult, refusal: SettlementRefusal) -> None:
+    result.settlements_refused_by_shape[refusal] = (
+        result.settlements_refused_by_shape.get(refusal, 0) + 1
+    )
 
 
 def _mark_outcome_unprovable(result: AccountingResult, ticker: str) -> None:
