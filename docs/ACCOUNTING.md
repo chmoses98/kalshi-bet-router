@@ -21,7 +21,7 @@ it. `NormalizedFill` retains, in memory only:
 | `legacy_action` / `legacy_side` | DEPRECATED, metadata only, never drives inventory |
 | `subaccount_number` | part of position identity — see §3b |
 | `count` | `Decimal`, from `count_fp` |
-| `price_dollars` | `Decimal`, price of the leg named by `outcome_side` |
+| `price_dollars` | `Decimal`, the fill's **unified execution price** — never complemented |
 | `fee_dollars` | `Decimal`, from `fee_cost` — see §9 |
 | `created_time` / `ts` | execution time |
 | `is_taker` | liquidity role |
@@ -61,17 +61,41 @@ market ticker:
 
 - positive → long YES · negative → long NO · zero → flat
 
-Each fill is projected onto that axis:
+### Price is unified; `outcome_side` never changes it
 
-| Fill | Signed quantity | YES-equivalent price |
+Kalshi's `order_direction` documentation is explicit:
+
+> *"`outcome_side` describes directional exposure only; it does not change the
+> order's price. An order at price p with `outcome_side=no` is matched by an
+> order at the same price p with `outcome_side=yes`: both parties trade at the
+> same price, just on opposite directions."*
+
+So a fill carries **one unified execution price**, and the published Get Fills
+example shows `yes_price_dollars` and `no_price_dollars` holding the *same*
+value. Projection is therefore:
+
+| `outcome_side` | Signed quantity | Accounting price |
 |---|---|---|
-| `buy` / `yes` | `+count` | `price` |
-| `sell` / `yes` | `−count` | `price` |
-| `buy` / `no` | `−count` | `1 − price` |
-| `sell` / `no` | `+count` | `1 − price` |
+| `yes` | `+count` | `p` (unchanged) |
+| `no` | `-count` | `p` (unchanged) |
 
-Buying NO at \$0.43 *is* selling YES at \$0.57. The projection is exact, not an
-approximation.
+**The price is never complemented.** An earlier version of this engine mapped a
+NO fill to `1 - p`; that was wrong and is retracted. Complementing the price
+*and* applying the `position_sign` factor when realizing P&L transforms the same
+value twice. Direction is carried entirely by the sign of the quantity.
+
+Worked example -- open NO at `p = 0.57`, later reduce at `p = 0.50`:
+
+```
+realized = (0.50 - 0.57) x quantity x sign(-1)   ->   positive
+```
+
+A long-NO position profits as the unified price falls, which is correct, and the
+entry basis stays `0.57` rather than being rewritten to `0.43`.
+
+If both price fields are present they must agree, since the contract says they
+carry the same unified price; **disagreement fails closed** rather than one being
+silently preferred.
 
 ### 3a. Canonical direction
 
@@ -116,6 +140,19 @@ subaccounts holding the same ticker are two independent positions.
 aggregation **fails closed** if one `order_id` somehow spans two subaccounts —
 that would mean `order_id` is not a per-account identity and every position keyed
 on it is unsound.
+
+**Validation.** Kalshi numbers the primary account 0 and named subaccounts 1–63:
+
+| Value | Treatment |
+|---|---|
+| field absent, or `null` | `None` — the unknown bucket |
+| integer 0–63 | that subaccount |
+| negative, or > 63 | **`SchemaError`** |
+| string, float, bool, list, object | **`SchemaError`** |
+
+**Malformed is not absent.** A present-but-invalid value is never coerced into
+the `None` bucket: two corrupted values would then net together as if they were
+one account. Only a genuinely missing field is unknown.
 
 **Absent `subaccount_number`** is kept as a distinct `None` bucket rather than
 assumed to be the primary account. Mapping "absent" onto 0 would silently merge
@@ -196,7 +233,7 @@ timestamp **fails closed** rather than being appended arbitrarily.
 
 ## 7. Cost-basis policy
 
-**Weighted average** on the open inventory, in YES-equivalent dollars.
+**Weighted average** on the open inventory, in unified execution-price dollars.
 
 - **Increase:** `new_avg = (avg·|before| + price·|Δ|) / |after|`
 - **Reduce / close:** basis unchanged; realized P&L recognized on the closed part.
@@ -204,6 +241,18 @@ timestamp **fails closed** rather than being appended arbitrarily.
 If any fill lacks a price, the episode is marked `cost_basis_complete = False` and
 the average becomes `None`. **No basis is ever estimated** — a guessed basis
 propagates silently into realized P&L.
+
+### Legacy price compatibility
+
+A **legacy-only** payload (no `outcome_side`/`book_side`, only the deprecated
+`action`/`side`) still resolves *direction*, but whether its historic
+`yes_price`/`no_price` pair was a unified price or complementary leg prices is
+**not established by current documentation**. Rather than guess, such a fill is
+marked `legacy_price_semantics_unproven` and carries **no price at all**, so any
+episode touching it reports `cost_basis_complete = False`.
+
+Legacy complement logic is therefore never applied anywhere — least of all to a
+current canonical fill.
 
 ## 8. Reduction / close / reverse semantics
 
@@ -215,8 +264,10 @@ propagates silently into realized P&L.
 | `CLOSE` | reaches exactly zero — episode ends |
 | `REVERSE` | crosses zero — old episode closes, new one opens on the other side |
 
-Realized P&L on a reduction is `(exit − entry) × quantity × sign(position)`, so a
-long-NO position realizes with the opposite sign automatically.
+Realized P&L on a reduction is `(exit − entry) × quantity × sign(position)`, both
+prices being unified execution prices. The `sign(position)` factor is what makes
+a long-NO position realize correctly — which is precisely why the price must not
+also be complemented.
 
 **Reversal is legal, not an error.** Selling more YES than held carries the
 position through zero into long-NO, which Kalshi's signed representation permits.

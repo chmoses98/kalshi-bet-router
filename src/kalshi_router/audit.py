@@ -162,9 +162,9 @@ def run_audit(
             report.fills_quantity_from_count_fp += 1
         elif fill.count_source == "count":
             report.fills_quantity_from_legacy_count += 1
-        if fill.price_source == "price_dollars":
+        if fill.price_source == "unified_price_dollars":
             report.fills_price_from_dollars += 1
-        elif fill.price_source == "price_cents":
+        elif fill.price_source == "legacy_price_cents":
             report.fills_price_from_legacy_cents += 1
         else:
             report.fills_without_price += 1

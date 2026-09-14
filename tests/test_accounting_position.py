@@ -42,19 +42,21 @@ def test_sell_yes_is_negative_at_the_yes_price():
     assert signed == Decimal("-10.00") and price == Decimal("0.6000")
 
 
-def test_buy_no_is_negative_at_the_complementary_price():
-    """Buying NO at $0.43 is economically selling YES at $0.57."""
+def test_buy_no_is_negative_at_the_unified_price():
+    """outcome_side sets direction only; the price is NOT complemented."""
     signed, price = project_fill(normalize_fill(
         make_accounting_fill(index=1, quantity="10.00", action="buy", side="no",
                              no_price="0.4300")))
-    assert signed == Decimal("-10.00") and price == Decimal("0.5700")
+    assert signed == Decimal("-10.00")
+    assert price == Decimal("0.4300")
 
 
-def test_sell_no_is_positive_at_the_complementary_price():
+def test_sell_no_is_positive_at_the_unified_price():
     signed, price = project_fill(normalize_fill(
         make_accounting_fill(index=1, quantity="10.00", action="sell", side="no",
                              no_price="0.4300")))
-    assert signed == Decimal("10.00") and price == Decimal("0.5700")
+    assert signed == Decimal("10.00")
+    assert price == Decimal("0.4300")
 
 
 # ----------------------------------------------------- the ten requirements
@@ -188,6 +190,7 @@ def test_10_fills_from_more_than_one_page_replay_as_one_stream():
 # ------------------------------------------------------------ NO-side flows
 
 def test_no_side_open_and_close_realizes_correctly():
+    """A long-NO position profits as the unified price falls."""
     result = replay(
         {"index": 1, "quantity": "30.00", "side": "no", "no_price": "0.4000"},
         {"index": 2, "quantity": "30.00", "side": "no", "no_price": "0.3000",
@@ -196,19 +199,31 @@ def test_no_side_open_and_close_realizes_correctly():
     assert kinds(result) == ["open", "close"]
     episode = ledger(result).episodes[0]
     assert episode.direction is Direction.LONG_NO
-    # Bought NO at $0.40, sold at $0.30: a $0.10 loss on 30 contracts.
-    assert episode.realized_pnl == Decimal("-3.00")
+    assert episode.average_entry_price == Decimal("0.4000")  # not complemented
+    # (0.30 - 0.40) * 30 * sign(-1) = +3.00
+    assert episode.realized_pnl == Decimal("3.00")
+
+
+def test_long_no_losing_trade_has_the_correct_sign():
+    """A long-NO position loses as the unified price rises."""
+    result = replay(
+        {"index": 1, "quantity": "30.00", "side": "no", "no_price": "0.4000"},
+        {"index": 2, "quantity": "30.00", "side": "no", "no_price": "0.5000",
+         "action": "sell"},
+    )
+    # (0.50 - 0.40) * 30 * sign(-1) = -3.00
+    assert ledger(result).episodes[0].realized_pnl == Decimal("-3.00")
 
 
 def test_buying_no_reduces_a_long_yes_position():
-    """Buy NO is the complement of sell YES, so it reduces YES inventory."""
+    """Buy-NO is long-NO exposure, so it reduces a long-YES inventory."""
     result = replay(
         {"index": 1, "quantity": "100.00", "yes_price": "0.6000"},
-        {"index": 2, "quantity": "40.00", "side": "no", "no_price": "0.3000"},
+        {"index": 2, "quantity": "40.00", "side": "no", "no_price": "0.7000"},
     )
     assert kinds(result) == ["open", "reduce"]
     assert ledger(result).position == Decimal("60.00")
-    # Exit YES-equivalent price is 1 - 0.30 = 0.70.
+    # Exit at the unified price 0.70, no complement: (0.70 - 0.60) * 40 = +4.00
     assert ledger(result).episodes[0].realized_pnl == Decimal("4.00")
 
 
@@ -216,7 +231,7 @@ def test_buying_no_reduces_a_long_yes_position():
 
 def test_missing_price_marks_cost_basis_incomplete_rather_than_estimating():
     raw = make_accounting_fill(index=1, quantity="100.00")
-    del raw["yes_price_dollars"]
+    del raw["yes_price_dollars"], raw["no_price_dollars"]
     second = make_accounting_fill(index=2, quantity="50.00", yes_price="0.7000",
                                   action="sell")
     result = AccountingEngine().replay(

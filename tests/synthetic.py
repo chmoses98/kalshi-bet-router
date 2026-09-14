@@ -73,9 +73,11 @@ def make_fill(
         "side": side,
         "subaccount_number": 0,
         "is_taker": True,
-        # Current (post Q1-2026 fixed-point migration) field shapes.
+        # Current (post Q1-2026 fixed-point migration) field shapes. Both price
+        # fields carry the SAME unified execution price: outcome_side controls
+        # direction, not price.
         "yes_price_dollars": "0.5700",
-        "no_price_dollars": "0.4300",
+        "no_price_dollars": "0.5700",
         "created_time": "2026-09-01T12:00:00Z",
     }
     if count is not None:
@@ -296,10 +298,13 @@ def make_accounting_fill(
         "created_time": stamp,
         "is_taker": True,
     }
-    if yes_price is not None and side == "yes":
-        raw["yes_price_dollars"] = yes_price
-    if side == "no":
-        raw["no_price_dollars"] = no_price if no_price is not None else "0.4300"
+    # One unified execution price, written to both documented fields exactly as
+    # the published Get Fills example does. ``yes_price``/``no_price`` are just
+    # the caller's way of naming it; neither is complemented.
+    unified = yes_price if side == "yes" else (no_price if no_price is not None else "0.4300")
+    if unified is not None:
+        raw["yes_price_dollars"] = unified
+        raw["no_price_dollars"] = unified
     if fee is not None:
         # Current published field name and representation: a dollar string.
         raw["fee_cost"] = fee

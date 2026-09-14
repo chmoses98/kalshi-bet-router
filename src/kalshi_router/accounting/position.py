@@ -17,21 +17,27 @@ market ticker:
 * negative net position  -> long NO
 * zero                   -> flat
 
-Every fill is projected onto that axis as a signed quantity and a
-**YES-equivalent price**:
+Price is unified; ``outcome_side`` never changes it
+---------------------------------------------------
+Kalshi's ``order_direction`` documentation states that ``outcome_side``
+"describes directional exposure only; it does not change the order's price.  An
+order at price p with outcome_side=no is matched by an order at the same price p
+with outcome_side=yes: both parties trade at the same price, just on opposite
+directions."
 
-======================  ==================  ==========================
-Fill                    Signed quantity     YES-equivalent price
-======================  ==================  ==========================
-``buy``  / ``yes``      ``+count``          ``price``
-``sell`` / ``yes``      ``-count``          ``price``
-``buy``  / ``no``       ``-count``          ``1 - price``
-``sell`` / ``no``       ``+count``          ``1 - price``
-======================  ==================  ==========================
+Every fill is therefore projected onto the axis as a signed quantity at its
+**unified execution price**:
 
-Because a NO contract pays out exactly when a YES contract does not, buying NO at
-$0.43 is economically selling YES at $0.57, and the projection is exact rather
-than approximate.
+====================  ==================  ==========================
+``outcome_side``      Signed quantity     Accounting price
+====================  ==================  ==========================
+``yes``               ``+count``          ``p`` (unchanged)
+``no``                ``-count``          ``p`` (unchanged)
+====================  ==================  ==========================
+
+The price is **never** complemented.  Complementing it and then applying the
+``position_sign`` factor in :func:`_realized` would transform the same value
+twice; direction is carried entirely by the sign of the quantity.
 
 Reversal is legal
 -----------------
@@ -78,13 +84,23 @@ class Direction(str, Enum):
 def project_fill(fill: NormalizedFill) -> tuple[Decimal, Decimal | None]:
     """Project one fill onto the signed axis using **canonical** direction.
 
-    ``outcome_side`` alone fixes the sign -- it has already absorbed the
-    buy/sell distinction, which is why *buy yes* and *sell no* both report
-    ``yes``.  The deprecated ``action`` field is not consulted and need not be
-    present.
+    Kalshi's ``order_direction`` documentation states that ``outcome_side``
+    describes directional exposure only and **does not change the price**: an
+    order at price *p* with ``outcome_side=no`` is matched by an order at the
+    same *p* with ``outcome_side=yes``, both trading at *p* on opposite
+    directions.
 
-    Returns ``(signed_quantity, yes_equivalent_price)``.  The price is ``None``
-    when the fill carried none.
+    So direction is the only thing ``outcome_side`` contributes:
+
+    * ``yes`` -> ``+count`` at the unified price *p*
+    * ``no``  -> ``-count`` at the unified price *p*
+
+    The price is **not** complemented for a NO fill.  Complementing here and
+    then applying the ``position_sign`` factor when realizing P&L would
+    transform the same value twice; the signed quantity alone already carries
+    the direction.
+
+    Returns ``(signed_quantity, execution_price)``.
     """
     quantity = fill.count
     if quantity is None:  # pragma: no cover - normalization guarantees this
@@ -93,9 +109,7 @@ def project_fill(fill: NormalizedFill) -> tuple[Decimal, Decimal | None]:
     price = fill.price_dollars
     if fill.outcome_side is OutcomeSide.YES:
         return quantity, price
-    # Positioned for NO: negative on the axis, and the YES-equivalent price is
-    # the complement of the NO price actually paid.
-    return -quantity, (ONE - price) if price is not None else None
+    return -quantity, price
 
 
 def _sign(value: Decimal) -> int:
@@ -149,7 +163,7 @@ class PositionEpisode:
     total_opened_quantity: Decimal = ZERO
     total_closed_quantity: Decimal = ZERO
 
-    #: Quantity-weighted YES-equivalent cost of the *open* inventory.
+    #: Quantity-weighted unified execution-price cost of the *open* inventory.
     average_entry_price: Decimal | None = None
     #: Shadow estimate only -- see the module and docs for what it excludes.
     realized_pnl: Decimal = ZERO
@@ -364,10 +378,11 @@ def _new_episode(
 def _realized(
     ledger: MarketLedger, yes_price: Decimal | None, closed: Decimal, position_sign: int
 ) -> Decimal | None:
-    """Realized P&L on a reduction, in YES-equivalent dollars.
+    """Realized P&L on a reduction, in unified execution-price dollars.
 
     For a long-YES position this is ``(exit - entry) * quantity``; for a long-NO
-    position the sign flips, which the ``position_sign`` factor handles.
+    position the sign flips, which the ``position_sign`` factor handles.  That
+    factor is exactly why the price itself must not be complemented.
     """
     if yes_price is None or ledger.average_entry_price is None or not ledger.cost_basis_complete:
         ledger.cost_basis_complete = False

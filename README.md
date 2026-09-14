@@ -299,8 +299,10 @@ public audit prints accounting counts only, and explicitly refuses to describe a
 bounded window as the account's position state.
 
 Kalshi models a market position as **one signed quantity per ticker**
-(`position_fp`), so YES and NO are binary complements on a single axis rather
-than separate inventories — buying NO at $0.43 is selling YES at $0.57. See
+(`position_fp`), so YES and NO are two directions on a single signed axis rather
+than separate inventories. `outcome_side` carries the direction and **does not
+change the price** — both counterparties of a trade record the same unified
+execution price — so the engine never complements a NO fill's price. See
 [`docs/ACCOUNTING.md`](docs/ACCOUNTING.md).
 
 ## Documentation index

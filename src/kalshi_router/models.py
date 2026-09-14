@@ -136,6 +136,11 @@ class Side(str, Enum):
     NO = "no"
 
 
+def sources_to_fields(sources: tuple[str, ...]) -> tuple[str, ...]:
+    """Identity helper: the direction sources are already field names."""
+    return sources
+
+
 def outcome_from_legacy(action: Action, side: Side) -> OutcomeSide:
     """Project the deprecated ``(action, side)`` pair onto canonical direction.
 
@@ -181,9 +186,13 @@ class NormalizedFill:
 
     count: Decimal | None = None
     count_source: str | None = None
-    #: Price of the leg named by ``outcome_side``, in dollars.
+    #: The fill's **unified execution price**, in dollars.  Direction lives in
+    #: ``outcome_side``; the price is never complemented because of it.
     price_dollars: Decimal | None = None
     price_source: str | None = None
+    #: True for a legacy-only payload, where the historic price semantics are
+    #: not established, so economics are marked incomplete rather than guessed.
+    legacy_price_semantics_unproven: bool = False
     fixed_point_number_typed: bool = False
     #: Exchange-reported fee for this execution, in dollars.  ``None`` when the
     #: fill carried no fee field -- never reconstructed from the fee schedule.
@@ -230,41 +239,67 @@ def _parse_quantity(raw: dict[str, Any]) -> tuple[Decimal | None, str | None, bo
 
 
 def _parse_price(
-    raw: dict[str, Any], outcome: OutcomeSide
-) -> tuple[Decimal | None, str | None, bool]:
-    """Resolve the price of the leg named by ``outcome_side``, in dollars.
+    raw: dict[str, Any], canonical: bool
+) -> tuple[Decimal | None, str | None, bool, bool]:
+    """Resolve the **unified execution price**, in dollars.
 
-    Sub-penny markets use tick sizes as fine as $0.0001, so the ``*_dollars``
-    decimal string is the only field that can represent every price; the legacy
-    integer-cent field is a fallback and is converted exactly.
+    Kalshi's ``order_direction`` documentation is explicit: *"outcome_side
+    describes directional exposure only; it does not change the order's price.
+    An order at price p with outcome_side=no is matched by an order at the same
+    price p with outcome_side=yes: both parties trade at the same price, just on
+    opposite directions."*
+
+    So a fill has **one** execution price on a single axis.  Direction lives
+    entirely in ``outcome_side``; the price is never complemented because of it.
+    Complementing here and then applying the signed position factor in the
+    ledger would transform the same value twice.
+
+    Returns ``(price, source, number_typed, legacy_semantics_unproven)``.
     """
-    if outcome is OutcomeSide.YES:
-        dollars_key, cents_key = "yes_price_dollars", "yes_price"
-    else:
-        dollars_key, cents_key = "no_price_dollars", "no_price"
+    if not canonical:
+        # Legacy-only payload (no outcome_side/book_side).  Whether the historic
+        # yes_price/no_price pair was a unified price or complementary leg
+        # prices is not established by current documentation, so the economics
+        # are marked unproven rather than guessed.  Direction still resolves
+        # from the deprecated action/side pair.
+        return None, None, False, True
 
-    parsed = parse_fixed_point(raw.get(dollars_key), dollars_key)
-    if parsed is not None:
-        value = _require_price_in_range(parsed.value, dollars_key)
-        return value, "price_dollars", parsed.source_type == "number"
+    quoted: list[tuple[Decimal, str, bool]] = []
+    for key in ("yes_price_dollars", "no_price_dollars"):
+        parsed = parse_fixed_point(raw.get(key), key)
+        if parsed is not None:
+            quoted.append((
+                _require_price_in_range(parsed.value, key),
+                "unified_price_dollars",
+                parsed.source_type == "number",
+            ))
 
-    cents = raw.get(cents_key)
-    if isinstance(cents, int) and not isinstance(cents, bool):
-        if not (MIN_PRICE_CENTS < cents < MAX_PRICE_CENTS):
-            raise SchemaError(
-                f"field {cents_key!r} was outside the valid contract price range "
-                f"(must be greater than 0 and less than 100 cents)"
-            )
-        return Decimal(cents) / Decimal(100), "price_cents", False
+    if not quoted:
+        for key in ("yes_price", "no_price"):
+            cents = raw.get(key)
+            if isinstance(cents, int) and not isinstance(cents, bool):
+                if not (MIN_PRICE_CENTS < cents < MAX_PRICE_CENTS):
+                    raise SchemaError(
+                        f"field {key!r} was outside the valid contract price range "
+                        f"(must be greater than 0 and less than 100 cents)"
+                    )
+                quoted.append((Decimal(cents) / Decimal(100), "legacy_price_cents", False))
 
-    # Fall back to the complementary leg: the two prices sum to $1, so either
-    # determines the other exactly.
-    other_dollars = "no_price_dollars" if outcome is OutcomeSide.YES else "yes_price_dollars"
-    other = parse_fixed_point(raw.get(other_dollars), other_dollars)
-    if other is not None:
-        complement = _require_price_in_range(Decimal(1) - other.value, other_dollars)
-        return complement, "complement_price_dollars", other.source_type == "number"
-    return None, None, False
+    if not quoted:
+        return None, None, False, False
+
+    values = {value for value, _, _ in quoted}
+    if len(values) > 1:
+        # Under the current contract both fields carry the same unified price.
+        # Disagreement means this payload is not what the contract describes.
+        raise SchemaError(
+            "canonical fill reported conflicting execution prices in "
+            "'yes_price_dollars' and 'no_price_dollars'; the current contract "
+            "requires one unified price"
+        )
+
+    value, source, number_typed = quoted[0]
+    return value, source, number_typed, False
 
 
 def _parse_fee(raw: dict[str, Any]) -> tuple[Decimal | None, str | None]:
@@ -389,20 +424,40 @@ def _resolve_direction(
     return next(iter(distinct)), book_side, action, side, tuple(sources)
 
 
-def _parse_subaccount(raw: dict[str, Any]) -> int | None:
-    """Read ``subaccount_number``.
+#: Kalshi numbers the primary account 0 and named subaccounts 1-63.
+MIN_SUBACCOUNT_NUMBER = 0
+MAX_SUBACCOUNT_NUMBER = 63
 
-    Kalshi numbers the primary account 0 and named subaccounts upward.  An
-    **absent** field is kept as ``None`` rather than being assumed to mean the
-    primary account: positions from different subaccounts must never net
-    together, and silently mapping "absent" onto 0 would do exactly that if the
-    account ever uses subaccounts.
+
+def _parse_subaccount(raw: dict[str, Any]) -> int | None:
+    """Read ``subaccount_number``, distinguishing **absent** from **malformed**.
+
+    * absent                -> ``None`` (unknown bucket)
+    * integer 0..63         -> that subaccount (0 is the primary account)
+    * anything else present -> :class:`SchemaError`
+
+    An **absent** field is legitimately unknown and is kept as its own bucket
+    rather than assumed to be the primary account, because mapping it onto 0
+    would silently merge genuinely separate subaccounts.
+
+    A **present but malformed** value is a different thing entirely and must not
+    collapse into that same ``None`` bucket: two corrupted values would then net
+    together as if they were one account.  Malformed is never coerced.
     """
-    value = raw.get("subaccount_number")
-    if isinstance(value, bool) or not isinstance(value, int):
+    if "subaccount_number" not in raw:
         return None
-    if value < 0:
-        raise SchemaError("field 'subaccount_number' was negative")
+    value = raw["subaccount_number"]
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise SchemaError(
+            f"field 'subaccount_number' was {type(value).__name__}, expected an integer"
+        )
+    if not (MIN_SUBACCOUNT_NUMBER <= value <= MAX_SUBACCOUNT_NUMBER):
+        raise SchemaError(
+            f"field 'subaccount_number' was outside the valid range "
+            f"{MIN_SUBACCOUNT_NUMBER}-{MAX_SUBACCOUNT_NUMBER}"
+        )
     return value
 
 
@@ -431,7 +486,8 @@ def normalize_fill(raw: dict[str, Any]) -> NormalizedFill:
     if count is None:
         raise SchemaError("fill carried neither 'count_fp' nor a legacy 'count'")
 
-    price, price_source, price_was_number = _parse_price(raw, outcome)
+    canonical = bool({"outcome_side", "book_side"} & set(sources_to_fields(sources)))
+    price, price_source, price_was_number, price_unproven = _parse_price(raw, canonical)
     fee, fee_source = _parse_fee(raw)
 
     order_id = _first_present(raw, "order_id")
@@ -456,6 +512,7 @@ def normalize_fill(raw: dict[str, Any]) -> NormalizedFill:
         count_source=count_source,
         price_dollars=price,
         price_source=price_source,
+        legacy_price_semantics_unproven=price_unproven,
         fixed_point_number_typed=count_was_number or price_was_number,
         fee_dollars=fee,
         fee_source=fee_source,

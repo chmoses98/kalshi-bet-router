@@ -26,8 +26,10 @@ def official_fill(**overrides):
         "outcome_side": "yes",
         "book_side": "bid",
         "count_fp": "100.00",
+        # Both price fields carry the SAME unified price in the published
+        # example: outcome_side controls direction, not price.
         "yes_price_dollars": "0.5600",
-        "no_price_dollars": "0.4400",
+        "no_price_dollars": "0.5600",
         "is_taker": True,
         "fee_cost": "0.5600",
         "side": "yes",
@@ -163,11 +165,11 @@ def test_canonical_and_legacy_disagreement_fails_closed():
 
 
 def test_projection_does_not_require_action_to_exist():
-    raw = official_fill(outcome_side="no", book_side="ask", no_price_dollars="0.4400")
+    raw = official_fill(outcome_side="no", book_side="ask")
     del raw["action"], raw["side"]
     signed, price = project_fill(normalize_fill(raw))
     assert signed == Decimal("-100.00")
-    assert price == Decimal("0.5600")  # YES-equivalent of a $0.44 NO
+    assert price == Decimal("0.5600")  # unified price, NOT complemented
 
 
 def test_legacy_metadata_is_preserved_for_later_analysis():
@@ -178,7 +180,8 @@ def test_legacy_metadata_is_preserved_for_later_analysis():
 
 # ============================= subaccounts (Blocker 3) =======================
 
-def acct_fill(index, subaccount, quantity="10.00", outcome="yes", ticker="KXSYNTH-A-1"):
+def acct_fill(index, subaccount, quantity="10.00", outcome="yes", ticker="KXSYNTH-A-1",
+              price="0.5600"):
     return normalize_fill(official_fill(
         fill_id=f"SYNTHFILL-{index:04d}",
         order_id=f"SYNTHORDER-{index:04d}",
@@ -186,6 +189,8 @@ def acct_fill(index, subaccount, quantity="10.00", outcome="yes", ticker="KXSYNT
         market_ticker=ticker,
         subaccount_number=subaccount,
         count_fp=quantity,
+        yes_price_dollars=price,
+        no_price_dollars=price,
         outcome_side=outcome,
         book_side="bid" if outcome == "yes" else "ask",
         action="buy",
@@ -252,3 +257,189 @@ def test_subaccount_counts_reach_diagnostics_as_counts_only():
     rendered = diagnostics.render()
     assert "distinct subaccounts observed: 2" in rendered
     assert "KXSYNTH" not in rendered
+
+
+# ================ canonical price semantics (Blocker 1) ======================
+#
+# Kalshi's order_direction documentation: "outcome_side describes directional
+# exposure only; it does not change the order's price. An order at price p with
+# outcome_side=no is matched by an order at the same price p with
+# outcome_side=yes: both parties trade at the same price, just on opposite
+# directions."
+
+def canonical(outcome, price="0.5600", **extra):
+    raw = official_fill(
+        outcome_side=outcome,
+        book_side="bid" if outcome == "yes" else "ask",
+        yes_price_dollars=price,
+        no_price_dollars=price,
+        **extra,
+    )
+    raw.pop("action", None)
+    raw.pop("side", None)
+    return normalize_fill(raw)
+
+
+def test_1_canonical_yes_projects_positive_at_the_unified_price():
+    signed, price = project_fill(canonical("yes", "0.5600"))
+    assert signed == Decimal("100.00")
+    assert price == Decimal("0.5600")
+
+
+def test_2_canonical_no_projects_negative_at_the_same_unified_price():
+    signed, price = project_fill(canonical("no", "0.5600"))
+    assert signed == Decimal("-100.00")
+    assert price == Decimal("0.5600")
+
+
+def test_3_current_schema_no_price_is_not_complemented():
+    """The bug this replaces turned 0.5600 into 0.4400."""
+    _, price = project_fill(canonical("no", "0.5600"))
+    assert price == Decimal("0.5600")
+    assert price != Decimal("0.4400")
+    assert canonical("no", "0.5600").price_dollars == Decimal("0.5600")
+
+
+def test_both_directions_at_one_price_agree_on_the_price():
+    """Two counterparties of the same trade record the same execution price."""
+    assert canonical("yes", "0.5600").price_dollars == canonical("no", "0.5600").price_dollars
+
+
+def acct(index, outcome, price, quantity="100.00"):
+    raw = official_fill(
+        fill_id=f"SYNTHFILL-{index:04d}",
+        order_id=f"SYNTHORDER-{index:04d}",
+        outcome_side=outcome,
+        book_side="bid" if outcome == "yes" else "ask",
+        yes_price_dollars=price,
+        no_price_dollars=price,
+        count_fp=quantity,
+        created_time=f"2026-09-01T12:{index:02d}:00Z",
+    )
+    raw.pop("action", None)
+    raw.pop("side", None)
+    return normalize_fill(raw)
+
+
+def test_4_long_no_reduction_pnl_has_the_correct_sign():
+    """The CEO's worked example: open NO at 0.57, reduce at 0.50."""
+    result = AccountingEngine().replay(
+        [acct(1, "no", "0.5700"), acct(2, "yes", "0.5000", "40.00")], COMPLETE
+    )
+    episode = result.ledger_for("KXSYNTH-ACCT01-AAA", 3).episodes[0]
+    assert episode.average_entry_price == Decimal("0.5700")
+    # (0.50 - 0.57) * 40 * sign(-1) = +2.80
+    assert episode.realized_pnl == Decimal("2.80")
+    assert episode.realized_pnl > 0
+
+
+def test_5_long_no_losing_trade_has_the_correct_sign():
+    result = AccountingEngine().replay(
+        [acct(1, "no", "0.5000"), acct(2, "yes", "0.6000")], COMPLETE
+    )
+    episode = result.ledger_for("KXSYNTH-ACCT01-AAA", 3).episodes[0]
+    # (0.60 - 0.50) * 100 * sign(-1) = -10.00
+    assert episode.realized_pnl == Decimal("-10.00")
+
+
+def test_6_cross_zero_reversal_uses_the_unified_price_axis():
+    result = AccountingEngine().replay(
+        [acct(1, "yes", "0.6000", "100.00"), acct(2, "no", "0.7000", "150.00")], COMPLETE
+    )
+    ledger = result.ledger_for("KXSYNTH-ACCT01-AAA", 3)
+    assert ledger.position == Decimal("-50.00")
+    outgoing, incoming = ledger.episodes
+    # Closed the long YES at 0.70 against a 0.60 basis.
+    assert outgoing.realized_pnl == Decimal("10.00")
+    # The new long-NO leg opens at the crossing price, uncomplemented.
+    assert incoming.average_entry_price == Decimal("0.7000")
+    assert incoming.remaining_quantity == Decimal("50.00")
+
+
+def test_7_canonical_only_fills_replay_without_action_or_side():
+    fill = acct(1, "no", "0.5600")
+    assert fill.legacy_action is None and fill.legacy_side is None
+    result = AccountingEngine().replay([fill], COMPLETE)
+    assert result.ledger_for("KXSYNTH-ACCT01-AAA", 3).position == Decimal("-100.00")
+
+
+def test_8_contradictory_canonical_price_fields_fail_closed():
+    with pytest.raises(SchemaError, match="unified price"):
+        normalize_fill(official_fill(yes_price_dollars="0.5600",
+                                     no_price_dollars="0.4400"))
+
+
+def test_8b_matching_canonical_price_fields_are_accepted():
+    assert normalize_fill(
+        official_fill(yes_price_dollars="0.5600", no_price_dollars="0.5600")
+    ).price_dollars == Decimal("0.5600")
+
+
+def test_9_legacy_only_payload_marks_price_semantics_unproven():
+    """Legacy leg-price semantics are not established, so economics are not guessed."""
+    raw = official_fill(action="buy", side="no", yes_price_dollars="0.5600",
+                        no_price_dollars="0.4400")
+    del raw["outcome_side"], raw["book_side"]
+    fill = normalize_fill(raw)
+    assert fill.outcome_side is OutcomeSide.NO          # direction still resolves
+    assert fill.legacy_price_semantics_unproven is True
+    assert fill.price_dollars is None                    # never guessed
+    assert fill.price_source is None
+
+
+def test_9b_legacy_only_economics_are_incomplete_not_invented():
+    raw = official_fill(action="buy", side="yes")
+    del raw["outcome_side"], raw["book_side"]
+    result = AccountingEngine().replay([normalize_fill(raw)], COMPLETE)
+    episode = result.ledger_for("KXSYNTH-ACCT01-AAA", 3).episodes[0]
+    assert episode.cost_basis_complete is False
+    assert episode.average_entry_price is None
+
+
+def test_9c_legacy_complement_logic_is_never_applied_to_a_canonical_fill():
+    """A canonical fill carrying legacy fields still uses the unified price."""
+    fill = normalize_fill(official_fill(outcome_side="no", book_side="ask",
+                                        action="buy", side="no",
+                                        yes_price_dollars="0.5600",
+                                        no_price_dollars="0.5600"))
+    assert fill.price_dollars == Decimal("0.5600")
+    assert fill.legacy_price_semantics_unproven is False
+
+
+# ================== subaccount validation (Blocker 2) ========================
+
+def test_absent_subaccount_is_the_unknown_bucket():
+    raw = official_fill()
+    del raw["subaccount_number"]
+    assert normalize_fill(raw).subaccount_number is None
+
+
+def test_explicit_null_subaccount_is_also_absent():
+    assert normalize_fill(official_fill(subaccount_number=None)).subaccount_number is None
+
+
+@pytest.mark.parametrize("value", [0, 1, 32, 62, 63])
+def test_valid_subaccount_range_is_accepted(value):
+    assert normalize_fill(official_fill(subaccount_number=value)).subaccount_number == value
+
+
+@pytest.mark.parametrize("value", [-1, -63, 64, 100, 9999])
+def test_out_of_range_subaccount_fails_closed(value):
+    with pytest.raises(SchemaError, match="subaccount_number"):
+        normalize_fill(official_fill(subaccount_number=value))
+
+
+@pytest.mark.parametrize(
+    "value", ["3", "", "primary", 3.0, 0.5, True, False, [3], {"n": 3}, ()],
+)
+def test_malformed_subaccount_types_fail_closed(value):
+    with pytest.raises(SchemaError, match="subaccount_number"):
+        normalize_fill(official_fill(subaccount_number=value))
+
+
+def test_malformed_is_never_silently_treated_as_absent():
+    """Otherwise two corrupted values would net together in the None ledger."""
+    with pytest.raises(SchemaError):
+        normalize_fill(official_fill(subaccount_number="not-a-number"))
+    with pytest.raises(SchemaError):
+        normalize_fill(official_fill(subaccount_number=999))

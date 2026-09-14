@@ -173,7 +173,7 @@ def test_order_spanning_two_subaccounts_fails_closed():
 
 def test_order_without_prices_reports_no_vwap_rather_than_a_partial_one():
     raw = make_accounting_fill(index=1, quantity="10.00", order_id="O1")
-    del raw["yes_price_dollars"]
+    del raw["yes_price_dollars"], raw["no_price_dollars"]
     stats = OrderAggregationStats()
     order = aggregate_orders([normalize_fill(raw)], stats)["O1"]
     assert order.vwap_price is None
