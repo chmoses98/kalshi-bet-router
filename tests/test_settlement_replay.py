@@ -298,3 +298,45 @@ def test_a_settlement_without_a_fee_is_counted_as_missing_not_zero():
     )
     diagnostics = build_diagnostics(result)
     assert diagnostics.events_missing_fee_field == 1
+
+
+# ============ scalar settlements: the case this account does not have =======
+#
+# All 755 live settlements are yes/no. Tennis verified 1,836 that settle
+# `scalar`, strictly between 0 and 1. Code that is correct on every row an
+# account has and wrong on the first row of a new sport is the failure shape
+# this project keeps finding, so the scalar path is exercised deliberately
+# rather than left to be discovered when tennis is enabled.
+
+def test_a_scalar_settlement_replays_without_a_binary_assumption():
+    """Nothing derives the payout from the RESULT, so scalar needs no new path.
+
+    Realized P&L is the exchange's stated revenue against the episode's cost
+    basis. A walkover paying $0.42 a contract is arithmetic, not a special case.
+    """
+    result = replay(
+        [make_accounting_fill(index=1, quantity="10.00", yes_price="0.5600")],
+        [settlement_row(market_result="scalar", revenue="420", value="42")],
+    )
+    assert result.settlements_applied == 1
+    episode = ledger(result).episodes[0]
+    assert not episode.is_open
+    # paid $5.60, received $4.20 -> -1.40
+    assert episode.realized_pnl == Decimal("-1.40")
+
+
+def test_a_scalar_result_is_preserved_verbatim_not_coerced_to_yes_or_no():
+    s = normalize_settlement(settlement_row(market_result="scalar", value="42"))
+    assert s.market_result == "scalar"
+    assert s.market_value_dollars == Decimal("0.42")
+
+
+def test_an_unfamiliar_result_still_parses_rather_than_failing_closed():
+    """A result we have never seen is not a reason to refuse a stated payout.
+
+    The payout comes from `revenue`, which does not depend on recognising the
+    result, so refusing here would discard exchange truth over a vocabulary gap.
+    """
+    s = normalize_settlement(settlement_row(market_result="void", revenue="0"))
+    assert s.market_result == "void"
+    assert s.revenue_dollars == Decimal(0)
