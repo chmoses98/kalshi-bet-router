@@ -426,20 +426,25 @@ def test_a_value_of_one_hundred_is_one_contract_in_cents():
     assert report.settlements_value_above_one == 1
 
 
-def test_revenue_and_value_disagreeing_about_a_payout_is_counted():
-    """Live data showed 400 zero-revenue rows against 396 zero-value rows."""
+def test_value_describes_the_market_and_revenue_describes_the_member():
+    """Not two views of one number, which is what made them look inconsistent.
+
+    A member holding NO in a market that settled YES is unpaid while the market
+    value is 100; a member holding NO in a market that settled NO is paid while
+    the market value is 0. Both are ordinary, not faults.
+    """
     report = probe(settlements=[
-        settlement(market_result="no", revenue="0", value="100"),
-        settlement(market_result="yes", revenue="500", value="0"),
+        settlement(market_result="yes", revenue="0", value="100"),
+        settlement(market_result="no", revenue="500", value="0"),
     ])
-    assert report.settlements_revenue_zero_value_nonzero == 1
-    assert report.settlements_value_zero_revenue_nonzero == 1
+    assert report.settlements_market_yes_member_unpaid == 1
+    assert report.settlements_market_no_member_paid == 1
 
 
-def test_agreeing_rows_are_not_counted_as_disagreements():
+def test_a_member_on_the_winning_yes_side_is_neither_case():
     report = probe(settlements=[
         settlement(market_result="yes", revenue="500", value="100"),
         settlement(market_result="no", revenue="0", value="0"),
     ])
-    assert report.settlements_revenue_zero_value_nonzero == 0
-    assert report.settlements_value_zero_revenue_nonzero == 0
+    assert report.settlements_market_yes_member_unpaid == 0
+    assert report.settlements_market_no_member_paid == 0

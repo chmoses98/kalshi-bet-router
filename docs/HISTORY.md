@@ -232,10 +232,46 @@ reading is now a counter of its own rather than an adopted assumption.
 dollars misstates every settled payout by 100x, and it would do so silently,
 because the resulting numbers are all still well-formed decimals.
 
-One discrepancy is recorded rather than smoothed over: **400 rows report zero
-revenue but only 396 report zero value.** Those four rows disagree with
-themselves about whether the settlement paid out, and the probe now counts each
-direction of that disagreement separately.
+### Confirmed: cents, with nothing left over
+
+The next run tested the cents reading directly:
+
+```
+revenue equals the winning leg count (binary par):    0
+revenue away from binary par:                         0
+revenue on a non-binary result (no par applies):      0
+revenue equals the winning leg count x100 (CENTS):  355
+revenue is zero:                                    400
+
+value equals one hundred (a contract in cents):     359
+value NEGATIVE:                                       0
+```
+
+`355 + 400 = 755`: **every settlement is accounted for, and nothing is left in
+the unexplained bucket.** Every non-zero payout sits at cents par, and all 359
+non-trivial `value` readings are exactly `100`. Both fields are integer cents.
+
+### `value` is about the market; `revenue` is about the member
+
+The apparent inconsistency between the two resolves into an ordinary fact, and
+the arithmetic closes exactly on it:
+
+```
+market settled YES, member unpaid (held NO and lost):  62
+market settled NO,  member paid   (held NO and won):   58
+
+YES markets 359 + NO markets 396           = 755  ✓
+member wins (359 - 62) + 58 = 297 + 58     = 355  ✓  (= non-zero revenue)
+```
+
+So `value` is the **market's** settlement price for a YES contract — `100` or
+`0` — while `revenue` is the **member's** payout. They are not two views of one
+number, which is exactly why treating them as one made 120 perfectly ordinary
+rows look like a data fault.
+
+That mattered: a reconciliation that flagged "revenue and value disagree" would
+have raised 120 false alarms on an account with nothing wrong with it, and the
+natural response to a false alarm at that volume is to loosen the check.
 
 ## Still open
 

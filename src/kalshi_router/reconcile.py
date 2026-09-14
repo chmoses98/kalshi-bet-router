@@ -8,14 +8,20 @@ on our reading of history.
 This module only **measures** the disagreement.  It changes no accounting and
 emits nothing downstream.
 
-The first live run answered both of the questions it was built to ask, and
-corrected this module's own assumptions in the process:
+Live runs have now corrected this module's own assumptions four times, which is
+the point of measuring rather than deciding:
 
 * the settlement result field is ``market_result``, not ``result`` -- 755 of 755
   settlement rows were counted as "no result" purely because of that guess;
 * **a settled market is absent from the positions response entirely**, not
   present with a zero quantity.  The account reported 0 position rows against
-  155 replayed markets and 755 settlements.
+  155 replayed markets and 755 settlements;
+* ``revenue`` and ``value`` are **integer cents**, not dollars: every one of the
+  355 paying settlements sits at cents par and none at dollar par, and all 359
+  non-trivial ``value`` readings are exactly ``100``;
+* ``value`` describes the **market** and ``revenue`` describes the **member**.
+  They are not two views of one number, so rows where one is zero and the other
+  is not are members holding the NO side, not a data fault.
 
 So "replay says open, exchange says flat" can never fire, and the real settlement
 signature is *replayed, absent from positions, present in settlements*.  That is
@@ -108,11 +114,13 @@ class ReconciliationReport:
     settlements_value_negative: int = 0
     #: One whole contract expressed in cents.
     settlements_value_at_one_hundred: int = 0
-    #: revenue and value should agree about whether this settlement paid out.
-    #: They disagreed on some rows, so the disagreement is counted rather than
-    #: averaged away.
-    settlements_revenue_zero_value_nonzero: int = 0
-    settlements_value_zero_revenue_nonzero: int = 0
+    #: `value` describes the MARKET (what a YES contract settled at); `revenue`
+    #: describes the MEMBER (what they were paid).  So these two are not a
+    #: disagreement -- they are the signature of holding the NO side, and the
+    #: live arithmetic closes exactly on that reading.  Kept as named, because
+    #: a row where they diverged for any OTHER reason would still land here.
+    settlements_market_yes_member_unpaid: int = 0
+    settlements_market_no_member_paid: int = 0
     settlements_cost_and_counts_both_present: int = 0
     #: Per-field presence across settlement rows, so a schema drift is visible.
     settlement_field_coverage: dict[str, int] = field(default_factory=dict)
@@ -180,10 +188,10 @@ class ReconciliationReport:
             f"    value NEGATIVE: {self.settlements_value_negative}",
             f"    value equals one hundred (a contract in cents): "
             f"{self.settlements_value_at_one_hundred}",
-            f"    revenue zero but value non-zero: "
-            f"{self.settlements_revenue_zero_value_nonzero}",
-            f"    value zero but revenue non-zero: "
-            f"{self.settlements_value_zero_revenue_nonzero}",
+            f"    market settled YES, member unpaid (held NO and lost): "
+            f"{self.settlements_market_yes_member_unpaid}",
+            f"    market settled NO, member paid (held NO and won): "
+            f"{self.settlements_market_no_member_paid}",
             f"    cost and counts both present: "
             f"{self.settlements_cost_and_counts_both_present}",
             "",
@@ -332,9 +340,9 @@ def _observe_settlement_economics(
 
     if revenue is not None and value is not None:
         if revenue == _ZERO and value != _ZERO:
-            report.settlements_revenue_zero_value_nonzero += 1
+            report.settlements_market_yes_member_unpaid += 1
         elif value == _ZERO and revenue != _ZERO:
-            report.settlements_value_zero_revenue_nonzero += 1
+            report.settlements_market_no_member_paid += 1
 
     has_cost = any(
         row.get(k) is not None
