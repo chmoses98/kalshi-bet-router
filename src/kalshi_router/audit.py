@@ -22,8 +22,9 @@ from .classify import (
     UnresolvedReason,
     classify_market,
 )
-from .client import KalshiReadOnlyClient
+from .client import KalshiReadOnlyClient, WalkStats
 from .errors import KalshiRouterError, SchemaError
+from .history import HistoryEvidence
 from .metadata import MetadataResolver
 from .milestones import MilestoneIndex, build_milestone_index
 from .models import (
@@ -81,6 +82,8 @@ class AuditResult:
     coverage: SchemaCoverage = field(default_factory=SchemaCoverage)
     #: Replay-versus-exchange measurement.  Empty unless explicitly requested.
     reconciliation: ReconciliationReport | None = None
+    #: What the fill walks earned the right to claim about the history.
+    history: HistoryEvidence = field(default_factory=HistoryEvidence)
     details: tuple[SensitiveDetail, ...] = ()
     _classifications: dict[str, Classification] = field(default_factory=dict, repr=False)
 
@@ -149,6 +152,7 @@ def run_audit(
     collect_details: bool = False,
     use_milestones: bool = True,
     reconcile: bool = False,
+    full_history: bool = False,
 ) -> AuditResult:
     """Run one complete Phase 0.1 audit.
 
@@ -163,7 +167,9 @@ def run_audit(
     # EXCLUDED from accounting and counted, never admitted with guessed values.
     # Aborting the whole audit on one odd fill would teach us nothing about the
     # live schema, which is the entire point of this run.
-    normalized, coverage = probe_fills(client.iter_fills(max_fills=max_fills))
+    normalized, coverage, history_evidence = _ingest_fills(
+        client, max_fills, full_history
+    )
     report.fills_fetched = coverage.fills_seen
 
     deduped = dedupe_fills(normalized)
@@ -213,10 +219,13 @@ def run_audit(
     # settled market pays out with no fill at all.
     settlements = _fetch_settlements(client, report) if reconcile else []
 
+    # The replay is told exactly what the walks earned. A history is COMPLETE
+    # only when both fill routes ran out of data rather than out of budget, so
+    # asking for a full walk does not by itself grant the claim.
     replay = None
     try:
         replay = AccountingEngine().replay(
-            fills, HistoryCompleteness.BOUNDED_WINDOW, settlements=settlements
+            fills, history_evidence.completeness, settlements=settlements
         )
         accounting = build_diagnostics(replay)
     except SchemaError:
@@ -345,10 +354,77 @@ def run_audit(
         report=report,
         accounting=accounting,
         coverage=coverage,
+        history=history_evidence,
         reconciliation=reconciliation,
         details=details,
         _classifications=classifications,
     )
+
+
+def _ingest_fills(
+    client: KalshiReadOnlyClient, max_fills: int | None, full_history: bool
+) -> tuple[list, SchemaCoverage, HistoryEvidence]:
+    """Walk the fill routes and record what may be claimed about the result.
+
+    Strict parsing, tolerant ingestion: a fill that cannot be interpreted is
+    EXCLUDED from accounting and counted, never admitted with guessed values.
+
+    The archive route is walked only when a full history was asked for, because
+    it is unbounded. Skipping it is recorded rather than ignored: the live route
+    does not serve fills older than the cutoff at all, so not asking is not
+    evidence that none exist.
+    """
+    evidence = HistoryEvidence()
+    live = WalkStats()
+
+    if not full_history:
+        normalized, coverage = probe_fills(
+            client.iter_fills(max_fills=max_fills, stats=live)
+        )
+        evidence.historical_skipped = True
+    else:
+        archive = WalkStats()
+        normalized, coverage = probe_fills(
+            _chain_fill_routes(client, max_fills, live, archive, evidence)
+        )
+        evidence.historical_rows = archive.rows
+        evidence.historical_pages = archive.pages
+        evidence.historical_exhausted = archive.exhausted
+        evidence.historical_truncated = archive.truncated
+
+    evidence.live_rows = live.rows
+    evidence.live_pages = live.pages
+    evidence.live_exhausted = live.exhausted
+    evidence.live_truncated = live.truncated
+    evidence.fills_rejected = coverage.fills_rejected
+    return normalized, coverage, evidence
+
+
+def _chain_fill_routes(
+    client: KalshiReadOnlyClient,
+    max_fills: int | None,
+    live: WalkStats,
+    archive: WalkStats,
+    evidence: HistoryEvidence,
+):
+    """Yield the live route then the archive, as one stream.
+
+    An archive that fails is UNPROVEN, never empty -- treating a failure as
+    "there was nothing older" is how a partial history gets promoted to a
+    complete one, silently.
+    """
+    yield from client.iter_fills(max_fills=max_fills, stats=live)
+
+    try:
+        client.get_historical_cutoff()
+        evidence.cutoff_retrieved = True
+    except KalshiRouterError:
+        evidence.cutoff_retrieved = False
+
+    try:
+        yield from client.iter_historical_fills(max_fills=max_fills, stats=archive)
+    except KalshiRouterError:
+        evidence.historical_failed = True
 
 
 def _fetch_settlements(client: KalshiReadOnlyClient, report: AuditReport) -> list:

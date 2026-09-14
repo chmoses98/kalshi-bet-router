@@ -25,6 +25,11 @@ on:
         required: false
         type: boolean
         default: false
+      full_history:
+        description: "Also walk the archive fill route, so a COMPLETE history can be claimed"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -63,12 +68,16 @@ jobs:
           KALSHI_PRIVATE_KEY: ${{ secrets.KALSHI_PRIVATE_KEY }}
           MAX_FILLS: ${{ inputs.max_fills }}
           RECONCILE: ${{ inputs.reconcile }}
+          FULL_HISTORY: ${{ inputs.full_history }}
         run: |
           set -euo pipefail
-          RECONCILE_FLAG=""
+          FLAGS=""
           if [ "${RECONCILE}" = "true" ]; then
-            RECONCILE_FLAG="--reconcile"
+            FLAGS="${FLAGS} --reconcile"
           fi
-          python -m kalshi_router.cli audit --max-fills "${MAX_FILLS}" ${RECONCILE_FLAG}
+          if [ "${FULL_HISTORY}" = "true" ]; then
+            FLAGS="${FLAGS} --full-history"
+          fi
+          python -m kalshi_router.cli audit --max-fills "${MAX_FILLS}" ${FLAGS}
           echo "Audit completed. Exit code 0 covers a successful audit of an"
           echo "account with no fills; an API or schema failure exits non-zero."

@@ -72,6 +72,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="emit the aggregate report as JSON (still counts only)",
     )
     audit.add_argument(
+        "--full-history",
+        action="store_true",
+        help=(
+            "also walk the archive route, so the replay can claim a COMPLETE "
+            "history when both walks exhaust. Unbounded; off by default."
+        ),
+    )
+    audit.add_argument(
         "--reconcile",
         action="store_true",
         help=(
@@ -148,6 +156,7 @@ def main(argv: list[str] | None = None, stdout=None, stderr=None) -> int:
             max_fills=args.max_fills,
             collect_details=args.show_sensitive_details,
             reconcile=args.reconcile,
+            full_history=args.full_history,
         )
     except KalshiRouterError as exc:
         # Message text is constructed to be non-secret; see errors module.
@@ -160,6 +169,7 @@ def main(argv: list[str] | None = None, stdout=None, stderr=None) -> int:
             {f"accounting_{k}": v for k, v in result.accounting.as_dict().items()}
         )
         payload.update({f"schema_{k}": v for k, v in result.coverage.as_dict().items()})
+        payload.update({f"history_{k}": v for k, v in result.history.as_dict().items()})
         if result.reconciliation is not None:
             payload.update(
                 {f"reconcile_{k}": v for k, v in result.reconciliation.as_dict().items()}
@@ -171,6 +181,8 @@ def main(argv: list[str] | None = None, stdout=None, stderr=None) -> int:
         print(result.coverage.render(), file=out)
         print("", file=out)
         print(result.accounting.render(), file=out)
+        print("", file=out)
+        print(result.history.render(), file=out)
         if result.reconciliation is not None:
             print("", file=out)
             print(result.reconciliation.render(), file=out)

@@ -223,6 +223,7 @@ def paged_fills_handler(
     milestones: list[dict[str, Any]] | None = None,
     positions: list[dict[str, Any]] | None = None,
     settlements: list[dict[str, Any]] | None = None,
+    archived_fills: list[dict[str, Any]] | None = None,
 ) -> Handler:
     """Serve the full read-only surface used by an audit.
 
@@ -234,6 +235,12 @@ def paged_fills_handler(
     cursors = {f"cursor-{i}": i for i in range(len(pages))}
 
     def handler(method: str, path: str, query: dict[str, list[str]]) -> tuple[int, Any]:
+        if path.endswith("/historical/cutoff"):
+            return 200, {"cutoff_ts": 1788000000}
+
+        if path.endswith("/historical/fills"):
+            return 200, {"fills": archived_fills or [], "cursor": ""}
+
         if path.endswith("/portfolio/positions"):
             return 200, {"market_positions": positions or [], "cursor": ""}
 
