@@ -529,3 +529,101 @@ def test_a_resolved_sport_contributes_no_unresolved_reason():
     assert all(
         value == 0 for name, value in vars(d).items() if name.startswith("unresolved_")
     )
+
+
+# ------------- what a fall-through WOULD have decided (measurement only) -----
+
+def test_a_terminal_refusal_records_which_level_would_have_decided():
+    """The verdict does not change. The cost of the terminal rule is counted.
+
+    L4 is Kalshi's OWN series metadata and L5 is this project's registry, so
+    they are counted apart: falling back on the first would be consulting the
+    exchange, falling back on the second would be overruling it.
+    """
+    from kalshi_router.classify import (
+        EvidenceLevel,
+        MarketContext,
+        UnresolvedReason,
+        classify_market,
+    )
+    from kalshi_router.taxonomy import parse_filters_by_sport
+
+    # One competition string claimed by two sports -- Kalshi's own taxonomy is
+    # ambiguous about the NAME, while the series says plainly what this market is.
+    from .synthetic import make_taxonomy
+
+    taxonomy = parse_filters_by_sport(make_taxonomy({
+        "Baseball": ["Championship"],
+        "Football": ["Championship"],
+    }))
+    context = MarketContext(
+        market_ticker="KXNFLGAME-SYNTH01-AAA",
+        market={"event_ticker": "KXNFLGAME-SYNTH01", "series_ticker": "KXNFLGAME"},
+        event={"event_ticker": "KXNFLGAME-SYNTH01", "series_ticker": "KXNFLGAME"},
+        event_metadata={"competition": "Championship", "competition_scope": "Game"},
+        series={"category": "Sports", "tags": ["Football"]},
+    )
+    result = classify_market(context, taxonomy=taxonomy)
+
+    # Unchanged: still refused, still for the same reason.
+    assert result.sport is Sport.UNRESOLVED
+    assert result.unresolved_reason is UnresolvedReason.COMPETITION_AMBIGUOUS
+
+    # And now we know what it cost -- and the answer argues AGAINST relaxing the
+    # rule rather than for it. A series tagged "Football" is an ambiguous family
+    # (pro or college), so Kalshi's own L4 metadata does NOT decide; only this
+    # project's own L5 registry does, by reading the ticker prefix. Falling
+    # through here would be our registry overruling Kalshi's ambiguity, which is
+    # exactly what the terminal rule exists to prevent.
+    assert result.terminal_rescuable_by is EvidenceLevel.L5_SERIES_REGISTRY
+
+
+def test_a_terminal_refusal_with_no_lower_evidence_records_nothing():
+    from kalshi_router.classify import MarketContext, classify_market
+    from kalshi_router.taxonomy import parse_filters_by_sport
+
+    from .synthetic import make_taxonomy
+
+    taxonomy = parse_filters_by_sport(make_taxonomy({
+        "Baseball": ["Championship"],
+        "Football": ["Championship"],
+    }))
+    context = MarketContext(
+        market_ticker="KXUNKNOWN-SYNTH01-AAA",
+        market={"event_ticker": "KXUNKNOWN-SYNTH01"},
+        event={"event_ticker": "KXUNKNOWN-SYNTH01"},
+        event_metadata={"competition": "Championship"},
+    )
+    result = classify_market(context, taxonomy=taxonomy)
+    assert result.sport is Sport.UNRESOLVED
+    assert result.terminal_rescuable_by is None
+
+
+def test_a_resolved_market_records_no_rescue_level():
+    # The field is only meaningful for a terminal refusal.
+    from kalshi_router.classify import MarketContext, classify_market
+
+    context = MarketContext(
+        market_ticker="KXMLBGAME-SYNTH01-AAA",
+        market={"event_ticker": "KXMLBGAME-SYNTH01"},
+        event={"event_ticker": "KXMLBGAME-SYNTH01"},
+        event_metadata={"competition": "Pro Baseball"},
+    )
+    result = classify_market(context)
+    assert result.sport is Sport.MLB
+    assert result.terminal_rescuable_by is None
+
+
+def test_the_rescue_axis_does_not_disturb_the_reason_breakdown():
+    """Two axes over the same markets; neither may contaminate the other."""
+    from kalshi_router.classify import UnresolvedReason
+
+    _, d = build_shadow_wagers(
+        routable_result().episodes,
+        {TICKER: unresolved_with(UnresolvedReason.COMPETITION_AMBIGUOUS)},
+        {TICKER: context()},
+    )
+    reasons = sum(v for k, v in vars(d).items() if k.startswith("unresolved_"))
+    rescues = sum(v for k, v in vars(d).items() if k.startswith("rescue_"))
+    assert reasons == d.routable_classified_unresolved == 1
+    assert rescues == d.routable_classified_unresolved == 1

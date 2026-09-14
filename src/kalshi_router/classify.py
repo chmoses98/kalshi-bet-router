@@ -227,6 +227,12 @@ class Classification:
     resolved_by: EvidenceLevel | None = None
     unresolved_reason: UnresolvedReason | None = None
     used_unverified_series_ticker: bool = False
+    #: MEASUREMENT ONLY. When a terminal L1/L2 refusal fired, the level that
+    #: WOULD have decided had the classifier been allowed to fall through --
+    #: or ``None`` if nothing would have. It never changes the verdict; it
+    #: exists so the cost of the terminal rule can be counted before anyone
+    #: argues about relaxing it.
+    terminal_rescuable_by: EvidenceLevel | None = None
     #: A weaker level disagreed with the winning one and was overruled.
     lower_level_conflict: bool = False
 
@@ -518,6 +524,7 @@ def classify_market(
         unresolved_reason: UnresolvedReason | None = None,
         unverified: bool = False,
         conflict: bool = False,
+        rescuable_by: EvidenceLevel | None = None,
     ) -> Classification:
         return Classification(
             sport=sport,
@@ -532,6 +539,7 @@ def classify_market(
             unresolved_reason=unresolved_reason,
             used_unverified_series_ticker=unverified,
             lower_level_conflict=conflict,
+            terminal_rescuable_by=rescuable_by,
         )
 
     if context.lookup_error:
@@ -568,11 +576,23 @@ def classify_market(
     # weaker level here is exactly how a guessed registry would overrule Kalshi.
     for terminal in (competition_verdict, milestone):
         if terminal is not None and terminal.unresolved_reason is not None:
+            # Record what a fall-through WOULD have decided, without deciding
+            # it. The terminal rule is deliberate, and the argument for or
+            # against relaxing it should be made against a measured cost rather
+            # than an impression -- L4 is Kalshi's own series metadata, while
+            # L5 is this project's registry, and those are not the same kind of
+            # evidence to fall back on.
+            rescuable = next(
+                (v.level for v in (series_verdict, registry_verdict)
+                 if v is not None and v.sport is not None),
+                None,
+            )
             return build(Sport.UNRESOLVED,
                          f"{terminal.unresolved_reason.value}: {terminal.detail}",
                          evidence, series_ticker,
                          unresolved_reason=terminal.unresolved_reason,
-                         unverified=used_unverified)
+                         unverified=used_unverified,
+                         rescuable_by=rescuable)
 
     verdicts = [v for v in (competition_verdict, milestone, series_verdict, registry_verdict)
                 if v is not None]
