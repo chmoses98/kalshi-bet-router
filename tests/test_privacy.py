@@ -12,7 +12,14 @@ from kalshi_router.aggregate import LEVEL_REPORT_ORDER, AuditReport
 from kalshi_router.audit import run_audit
 from kalshi_router.cli import main, render_sensitive
 from kalshi_router.errors import SensitiveOutputRefused
-from kalshi_router.safety import CI_ENV_MARKERS, assert_sensitive_output_allowed, detected_ci_markers
+from kalshi_router.safety import (
+    CI_ENV_MARKERS,
+    SCHEMA_KIND_PATTERN,
+    SCHEMA_NAME_PATTERN,
+    assert_sensitive_output_allowed,
+    detected_ci_markers,
+    safe_schema_name,
+)
 from kalshi_router.sports import REPORT_ORDER
 
 from .synthetic import SENSITIVE_TOKENS, FAKE_KEY_ID, make_fill
@@ -52,6 +59,22 @@ def test_rendered_aggregate_contains_no_monetary_values(signer):
     assert "10.00" not in rendered
 
 
+#: The only string-valued fields on the report, and the exact reason each is
+#: allowed.  Anything else must still be a count.
+SCHEMA_NAME_FIELDS = ("taxonomy_observed_keys", "taxonomy_observed_entry_keys")
+
+
+def assert_schema_names_only(value):
+    """Every element is a bare schema identifier, optionally with a kind."""
+    assert isinstance(value, tuple)
+    for element in value:
+        assert isinstance(element, str)
+        name, _, kind = element.partition(":")
+        assert SCHEMA_NAME_PATTERN.match(name), f"{element!r} is not a schema name"
+        if kind:
+            assert kind == "?" or SCHEMA_KIND_PATTERN.match(kind), element
+
+
 def test_aggregate_report_can_only_hold_counts(signer):
     """Structural proof: no field of the report can carry a ticker or an id."""
     report = rich_result(signer).report
@@ -65,12 +88,32 @@ def test_aggregate_report_can_only_hold_counts(signer):
             assert set(value) <= counter_maps[name]
             assert all(isinstance(v, int) for v in value.values())
             continue
+        if name in SCHEMA_NAME_FIELDS:
+            assert_schema_names_only(value)
+            continue
         assert isinstance(value, (int, bool)), f"{name} is not a count"
+
+
+def test_a_ticker_shaped_key_can_never_reach_the_schema_diagnostic():
+    """The allowlist is what bounds the one string-valued exception."""
+    for hostile in (
+        "KXMLBGAME-26SEP01-NYY",
+        "SYNTHFILL-0001",
+        "0.5600",
+        "competition name",
+        "Competitions",
+        "a" * 41,
+    ):
+        assert safe_schema_name(hostile) is None
 
 
 def test_json_report_values_are_all_counts(signer):
     data = json.loads(json.dumps(rich_result(signer).report.as_dict()))
-    assert all(isinstance(v, (int, bool)) for v in data.values())
+    for key, value in data.items():
+        if key in SCHEMA_NAME_FIELDS:
+            assert_schema_names_only(tuple(value))
+            continue
+        assert isinstance(value, (int, bool)), f"{key} is not a count"
     assert all(re.fullmatch(r"[A-Za-z0-9_]+", k) for k in data)
 
 
@@ -206,7 +249,11 @@ def test_sensitive_mode_is_the_only_place_competition_appears(signer):
 
 def test_json_mode_exposes_no_strings(signer):
     data = rich_result(signer).report.as_dict()
-    assert all(isinstance(v, (int, bool)) for v in data.values())
+    for key, value in data.items():
+        if key in SCHEMA_NAME_FIELDS:
+            assert_schema_names_only(tuple(value))
+            continue
+        assert isinstance(value, (int, bool)), f"{key} is not a count"
 
 
 # ============ Phase 0.1 fail-closed counters stay aggregate-only =============

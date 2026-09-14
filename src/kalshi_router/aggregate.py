@@ -85,6 +85,17 @@ class AuditReport:
     taxonomy_competitions: int = 0
     taxonomy_competition_collisions: int = 0
     taxonomy_skipped_sports: int = 0
+    #: Inner schema actually observed under each sport, as "key:kind" strings.
+    #: These are the ONLY string-valued fields on this report, and they exist
+    #: because two runs found 22 sports and 0 competitions -- the key names are
+    #: the evidence for why.  `/search/filters_by_sport` is public, account-
+    #: independent taxonomy, so a schema name discloses nothing about the owner.
+    #:
+    #: Every element is filtered through SCHEMA_NAME_PATTERN before it is stored,
+    #: so the exception is bounded by construction rather than by convention: a
+    #: ticker (`KXMLBGAME-...`), an id or any value-looking token cannot match.
+    taxonomy_observed_keys: tuple[str, ...] = ()
+    taxonomy_observed_entry_keys: tuple[str, ...] = ()
 
     # --- public milestone backstop
     milestone_index_built: bool = False
@@ -213,6 +224,8 @@ class AuditReport:
             f"  competitions claimed by >1 sport (fail-closed): "
             f"{self.taxonomy_competition_collisions}",
             f"  taxonomy entries skipped: {self.taxonomy_skipped_sports}",
+            f"  inner keys observed: {', '.join(self.taxonomy_observed_keys) or '(none)'}",
+            f"  entry keys observed: {', '.join(self.taxonomy_observed_entry_keys) or '(none)'}",
             "",
             "public milestone backstop:",
             f"  milestone index built: {self.milestone_index_built}",

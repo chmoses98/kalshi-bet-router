@@ -10,7 +10,7 @@ import pytest
 from kalshi_router import cli
 from kalshi_router.client import KalshiReadOnlyClient
 from kalshi_router.config import AuditConfig
-from kalshi_router.safety import CI_ENV_MARKERS
+from kalshi_router.safety import CI_ENV_MARKERS, safe_schema_name
 
 from .synthetic import FAKE_KEY_ID, FakeTransport, SENSITIVE_TOKENS, make_fill, paged_fills_handler
 from .test_audit import build_metadata, market_for
@@ -83,7 +83,13 @@ def test_json_mode_emits_counts_only(monkeypatch, local_env):
     assert code == cli.EXIT_OK
     assert data["fills_fetched"] == 3
     assert data["classification_MLB"] == 1
-    assert all(isinstance(v, (int, bool)) for v in data.values())
+    for key, value in data.items():
+        if key in ("taxonomy_observed_keys", "taxonomy_observed_entry_keys"):
+            # The one vetted exception: public schema names, allowlisted at the
+            # source.  Still never a free-form string.
+            assert all(safe_schema_name(e.partition(":")[0]) for e in value)
+            continue
+        assert isinstance(value, (int, bool)), f"{key} is not a count"
 
 
 def test_empty_account_exits_zero_and_says_so(monkeypatch, local_env):
