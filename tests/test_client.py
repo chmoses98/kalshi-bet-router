@@ -231,7 +231,7 @@ def test_only_get_requests_are_issued(signer):
 
 
 @pytest.mark.parametrize(
-    "path", ["/portfolio/orders", "/portfolio/balance", "/portfolio/positions", "/exchange/status"]
+    "path", ["/portfolio/orders", "/portfolio/balance", "/exchange/status"]
 )
 def test_non_allowlisted_paths_are_refused_before_any_request(signer, path):
     calls = []
@@ -304,10 +304,125 @@ def test_new_routes_are_still_signed_and_still_get_only(signer):
 
 @pytest.mark.parametrize(
     "path",
-    ["/portfolio/orders", "/portfolio/positions", "/portfolio/balance",
+    ["/portfolio/orders", "/portfolio/balance",
      "/search/anything_else", "/milestone_admin"],
 )
 def test_mutating_and_unlisted_routes_remain_refused(signer, path):
     client, _ = build_client(lambda m, p, q: (200, {}), signer)
     with pytest.raises(SchemaError, match="read-only"):
         client._get(path, "forbidden")
+
+
+#: Every Kalshi route that places, changes or cancels an order. Phase C widened
+#: the allowlist to reach position and settlement history, so this pins the line
+#: that widening must never cross: reading what the account HOLDS is allowed,
+#: acting on it is not.
+TRADING_ROUTES = [
+    "/portfolio/orders",
+    "/portfolio/orders/batched",
+    "/portfolio/orders/ORDER123",
+    "/portfolio/orders/ORDER123/amend",
+    "/portfolio/orders/ORDER123/decrease",
+    "/portfolio/orders/batched/cancel",
+    "/portfolio/orders/queue_position",
+    "/portfolio/balance",
+    "/portfolio/resting_order_total_value",
+]
+
+
+@pytest.mark.parametrize("path", TRADING_ROUTES)
+def test_no_trading_route_is_reachable(signer, path):
+    """No Kalshi trading endpoint may be implemented -- pinned, not assumed."""
+    calls = []
+    client, _ = build_client(lambda m, p, q: (calls.append(p), (200, {}))[1], signer)
+    with pytest.raises(SchemaError, match="read-only"):
+        client._get(path, "forbidden")
+    assert calls == []
+
+
+def test_the_allowlist_itself_contains_no_order_route():
+    """Structural, so a future prefix cannot quietly admit order entry."""
+    from kalshi_router.client import READ_ONLY_PATH_PREFIXES
+
+    for prefix in READ_ONLY_PATH_PREFIXES:
+        assert "order" not in prefix
+        assert "balance" not in prefix
+
+
+@pytest.mark.parametrize(
+    "path", ["/portfolio/positions", "/portfolio/settlements",
+             "/historical/fills", "/historical/cutoff"],
+)
+def test_phase_c_read_only_history_routes_are_allowed(signer, path):
+    client, _ = build_client(lambda m, p, q: (200, {}), signer)
+    client._get(path, "allowed")  # must not raise
+
+
+# ===================== Phase C: history and reconciliation routes ============
+
+def paged(key, pages):
+    """A cursor-paginated fake for a portfolio collection."""
+    state = {"i": 0}
+
+    def handler(method, path, query):
+        i = state["i"]
+        state["i"] += 1
+        rows = pages[i]
+        cursor = "c%d" % i if i + 1 < len(pages) else ""
+        return 200, {key: rows, "cursor": cursor}
+
+    return handler
+
+
+def test_positions_are_not_truncated_by_max_fills(signer):
+    """A short position list would fake a reconciliation failure.
+
+    max_fills bounds the FILL sample deliberately. Applying it to positions
+    would drop tickers the exchange says are held, and the replay would then
+    look like it was missing history when it was really missing a page.
+    """
+    pages = [[{"ticker": "A"}] * 50, [{"ticker": "B"}] * 50, [{"ticker": "C"}]]
+    client, _ = build_client(paged("market_positions", pages), signer)
+    rows = list(client.iter_positions())
+    assert len(rows) == 101
+
+
+def test_settlements_walk_every_page(signer):
+    pages = [[{"ticker": "A"}], [{"ticker": "B"}]]
+    client, _ = build_client(paged("settlements", pages), signer)
+    assert [r["ticker"] for r in client.iter_settlements()] == ["A", "B"]
+
+
+def test_historical_fills_use_the_same_bounded_walk(signer):
+    pages = [[{"fill_id": "h1"}, {"fill_id": "h2"}], [{"fill_id": "h3"}]]
+    client, _ = build_client(paged("fills", pages), signer)
+    assert [f["fill_id"] for f in client.iter_historical_fills(max_fills=2)] == ["h1", "h2"]
+
+
+@pytest.mark.parametrize("key,method", [
+    ("market_positions", "iter_positions"),
+    ("settlements", "iter_settlements"),
+])
+def test_a_missing_collection_fails_closed_rather_than_looking_empty(signer, key, method):
+    client, _ = build_client(lambda m, p, q: (200, {"cursor": ""}), signer)
+    with pytest.raises(SchemaError, match="missing"):
+        list(getattr(client, method)())
+
+
+@pytest.mark.parametrize("method", ["iter_positions", "iter_settlements"])
+def test_repeated_cursor_refuses_to_loop_on_portfolio_routes(signer, method):
+    client, _ = build_client(lambda m, p, q: (200, {"market_positions": [{"t": 1}],
+                                                    "settlements": [{"t": 1}],
+                                                    "cursor": "same"}), signer)
+    with pytest.raises(SchemaError, match="refusing to loop"):
+        list(getattr(client, method)())
+
+
+def test_an_empty_account_has_no_positions_and_that_is_valid(signer):
+    client, _ = build_client(lambda m, p, q: (200, {"market_positions": [], "cursor": ""}), signer)
+    assert list(client.iter_positions()) == []
+
+
+def test_historical_cutoff_is_fetched_as_an_object(signer):
+    client, _ = build_client(lambda m, p, q: (200, {"cutoff_ts": 1788000000}), signer)
+    assert client.get_historical_cutoff()["cutoff_ts"] == 1788000000

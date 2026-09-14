@@ -47,6 +47,10 @@ from .http import (
 #: any other mutating route is absent on purpose.
 READ_ONLY_PATH_PREFIXES = (
     "/portfolio/fills",
+    "/portfolio/positions",
+    "/portfolio/settlements",
+    "/historical/fills",
+    "/historical/cutoff",
     "/markets/",
     "/events/",
     "/series/",
@@ -55,6 +59,10 @@ READ_ONLY_PATH_PREFIXES = (
 )
 
 FILLS_PATH = "/portfolio/fills"
+POSITIONS_PATH = "/portfolio/positions"
+SETTLEMENTS_PATH = "/portfolio/settlements"
+HISTORICAL_FILLS_PATH = "/historical/fills"
+HISTORICAL_CUTOFF_PATH = "/historical/cutoff"
 
 
 def _assert_read_only(path: str) -> None:
@@ -112,6 +120,21 @@ class KalshiReadOnlyClient:
         An account with no fills yields nothing and is a valid, successful state;
         it is distinguished from an API failure, which raises.
         """
+        yield from self._iter_fill_pages(FILLS_PATH, "get_fills", max_fills, page_limit)
+
+    def _iter_fill_pages(
+        self,
+        path: str,
+        operation: str,
+        max_fills: int | None,
+        page_limit: int | None,
+    ) -> Iterator[dict[str, Any]]:
+        """Bounded cursor walk over a fills route.
+
+        Shared by the live and archived routes so both inherit the same
+        fail-closed pagination rules rather than growing a second copy that can
+        drift.
+        """
         remaining = self._config.max_fills if max_fills is None else max_fills
         per_page = self._config.page_limit if page_limit is None else page_limit
         cursor: str | None = None
@@ -121,15 +144,9 @@ class KalshiReadOnlyClient:
             params: dict[str, Any] = {"limit": min(per_page, remaining)}
             if cursor:
                 params["cursor"] = cursor
-            payload = self._get(FILLS_PATH, "get_fills", params)
+            payload = self._get(path, operation, params)
 
-            fills = payload.get("fills")
-            if fills is None:
-                raise SchemaError("fills response is missing the 'fills' field")
-            if not isinstance(fills, list):
-                raise SchemaError(
-                    f"fills response field 'fills' was {type(fills).__name__}, expected list"
-                )
+            fills = _require_list(payload, "fills", "fills")
 
             for fill in fills:
                 if not isinstance(fill, dict):
@@ -141,22 +158,88 @@ class KalshiReadOnlyClient:
                 if remaining <= 0:
                     return
 
-            next_cursor = payload.get("cursor") or ""
-            if not isinstance(next_cursor, str):
-                raise SchemaError(
-                    f"fills response field 'cursor' was {type(next_cursor).__name__}, expected string"
-                )
-            if not next_cursor:
+            cursor = _next_cursor(payload, "fills", seen_cursors)
+            if cursor is None:
                 return
-            if next_cursor in seen_cursors:
-                raise SchemaError("fills pagination repeated a cursor; refusing to loop")
-            seen_cursors.add(next_cursor)
-            cursor = next_cursor
 
             # A page shorter than requested with a cursor still set is legal;
             # an empty page with a cursor is a server fault.
             if not fills:
                 raise SchemaError("fills pagination returned an empty page with a live cursor")
+
+    def _iter_cursor_pages(
+        self, path: str, operation: str, key: str, page_limit: int | None
+    ) -> Iterator[dict[str, Any]]:
+        """Unbounded cursor walk over a portfolio collection.
+
+        Positions and settlements are **not** truncated by ``max_fills``: a
+        partial position list would silently turn "this ticker is missing from
+        the exchange's own view" into a reconciliation failure that is really
+        just a short page.
+        """
+        per_page = self._config.page_limit if page_limit is None else page_limit
+        cursor: str | None = None
+        seen_cursors: set[str] = set()
+
+        while True:
+            params: dict[str, Any] = {"limit": per_page}
+            if cursor:
+                params["cursor"] = cursor
+            payload = self._get(path, operation, params)
+
+            rows = _require_list(payload, key, key)
+            for row in rows:
+                if not isinstance(row, dict):
+                    raise SchemaError(
+                        f"{key} response contained a {type(row).__name__} entry, expected object"
+                    )
+                yield row
+
+            cursor = _next_cursor(payload, key, seen_cursors)
+            if cursor is None:
+                return
+            if not rows:
+                raise SchemaError(f"{key} pagination returned an empty page with a live cursor")
+
+    # ---------------------------------------------------------------- history
+
+    def iter_historical_fills(
+        self, max_fills: int | None = None, page_limit: int | None = None
+    ) -> Iterator[dict[str, Any]]:
+        """Yield raw fills from the archive, using the same cursor walk.
+
+        Fills older than ``GET /historical/cutoff`` are served **only** from this
+        route, so a replay that reads ``/portfolio/fills`` alone is bounded by
+        that cutoff whether or not it realises it.
+        """
+        yield from self._iter_fill_pages(
+            HISTORICAL_FILLS_PATH, "get_historical_fills", max_fills, page_limit
+        )
+
+    def get_historical_cutoff(self) -> dict[str, Any]:
+        """The timestamp before which fills live only in the archive."""
+        return self._get(HISTORICAL_CUTOFF_PATH, "get_historical_cutoff")
+
+    def iter_positions(self, page_limit: int | None = None) -> Iterator[dict[str, Any]]:
+        """Yield the exchange's own position rows, one per ticker.
+
+        This is the reconciliation target, not an accounting input: it says what
+        the account holds, never how it came to hold it.
+        """
+        yield from self._iter_cursor_pages(
+            POSITIONS_PATH, "get_positions", "market_positions", page_limit
+        )
+
+    def iter_settlements(self, page_limit: int | None = None) -> Iterator[dict[str, Any]]:
+        """Yield settlement rows.
+
+        A settlement closes a position **without a fill**, so a fills-only replay
+        cannot see it and will report a market as still open long after the
+        exchange has paid it out.
+        """
+        yield from self._iter_cursor_pages(
+            SETTLEMENTS_PATH, "get_settlements", "settlements", page_limit
+        )
 
     # --------------------------------------------------------------- metadata
 
@@ -194,6 +277,33 @@ class KalshiReadOnlyClient:
     def get_milestones(self, params: dict[str, Any]) -> dict[str, Any]:
         """Fetch one page of public milestones, filtered by category/competition."""
         return self._get(MILESTONES_PATH, "get_milestones", params)
+
+
+def _require_list(payload: dict[str, Any], key: str, label: str) -> list[Any]:
+    """A missing collection is a fault, never an empty account."""
+    value = payload.get(key)
+    if value is None:
+        raise SchemaError(f"{label} response is missing the {key!r} field")
+    if not isinstance(value, list):
+        raise SchemaError(
+            f"{label} response field {key!r} was {type(value).__name__}, expected list"
+        )
+    return value
+
+
+def _next_cursor(payload: dict[str, Any], label: str, seen: set[str]) -> str | None:
+    """Return the next cursor, or ``None`` when the walk is done."""
+    cursor = payload.get("cursor") or ""
+    if not isinstance(cursor, str):
+        raise SchemaError(
+            f"{label} response field 'cursor' was {type(cursor).__name__}, expected string"
+        )
+    if not cursor:
+        return None
+    if cursor in seen:
+        raise SchemaError(f"{label} pagination repeated a cursor; refusing to loop")
+    seen.add(cursor)
+    return cursor
 
 
 def _require_object(payload: dict[str, Any], key: str, operation: str) -> dict[str, Any]:

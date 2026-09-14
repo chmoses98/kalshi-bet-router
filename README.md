@@ -312,4 +312,6 @@ it is refused rather than assumed. See
 
 * [`docs/API_CONTRACT.md`](docs/API_CONTRACT.md) — the exact Kalshi API contract used, and its verification status.
 * [`docs/PHASE_1_REQUIREMENTS.md`](docs/PHASE_1_REQUIREMENTS.md) — position-accounting research and Phase 1 scope.
+* [`docs/HISTORY.md`](docs/HISTORY.md) — Phase C: why full replay and the positions checkpoint are complementary rather than alternatives, why settlements are a first-class replay event, and the reconciliation invariants.
+* [`docs/DOWNSTREAM_REPOS.md`](docs/DOWNSTREAM_REPOS.md) — what each sport repository can actually accept today (only MLB has an importer).
 * [`docs/ACCOUNTING.md`](docs/ACCOUNTING.md) — the Phase 1A shadow accounting model: fill/order/position layers, ordering, cost basis, fees, history requirements and the downstream importer contract.
