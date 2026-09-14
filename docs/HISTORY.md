@@ -364,6 +364,44 @@ This is the same hazard as the 120 false `revenue`/`value` alarms: a check that
 cries wolf at volume gets loosened, and that is how a real fault later slips
 through.
 
+## A complete fill history does not earn authority over positions
+
+The first genuinely exhaustive run walked both fill routes to the end:
+
+```
+live fills:      883 over  9 pages   exhausted, not truncated
+archived fills: 1050 over 11 pages   exhausted, not truncated
+fills rejected: 0                    cutoff retrieved: True
+
+HISTORY IS COMPLETE: True
+```
+
+That claim is correct — 1,933 fills, 1,746 orders, nothing refused. And it was
+immediately followed by an unearned one:
+
+```
+markets in the replay: 1698          settlement rows: 755
+absent, UNEXPLAINED:    943          exchange position rows: 0
+```
+
+The replay asserted authority over a position state holding **943 markets the
+exchange does not report at all**.
+
+**The settlement route does not reach as far back as the archive fill route.**
+Only 755 of the 1,698 traded markets have a settlement row; the rest settled
+beyond whatever window `/portfolio/settlements` retains. A settlement closes a
+position *without a fill*, so for those markets no event the replay can see will
+ever close them. The ledger is internally consistent and externally wrong.
+
+So completeness of fills is **necessary but not sufficient** for authority over
+position state, and `claims_complete_position_state` was derived from fills
+alone. It is now suppressed whenever reconciliation finds an unexplained open
+market, and the report says why in words rather than leaving a reader to notice
+that two numbers cannot both be true.
+
+This is the sharpest form of the rule the whole system is built on: *a walk that
+finished is not the same as a story that closes.*
+
 ## Still open
 
 * **`/historical/cutoff` response shape** is unverified against a live response.

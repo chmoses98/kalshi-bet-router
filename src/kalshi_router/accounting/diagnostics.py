@@ -79,6 +79,11 @@ class AccountingDiagnostics:
     accounting_schema_failures: int = 0
 
     claims_complete_position_state: bool = False
+    #: The exchange's own view contradicts the replay's position state.
+    #: A complete FILL history is necessary but not sufficient for authority:
+    #: settlements close positions without a fill, and the settlement route
+    #: does not reach as far back as the archive fill route does.
+    position_state_contradicted_by_exchange: bool = False
     history_is_complete: bool = False
 
     def as_dict(self) -> dict[str, int | bool]:
@@ -134,8 +139,21 @@ class AccountingDiagnostics:
             "",
             f"  history supplied is complete: {self.history_is_complete}",
             f"  position state claimed as authoritative: "
-            f"{self.claims_complete_position_state}",
+            f"{self.claims_complete_position_state and not self.position_state_contradicted_by_exchange}",
         ]
+        if self.position_state_contradicted_by_exchange:
+            lines.append(
+                "  POSITION STATE IS CONTRADICTED BY THE EXCHANGE: the replay "
+                "still holds"
+            )
+            lines.append(
+                "  markets the exchange does not report, and no settlement "
+                "explains them."
+            )
+            lines.append(
+                "  A complete fill history does not by itself earn authority "
+                "over positions."
+            )
         if not self.claims_complete_position_state:
             lines += [
                 "",
