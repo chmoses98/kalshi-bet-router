@@ -246,3 +246,28 @@ def test_schema_coverage_leaks_nothing(monkeypatch, local_env):
     for token in SENSITIVE_TOKENS:
         assert token not in out
     assert "$" not in out
+
+
+# ================= Phase C: opt-in reconciliation measurement ================
+
+def test_reconciliation_is_off_by_default(monkeypatch, local_env):
+    """It walks two more paginated collections, so it must be asked for."""
+    install_fake_api(monkeypatch, SAMPLE)
+    _, out, _ = run(["audit"])
+    assert "reconciliation probe" not in out
+
+
+def test_reconcile_flag_renders_the_measurement(monkeypatch, local_env):
+    install_fake_api(monkeypatch, SAMPLE)
+    _, out, _ = run(["audit", "--reconcile"])
+    assert "reconciliation probe" in out
+    assert "not a reconciliation verdict" in out
+
+
+def test_reconciliation_output_leaks_nothing(monkeypatch, local_env):
+    install_fake_api(monkeypatch, SAMPLE)
+    _, out, _ = run(["audit", "--reconcile"])
+    for token in SENSITIVE_TOKENS:
+        assert token not in out
+    assert "KX" not in out
+    assert "$" not in out

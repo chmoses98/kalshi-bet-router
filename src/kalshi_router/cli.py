@@ -72,6 +72,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="emit the aggregate report as JSON (still counts only)",
     )
     audit.add_argument(
+        "--reconcile",
+        action="store_true",
+        help=(
+            "also compare the replay against the exchange's own positions and "
+            "settlements (counts only). Off by default: it walks two more "
+            "paginated collections."
+        ),
+    )
+    audit.add_argument(
         "--show-sensitive-details",
         action="store_true",
         help=(
@@ -135,7 +144,10 @@ def main(argv: list[str] | None = None, stdout=None, stderr=None) -> int:
 
     try:
         result = run_audit(
-            client, max_fills=args.max_fills, collect_details=args.show_sensitive_details
+            client,
+            max_fills=args.max_fills,
+            collect_details=args.show_sensitive_details,
+            reconcile=args.reconcile,
         )
     except KalshiRouterError as exc:
         # Message text is constructed to be non-secret; see errors module.
@@ -148,6 +160,10 @@ def main(argv: list[str] | None = None, stdout=None, stderr=None) -> int:
             {f"accounting_{k}": v for k, v in result.accounting.as_dict().items()}
         )
         payload.update({f"schema_{k}": v for k, v in result.coverage.as_dict().items()})
+        if result.reconciliation is not None:
+            payload.update(
+                {f"reconcile_{k}": v for k, v in result.reconciliation.as_dict().items()}
+            )
         print(json.dumps(payload, indent=2, sort_keys=True), file=out)
     else:
         print(result.report.render(), file=out)
@@ -155,6 +171,9 @@ def main(argv: list[str] | None = None, stdout=None, stderr=None) -> int:
         print(result.coverage.render(), file=out)
         print("", file=out)
         print(result.accounting.render(), file=out)
+        if result.reconciliation is not None:
+            print("", file=out)
+            print(result.reconciliation.render(), file=out)
 
     if args.show_sensitive_details:
         print("", file=out)

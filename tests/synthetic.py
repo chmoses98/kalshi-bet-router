@@ -221,6 +221,8 @@ def paged_fills_handler(
     metadata: dict[str, Any] | None = None,
     taxonomy: dict[str, Any] | None = None,
     milestones: list[dict[str, Any]] | None = None,
+    positions: list[dict[str, Any]] | None = None,
+    settlements: list[dict[str, Any]] | None = None,
 ) -> Handler:
     """Serve the full read-only surface used by an audit.
 
@@ -232,6 +234,12 @@ def paged_fills_handler(
     cursors = {f"cursor-{i}": i for i in range(len(pages))}
 
     def handler(method: str, path: str, query: dict[str, list[str]]) -> tuple[int, Any]:
+        if path.endswith("/portfolio/positions"):
+            return 200, {"market_positions": positions or [], "cursor": ""}
+
+        if path.endswith("/portfolio/settlements"):
+            return 200, {"settlements": settlements or [], "cursor": ""}
+
         if path.endswith("/portfolio/fills"):
             cursor = query.get("cursor", [None])[0]
             index = cursors.get(cursor, 0) if cursor else 0
