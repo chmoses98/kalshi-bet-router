@@ -79,6 +79,23 @@ class ReconciliationReport:
     settlement_rows_with_result: int = 0
     settlement_rows_without_result: int = 0
     settlement_markets: int = 0
+
+    # --- settlement ECONOMICS semantics
+    #
+    # Replaying a settlement needs to know what `revenue` and `value` mean, and
+    # getting that wrong would corrupt realized P&L on every settled wager. The
+    # relationships below are measured rather than assumed. For a binary
+    # contract the winning leg pays $1 per contract, so if `revenue` is a gross
+    # dollar payout then revenue == the winning leg's count, exactly.
+    settlements_revenue_at_binary_par: int = 0
+    settlements_revenue_off_binary_par: int = 0
+    settlements_revenue_zero: int = 0
+    settlements_revenue_unparseable: int = 0
+    settlements_value_at_one: int = 0
+    settlements_value_at_zero: int = 0
+    settlements_value_strictly_between: int = 0
+    settlements_value_above_one: int = 0
+    settlements_cost_and_counts_both_present: int = 0
     #: Per-field presence across settlement rows, so a schema drift is visible.
     settlement_field_coverage: dict[str, int] = field(default_factory=dict)
 
@@ -126,6 +143,20 @@ class ReconciliationReport:
             f"    distinct markets settled: {self.settlement_markets}",
             f"    with a result: {self.settlement_rows_with_result}",
             f"    without a result: {self.settlement_rows_without_result}",
+            "",
+            "  settlement economics semantics:",
+            f"    revenue equals the winning leg count (binary par): "
+            f"{self.settlements_revenue_at_binary_par}",
+            f"    revenue away from binary par: {self.settlements_revenue_off_binary_par}",
+            f"    revenue is zero: {self.settlements_revenue_zero}",
+            f"    revenue unparseable: {self.settlements_revenue_unparseable}",
+            f"    value equals one: {self.settlements_value_at_one}",
+            f"    value equals zero: {self.settlements_value_at_zero}",
+            f"    value strictly between zero and one (SCALAR): "
+            f"{self.settlements_value_strictly_between}",
+            f"    value above one: {self.settlements_value_above_one}",
+            f"    cost and counts both present: "
+            f"{self.settlements_cost_and_counts_both_present}",
             "",
             "  replay vs exchange (market counts, never tickers):",
             f"    markets in the replay: {self.replayed_markets}",
@@ -200,6 +231,68 @@ def _collect_keys(rows: Iterable[dict[str, Any]], limit: int = 40) -> tuple[str,
     return tuple(sorted(seen))
 
 
+_ZERO = Decimal(0)
+_ONE_DOLLAR = Decimal(1)
+
+
+def _quiet_decimal(raw: Any, name: str) -> Decimal | None:
+    """Parse for diagnostics only; unparseable is simply not evidence."""
+    if raw is None:
+        return None
+    try:
+        parsed = parse_fixed_point(raw, name)
+    except SchemaError:
+        return None
+    return None if parsed is None else parsed.value
+
+
+def _observe_settlement_economics(
+    row: dict[str, Any], result: str | None, report: ReconciliationReport
+) -> None:
+    """Measure what `revenue` and `value` actually mean.
+
+    Replaying a settlement needs the payout, and taking it from the wrong field
+    or the wrong unit would corrupt realized P&L on every settled wager.  A
+    binary contract pays $1 per winning contract, so binary par -- revenue equal
+    to the winning leg's count -- is a testable prediction rather than an
+    assumption.  Only relationships are recorded; no amount is ever emitted.
+    """
+    yes_count = _quiet_decimal(row.get("yes_count_fp"), "yes_count_fp")
+    no_count = _quiet_decimal(row.get("no_count_fp"), "no_count_fp")
+    revenue_raw = row.get("revenue")
+    revenue = _quiet_decimal(revenue_raw, "revenue")
+
+    if revenue is None:
+        if revenue_raw is not None:
+            report.settlements_revenue_unparseable += 1
+    elif revenue == _ZERO:
+        report.settlements_revenue_zero += 1
+    else:
+        winning = yes_count if result == "yes" else no_count if result == "no" else None
+        if winning is not None and revenue == winning:
+            report.settlements_revenue_at_binary_par += 1
+        else:
+            report.settlements_revenue_off_binary_par += 1
+
+    value = _quiet_decimal(row.get("value"), "value")
+    if value is not None:
+        if value == _ONE_DOLLAR:
+            report.settlements_value_at_one += 1
+        elif value == _ZERO:
+            report.settlements_value_at_zero += 1
+        elif _ZERO < value < _ONE_DOLLAR:
+            report.settlements_value_strictly_between += 1
+        else:
+            report.settlements_value_above_one += 1
+
+    has_cost = any(
+        row.get(k) is not None
+        for k in ("yes_total_cost_dollars", "no_total_cost_dollars")
+    )
+    if has_cost and (yes_count is not None or no_count is not None):
+        report.settlements_cost_and_counts_both_present += 1
+
+
 def probe_reconciliation(
     position_rows: Iterable[dict[str, Any]],
     settlement_rows: Iterable[dict[str, Any]],
@@ -256,6 +349,8 @@ def probe_reconciliation(
                 report.settlement_field_coverage[name] = (
                     report.settlement_field_coverage.get(name, 0) + 1
                 )
+
+        _observe_settlement_economics(row, result, report)
 
         ticker = _row_ticker(row)
         if ticker is not None:
