@@ -30,6 +30,10 @@ on:
         required: false
         type: boolean
         default: false
+      max_classify_markets:
+        description: "Cap the metadata sweep (accounting still replays every fill). Blank = no cap"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -69,6 +73,7 @@ jobs:
           MAX_FILLS: ${{ inputs.max_fills }}
           RECONCILE: ${{ inputs.reconcile }}
           FULL_HISTORY: ${{ inputs.full_history }}
+          MAX_CLASSIFY: ${{ inputs.max_classify_markets }}
         run: |
           set -euo pipefail
           FLAGS=""
@@ -77,6 +82,9 @@ jobs:
           fi
           if [ "${FULL_HISTORY}" = "true" ]; then
             FLAGS="${FLAGS} --full-history"
+          fi
+          if [ -n "${MAX_CLASSIFY}" ]; then
+            FLAGS="${FLAGS} --max-classify-markets ${MAX_CLASSIFY}"
           fi
           python -m kalshi_router.cli audit --max-fills "${MAX_FILLS}" ${FLAGS}
           echo "Audit completed. Exit code 0 covers a successful audit of an"

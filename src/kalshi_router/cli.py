@@ -72,6 +72,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="emit the aggregate report as JSON (still counts only)",
     )
     audit.add_argument(
+        "--max-classify-markets",
+        type=int,
+        default=None,
+        help=(
+            "classify at most this many markets. Accounting still replays every "
+            "fill; only the metadata sweep is bounded, because it costs several "
+            "requests per market. Unclassified markets are reported separately "
+            "and are never counted as unresolved."
+        ),
+    )
+    audit.add_argument(
         "--full-history",
         action="store_true",
         help=(
@@ -157,6 +168,7 @@ def main(argv: list[str] | None = None, stdout=None, stderr=None) -> int:
             collect_details=args.show_sensitive_details,
             reconcile=args.reconcile,
             full_history=args.full_history,
+            max_classify_markets=args.max_classify_markets,
         )
     except KalshiRouterError as exc:
         # Message text is constructed to be non-secret; see errors module.

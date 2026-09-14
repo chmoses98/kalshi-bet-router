@@ -361,3 +361,49 @@ def test_empty_competition_is_counted_malformed_end_to_end(signer):
     assert report.unresolved_malformed_event_metadata == 1
     assert report.events_with_malformed_metadata == 1
     assert report.events_with_competition == 0
+
+
+# ============ classification scope is bounded separately (Phase C.11) ========
+#
+# Accounting needs every fill the account ever had; classification only needs
+# enough markets to judge routing readiness, and it costs several metadata
+# requests per market. Forcing one scope on both is what makes a full-history
+# walk unaffordable.
+
+def test_bounding_classification_leaves_accounting_untouched(signer):
+    pages = [[make_fill(i, ticker=market_for("MLB")) for i in range(1, 4)]]
+    result = run_audit(build_client(pages, signer), max_classify_markets=1)
+    # Every fill still replayed...
+    assert result.accounting.fills_replayed == 3
+    # ...while only one market was classified.
+    assert result.report.markets_classified == 1
+
+
+def test_an_unclassified_market_is_never_counted_as_unresolved(signer):
+    """Counting work never attempted as work that failed would understate
+    classification quality, and would do so in the direction that looks like a
+    defect in the classifier rather than a budget the caller chose."""
+    tickers = [market_for("MLB"), market_for("NFL"), market_for("CFB")]
+    pages = [[make_fill(i + 1, ticker=t) for i, t in enumerate(tickers)]]
+    result = run_audit(build_client(pages, signer), max_classify_markets=1)
+    report = result.report
+
+    assert report.markets_not_classified == 2
+    assert report.classification_counts[Sport.UNRESOLVED] == 0
+    # The classified market resolved normally.
+    assert sum(report.classification_counts.values()) == 1
+
+
+def test_no_bound_classifies_everything(signer):
+    tickers = [market_for("MLB"), market_for("NFL")]
+    pages = [[make_fill(i + 1, ticker=t) for i, t in enumerate(tickers)]]
+    result = run_audit(build_client(pages, signer))
+    assert result.report.markets_not_classified == 0
+    assert result.report.markets_classified == 2
+
+
+def test_a_bound_larger_than_the_market_count_changes_nothing(signer):
+    pages = [[make_fill(1, ticker=market_for("MLB"))]]
+    result = run_audit(build_client(pages, signer), max_classify_markets=99)
+    assert result.report.markets_not_classified == 0
+    assert result.report.markets_classified == 1

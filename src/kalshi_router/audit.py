@@ -153,6 +153,7 @@ def run_audit(
     use_milestones: bool = True,
     reconcile: bool = False,
     full_history: bool = False,
+    max_classify_markets: int | None = None,
 ) -> AuditResult:
     """Run one complete Phase 0.1 audit.
 
@@ -231,9 +232,27 @@ def run_audit(
     except SchemaError:
         accounting = AccountingDiagnostics(accounting_schema_failures=1)
 
-    tickers = sorted({fill.ticker for fill in fills})
-    report.unique_markets_observed = len(tickers)
-    report.fills_requiring_metadata_lookup = len(fills)
+    # Accounting and classification have different natural scopes, and forcing
+    # them to share one is what makes a full-history walk unaffordable. The
+    # ledger needs every fill the account ever had; classification only needs
+    # enough markets to judge routing readiness, and it costs several metadata
+    # requests per market -- 155 markets already cost 486 requests.
+    #
+    # A market that was never classified is NOT unresolved. Conflating the two
+    # would understate classification quality by counting work never attempted
+    # as work that failed, so it gets its own counter and is left out of the
+    # classification totals entirely.
+    all_tickers = sorted({fill.ticker for fill in fills})
+    report.unique_markets_observed = len(all_tickers)
+    if max_classify_markets is not None and len(all_tickers) > max_classify_markets:
+        tickers = all_tickers[:max_classify_markets]
+        report.markets_not_classified = len(all_tickers) - len(tickers)
+    else:
+        tickers = all_tickers
+    report.markets_classified = len(tickers)
+    report.fills_requiring_metadata_lookup = sum(
+        1 for fill in fills if fill.ticker in set(tickers)
+    )
 
     contexts = {ticker: resolver.resolve(ticker) for ticker in tickers}
     taxonomy = _fetch_taxonomy(client, report) if tickers else None

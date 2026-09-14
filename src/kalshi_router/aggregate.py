@@ -94,6 +94,11 @@ class AuditReport:
     #: Every element is filtered through SCHEMA_NAME_PATTERN before it is stored,
     #: so the exception is bounded by construction rather than by convention: a
     #: ticker (`KXMLBGAME-...`), an id or any value-looking token cannot match.
+    #: Markets classification was actually attempted for.
+    markets_classified: int = 0
+    #: Markets left unclassified by a deliberate bound. NOT unresolved: no
+    #: evidence was gathered, so no classification failed.
+    markets_not_classified: int = 0
     settlements_fetched: int = 0
     settlements_rejected: int = 0
     taxonomy_observed_keys: tuple[str, ...] = ()
@@ -210,6 +215,9 @@ class AuditReport:
             "metadata coverage:",
             f"  fills requiring additional metadata lookup: {self.fills_requiring_metadata_lookup}",
             f"  unique markets observed: {self.unique_markets_observed}",
+            f"  markets classification was attempted for: {self.markets_classified}",
+            f"  markets left unclassified by budget (NOT unresolved): "
+            f"{self.markets_not_classified}",
             f"  unique events observed: {self.unique_events_observed}",
             f"  events with metadata retrieved: {self.events_with_metadata_retrieved}",
             f"  events with non-null competition: {self.events_with_competition}",
