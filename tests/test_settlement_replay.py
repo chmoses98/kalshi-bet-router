@@ -340,3 +340,43 @@ def test_an_unfamiliar_result_still_parses_rather_than_failing_closed():
     s = normalize_settlement(settlement_row(market_result="void", revenue="0"))
     assert s.market_result == "void"
     assert s.revenue_dollars == Decimal(0)
+
+
+# ============ a complete fill history does not earn authority ===============
+#
+# The first exhaustive run walked both fill routes to exhaustion -- 883 live and
+# 1050 archived, 0 rejected -- and legitimately reported HISTORY IS COMPLETE.
+# It then claimed authority over position state while holding 943 markets the
+# exchange does not report at all. The settlement route only reaches 755 of the
+# 1698 traded markets, so the rest settled beyond its window and the replay has
+# no event that could ever close them.
+
+def test_a_contradicted_position_state_is_not_claimed_as_authoritative():
+    from kalshi_router.accounting.diagnostics import build_diagnostics
+
+    result = replay(
+        [make_accounting_fill(index=1, quantity="10.00", yes_price="0.5600")],
+        [],
+        completeness=HistoryCompleteness.COMPLETE,
+    )
+    diagnostics = build_diagnostics(result)
+    assert diagnostics.claims_complete_position_state          # fills are complete
+
+    diagnostics.position_state_contradicted_by_exchange = True
+    rendered = diagnostics.render()
+    assert "position state claimed as authoritative: False" in rendered
+    assert "CONTRADICTED BY THE EXCHANGE" in rendered
+
+
+def test_an_uncontradicted_complete_history_still_claims_authority():
+    from kalshi_router.accounting.diagnostics import build_diagnostics
+
+    result = replay(
+        [make_accounting_fill(index=1, quantity="10.00", yes_price="0.5600")],
+        [settlement_row()],
+        completeness=HistoryCompleteness.COMPLETE,
+    )
+    diagnostics = build_diagnostics(result)
+    rendered = diagnostics.render()
+    assert "position state claimed as authoritative: True" in rendered
+    assert "CONTRADICTED" not in rendered

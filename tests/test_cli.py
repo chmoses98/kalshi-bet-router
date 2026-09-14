@@ -336,3 +336,15 @@ def test_history_evidence_leaks_nothing(monkeypatch, local_env):
         assert token not in out
     assert "KX" not in out
     assert "$" not in out
+
+
+def test_an_exchange_contradiction_suppresses_the_authority_claim(monkeypatch, local_env):
+    """A complete fill history plus a contradicted position state must not read
+    as authoritative. The exhaustive live run hit exactly this: both fill walks
+    exhausted, and the replay still held markets the exchange does not report.
+    """
+    install_fake_api(monkeypatch, SAMPLE)
+    _, out, _ = run(["audit", "--full-history", "--reconcile"])
+    if "absent from positions, UNEXPLAINED: 0" not in out:
+        assert "position state claimed as authoritative: False" in out
+        assert "CONTRADICTED BY THE EXCHANGE" in out

@@ -369,6 +369,17 @@ def run_audit(
         _probe_reconciliation(client, replay) if reconcile and replay is not None else None
     )
 
+    # Authority over position state has to survive contact with the exchange's
+    # own view. A complete FILL history is necessary but not sufficient: a
+    # settlement closes a position without a fill, and the settlement route does
+    # not reach as far back as the archive fill route does. So a replay can walk
+    # every fill that ever existed, legitimately report COMPLETE, and still hold
+    # markets that settled before the settlement window -- markets the exchange
+    # has long since dropped. Claiming authority there would assert a portfolio
+    # the member does not have.
+    if reconciliation is not None and reconciliation.markets_absent_and_unexplained:
+        accounting.position_state_contradicted_by_exchange = True
+
     return AuditResult(
         report=report,
         accounting=accounting,
