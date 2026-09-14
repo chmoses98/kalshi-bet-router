@@ -399,6 +399,40 @@ every other sport is refused by construction until its wager contract is
 designed — which is the owner's decision, not something to infer from whatever
 JSON file happens to exist.
 
+## Phase H — the delivery contract, and two decisions that are not the router's
+
+`src/kalshi_router/destination.py` builds the payload a downstream importer
+accepts. **It contains no transport** — no HTTP client, no git push, no
+dispatch — and a structural test (parsing the module's AST, not grepping its
+prose) asserts it cannot acquire one.
+
+**The router never writes the ledger file.** MLB's rule is that all writes go
+through `lib.edgelab.bets.write_placed_bet`; a cross-repo commit into
+`bets.jsonl` would bypass duplicate detection, ticker resolution and validation
+— the exact properties that make a re-run safe. The unit of delivery is a batch
+payload handed to the destination's own importer.
+
+**The batch id is a versioned constant, and that is the whole design.** Identity
+downstream is `hash(importBatchId, sourceBetKey, marketTicker, side)`, so the
+batch id is part of the primary key. A timestamp would duplicate the entire
+ledger every run; a digest of the batch contents would be stable until one
+wager is added and then re-import everything as new. A constant makes a row's
+identity depend only on the row.
+
+Two blockers are genuinely the owner's, and both are documented in
+[`docs/DELIVERY.md`](docs/DELIVERY.md):
+
+1. **The credential** — a fine-grained token scoped to exactly one repository,
+   which the router cannot create and must never be handed in chat.
+2. **Every destination repository is public.** A wager row carries stake, entry
+   price, fees and payout. The MLB ledger already tracks 457 such rows in git,
+   so the owner has already chosen to publish it — which makes this a real
+   decision rather than an obvious one, and not one an agent should settle by
+   writing code that assumes an answer.
+
+Not in question under either reading: the router's own Actions logs never print
+a payload, a row, a ticker or an amount.
+
 ## Documentation index
 
 * [`docs/API_CONTRACT.md`](docs/API_CONTRACT.md) — the exact Kalshi API contract used, and its verification status.
