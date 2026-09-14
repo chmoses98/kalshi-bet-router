@@ -92,11 +92,49 @@ COMPETITION_LEVELS = frozenset({
 class UnresolvedReason(str, Enum):
     METADATA_LOOKUP_FAILED = "metadata_lookup_failed"
     NO_METADATA = "no_metadata_resolved"
+    MALFORMED_EVENT_METADATA = "malformed_event_metadata"
     COMPETITION_ABSENT = "competition_absent"
     COMPETITION_UNKNOWN = "competition_unknown"
+    COMPETITION_AMBIGUOUS = "competition_ambiguous_in_taxonomy"
+    MILESTONE_CONFLICT = "milestone_competition_conflict"
     EVIDENCE_CONFLICT = "evidence_conflict"
     AMBIGUOUS_FAMILY = "ambiguous_sport_family_without_league"
     INSUFFICIENT = "insufficient_authoritative_metadata"
+
+
+#: Fields of the event-metadata document this classifier reads.  Kalshi documents
+#: both as ``string | null``.
+EVENT_METADATA_STRING_FIELDS = ("competition", "competition_scope")
+
+
+def validate_metadata_string_field(
+    metadata: dict[str, Any] | None, key: str
+) -> tuple[str | None, str | None]:
+    """Validate one ``string | null`` event-metadata field.
+
+    Returns ``(value, error)``.
+
+    * **null / absent** -> ``(None, None)``.  A genuine absence is a valid shape:
+      most events are not sports, and the classifier falls through to weaker
+      evidence.
+    * **non-empty string** -> ``(value, None)``.
+    * **empty or whitespace-only string** -> ``(None, None)``.  Still the
+      documented *type*, and it asserts no competition, so it is treated as an
+      absence rather than as corruption.
+    * **any other non-null type** (int, bool, list, dict, ...) -> ``(None, error)``.
+      This is malformed metadata, and the caller must fail closed.  It is never
+      coerced, and it must never be allowed to fall through to weaker evidence:
+      a wrong-typed competition means we cannot trust this document at all.
+    """
+    if not isinstance(metadata, dict) or key not in metadata:
+        return None, None
+    raw = metadata[key]
+    if raw is None:
+        return None, None
+    if isinstance(raw, str):
+        text = raw.strip()
+        return (text or None), None
+    return None, f"{key} was {type(raw).__name__}, expected string or null"
 
 
 class EvidenceStrength(str, Enum):
@@ -140,14 +178,27 @@ class MarketContext:
     event_metadata_error: str | None = None
 
     @property
+    def metadata_schema_error(self) -> str | None:
+        """A non-secret description of malformed event metadata, if any.
+
+        Checked before any evidence is gathered, so a wrong-typed ``competition``
+        cannot be quietly rescued by series metadata or by the ticker registry.
+        """
+        for key in EVENT_METADATA_STRING_FIELDS:
+            _, error = validate_metadata_string_field(self.event_metadata, key)
+            if error:
+                return error
+        return None
+
+    @property
     def competition(self) -> str | None:
-        value = (self.event_metadata or {}).get("competition")
-        return value if isinstance(value, str) and value.strip() else None
+        value, error = validate_metadata_string_field(self.event_metadata, "competition")
+        return None if error else value
 
     @property
     def competition_scope(self) -> str | None:
-        value = (self.event_metadata or {}).get("competition_scope")
-        return value if isinstance(value, str) and value.strip() else None
+        value, error = validate_metadata_string_field(self.event_metadata, "competition_scope")
+        return None if error else value
 
 
 @dataclass(frozen=True)
@@ -297,6 +348,14 @@ def _competition_verdict(
                      context.competition_scope, level=EvidenceLevel.L1_EVENT_COMPETITION)
         )
 
+    # A competition claimed by several sports in Kalshi's own taxonomy cannot be
+    # resolved by anyone -- not even by our direct rules, which would otherwise
+    # quietly disagree with the exchange's catalogue.
+    if taxonomy is not None and taxonomy.is_ambiguous_competition(competition):
+        return Verdict(EvidenceLevel.L2_SPORT_TAXONOMY, None,
+                       "competition is claimed by more than one sport",
+                       UnresolvedReason.COMPETITION_AMBIGUOUS)
+
     direct = sport_from_competition(competition)
     if direct is not None:
         return Verdict(EvidenceLevel.L1_EVENT_COMPETITION, direct, f"competition={competition!r}")
@@ -336,6 +395,10 @@ def _milestone_verdict(
     """L3: the event ticker appears in a public milestone for a competition."""
     if milestone_index is None or not event_ticker:
         return None
+    if milestone_index.is_conflicted(event_ticker):
+        return Verdict(EvidenceLevel.L3_MILESTONE, None,
+                       "event appears under more than one competition",
+                       UnresolvedReason.MILESTONE_CONFLICT)
     competition = milestone_index.competition_for_event(event_ticker)
     if not competition:
         return None
@@ -464,6 +527,15 @@ def classify_market(
         return build(Sport.UNRESOLVED, f"metadata_lookup_failed: {context.lookup_error}", [],
                      unresolved_reason=UnresolvedReason.METADATA_LOOKUP_FAILED)
 
+    schema_error = context.metadata_schema_error
+    if schema_error:
+        # Deliberately returned before any evidence is collected: malformed
+        # event metadata must not be rescued by L4 series metadata or by the L5
+        # registry.
+        return build(Sport.UNRESOLVED,
+                     f"{UnresolvedReason.MALFORMED_EVENT_METADATA.value}: {schema_error}", [],
+                     unresolved_reason=UnresolvedReason.MALFORMED_EVENT_METADATA)
+
     if not any(isinstance(m, dict) for m in
                (context.market, context.event, context.series, context.event_metadata)):
         return build(Sport.UNRESOLVED, "no_metadata_resolved", [],
@@ -483,12 +555,13 @@ def classify_market(
 
     # A present-but-unrecognized competition is terminal: falling through to a
     # weaker level here is exactly how a guessed registry would overrule Kalshi.
-    if competition_verdict is not None and competition_verdict.unresolved_reason is not None:
-        return build(Sport.UNRESOLVED,
-                     f"{competition_verdict.unresolved_reason.value}: {competition_verdict.detail}",
-                     evidence, series_ticker,
-                     unresolved_reason=competition_verdict.unresolved_reason,
-                     unverified=used_unverified)
+    for terminal in (competition_verdict, milestone):
+        if terminal is not None and terminal.unresolved_reason is not None:
+            return build(Sport.UNRESOLVED,
+                         f"{terminal.unresolved_reason.value}: {terminal.detail}",
+                         evidence, series_ticker,
+                         unresolved_reason=terminal.unresolved_reason,
+                         unverified=used_unverified)
 
     verdicts = [v for v in (competition_verdict, milestone, series_verdict, registry_verdict)
                 if v is not None]

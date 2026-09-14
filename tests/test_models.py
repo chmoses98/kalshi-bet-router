@@ -155,3 +155,102 @@ def test_multiple_fills_share_one_order_id():
 def test_fills_without_an_order_id_are_not_grouped():
     fills = [normalize_fill(make_fill(1, order_id=""))]
     assert group_by_order(fills) == {}
+
+
+# ===================== financial domain validation (fail-closed) =============
+#
+# Kalshi contracts trade strictly between $0 and $1 and settle *at* $0 or $1, so
+# a fill price must sit in the open interval (0, 1).  Sub-penny markets taper to
+# finer ticks below $0.01 and above $0.99, so the bounds are expressed
+# exclusively rather than as $0.01/$0.99.
+
+def fill_with(**overrides):
+    raw = make_fill(1)
+    raw.update(overrides)
+    return raw
+
+
+@pytest.mark.parametrize("quantity", ["0", "0.00", "0.0000"])
+def test_zero_quantity_fails_closed(quantity):
+    with pytest.raises(SchemaError, match="positive contract quantity"):
+        normalize_fill(fill_with(count_fp=quantity))
+
+
+@pytest.mark.parametrize("quantity", ["-1.00", "-0.01"])
+def test_negative_quantity_fails_closed(quantity):
+    with pytest.raises(SchemaError, match="positive contract quantity"):
+        normalize_fill(fill_with(count_fp=quantity))
+
+
+def test_legacy_zero_and_negative_counts_fail_closed():
+    raw = fill_with()
+    del raw["count_fp"]
+    raw["count"] = 0
+    with pytest.raises(SchemaError, match="positive contract quantity"):
+        normalize_fill(raw)
+    raw["count"] = -3
+    with pytest.raises(SchemaError, match="positive contract quantity"):
+        normalize_fill(raw)
+
+
+@pytest.mark.parametrize("quantity", ["0.25", "0.0001", "1.00", "1234567.89"])
+def test_valid_quantities_are_accepted_exactly(quantity):
+    assert normalize_fill(fill_with(count_fp=quantity)).count == Decimal(quantity)
+
+
+@pytest.mark.parametrize("price", ["-0.01", "-1.0000"])
+def test_negative_price_fails_closed(price):
+    with pytest.raises(SchemaError, match="valid contract price range"):
+        normalize_fill(fill_with(yes_price_dollars=price))
+
+
+@pytest.mark.parametrize("price", ["0", "0.0000"])
+def test_zero_price_fails_closed(price):
+    with pytest.raises(SchemaError, match="valid contract price range"):
+        normalize_fill(fill_with(yes_price_dollars=price))
+
+
+@pytest.mark.parametrize("price", ["1.0000", "1.00", "1.5000", "2"])
+def test_price_at_or_above_one_dollar_fails_closed(price):
+    """$1.00 is a settlement value, not a tradeable price."""
+    with pytest.raises(SchemaError, match="valid contract price range"):
+        normalize_fill(fill_with(yes_price_dollars=price))
+
+
+@pytest.mark.parametrize("price", ["0.0001", "0.0100", "0.5000", "0.9900", "0.9999"])
+def test_valid_boundary_and_subpenny_prices_are_accepted(price):
+    """Sub-penny ticks below $0.01 and above $0.99 are legitimate."""
+    fill = normalize_fill(fill_with(yes_price_dollars=price))
+    assert fill.price_dollars == Decimal(price)
+
+
+def test_no_side_price_is_validated_too():
+    with pytest.raises(SchemaError, match="valid contract price range"):
+        normalize_fill(fill_with(side="no", no_price_dollars="1.0000"))
+
+
+@pytest.mark.parametrize("cents", [0, 100, -5, 250])
+def test_invalid_legacy_cent_prices_fail_closed(cents):
+    raw = fill_with()
+    del raw["yes_price_dollars"]
+    raw["yes_price"] = cents
+    with pytest.raises(SchemaError, match="valid contract price range"):
+        normalize_fill(raw)
+
+
+@pytest.mark.parametrize("cents", [1, 50, 99])
+def test_valid_legacy_cent_prices_convert_exactly(cents):
+    raw = fill_with()
+    del raw["yes_price_dollars"]
+    raw["yes_price"] = cents
+    assert normalize_fill(raw).price_dollars == Decimal(cents) / Decimal(100)
+
+
+def test_domain_errors_never_echo_the_offending_value():
+    """A contract count and a price are private account data."""
+    with pytest.raises(SchemaError) as excinfo:
+        normalize_fill(fill_with(count_fp="-424242.00"))
+    assert "424242" not in str(excinfo.value)
+    with pytest.raises(SchemaError) as excinfo:
+        normalize_fill(fill_with(yes_price_dollars="7.7777"))
+    assert "7.7777" not in str(excinfo.value)

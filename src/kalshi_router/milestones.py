@@ -14,6 +14,15 @@ competition we care about, and then looking the account's event tickers up
 milestone endpoint, so using this evidence discloses nothing about what the
 owner traded.
 
+Conflicts fail closed
+---------------------
+The same event ticker can surface under more than one competition sweep -- a data
+error, a genuinely cross-listed fixture, or a competition boundary we do not
+understand.  Keeping whichever competition was swept first would make the verdict
+depend on sweep order, so a conflicted event is instead marked and yields **no**
+competition at all; classification stays ``UNRESOLVED``.  Only an aggregate
+conflict count is reported; event tickers are private.
+
 Scope and cost
 --------------
 This is a **backstop**, not the primary signal: it only runs when events remain
@@ -51,8 +60,10 @@ DEFAULT_PAGE_LIMIT = 200
 class MilestoneIndex:
     """Event ticker -> competition, built from public milestone listings."""
 
-    #: event ticker (upper-cased) -> competition display name
+    #: event ticker (upper-cased) -> competition display name (unambiguous only)
     event_to_competition: dict[str, str] = field(default_factory=dict)
+    #: event tickers seen under more than one competition; never resolvable
+    conflicted_events: set[str] = field(default_factory=set)
     requests_issued: int = 0
     competitions_swept: int = 0
     budget_exhausted: bool = False
@@ -60,9 +71,39 @@ class MilestoneIndex:
 
     @property
     def indexed_events(self) -> int:
+        """Events with exactly one observed competition."""
         return len(self.event_to_competition)
 
+    @property
+    def conflict_count(self) -> int:
+        """Events claimed by more than one competition.  Aggregate only."""
+        return len(self.conflicted_events)
+
+    def record(self, event_ticker: str, competition: str) -> None:
+        """Index one event -> competition link, failing closed on disagreement.
+
+        Idempotent for a repeated identical link, and order-independent: once an
+        event is conflicted it stays conflicted regardless of what is swept next.
+        """
+        key = event_ticker.strip().upper()
+        if not key:
+            return
+        if key in self.conflicted_events:
+            return
+        existing = self.event_to_competition.get(key)
+        if existing is None:
+            self.event_to_competition[key] = competition
+        elif existing != competition:
+            del self.event_to_competition[key]
+            self.conflicted_events.add(key)
+
+    def is_conflicted(self, event_ticker: str | None) -> bool:
+        if not event_ticker:
+            return False
+        return event_ticker.strip().upper() in self.conflicted_events
+
     def competition_for_event(self, event_ticker: str | None) -> str | None:
+        """Return the single observed competition, or ``None`` if none/conflicted."""
         if not event_ticker:
             return None
         return self.event_to_competition.get(event_ticker.strip().upper())
@@ -126,7 +167,7 @@ def build_milestone_index(
                 if not isinstance(milestone, dict):
                     continue
                 for ticker in _event_tickers(milestone):
-                    index.event_to_competition.setdefault(ticker, competition)
+                    index.record(ticker, competition)
 
             next_cursor = payload.get("cursor") or ""
             if not isinstance(next_cursor, str) or not next_cursor:

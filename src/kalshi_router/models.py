@@ -18,6 +18,54 @@ from typing import Any, Iterable
 from .errors import SchemaError
 from .fixedpoint import parse_fixed_point
 
+# --------------------------------------------------------------- value domains
+#
+# Syntactic validity is not the same as a valid fill.  ``fixedpoint`` guarantees
+# an exact Decimal; these bounds guarantee it is a quantity or price a real fill
+# could carry.  They live here, in the normalization layer, rather than in the
+# generic parser, so that helper stays purely about decimal syntax.
+#
+# Basis (docs.kalshi.com, and the Q1-2026 fixed-point / sub-penny migration):
+# a Kalshi contract trades strictly between $0 and $1 and settles *at* $0 or $1.
+# The classic range is $0.01-$0.99 at whole-cent ticks; sub-penny markets taper
+# to finer ticks near the edges (deci $0.001, centi $0.0001), so prices below
+# $0.01 and above $0.99 are legitimate on those markets.  The open interval
+# (0, 1) therefore admits every tick structure while still rejecting a
+# settlement value, a zero, or a negative -- none of which is a tradeable price.
+# Bounds are expressed exclusively rather than as a tick-derived min/max so a
+# future tick change cannot make this reject a real fill.
+
+#: Exclusive lower bound for a contract price, in dollars.
+MIN_PRICE_DOLLARS = Decimal("0")
+#: Exclusive upper bound for a contract price, in dollars.
+MAX_PRICE_DOLLARS = Decimal("1")
+#: Exclusive bounds for the legacy integer-cent fields.
+MIN_PRICE_CENTS = 0
+MAX_PRICE_CENTS = 100
+
+
+def _require_positive_quantity(value: Decimal, field: str) -> Decimal:
+    """A fill that executed moved a positive number of contracts.
+
+    Zero or negative is rejected rather than normalized: direction lives in
+    ``action``/``side``, so a signed quantity here would mean the schema is not
+    what we think it is.  The offending value is never echoed -- a contract count
+    is private account data.
+    """
+    if value <= 0:
+        raise SchemaError(f"field {field!r} was not a positive contract quantity")
+    return value
+
+
+def _require_price_in_range(value: Decimal, field: str) -> Decimal:
+    """A contract price must sit strictly between $0 and $1."""
+    if not (MIN_PRICE_DOLLARS < value < MAX_PRICE_DOLLARS):
+        raise SchemaError(
+            f"field {field!r} was outside the valid contract price range "
+            f"(must be greater than $0 and less than $1)"
+        )
+    return value
+
 
 class Action(str, Enum):
     """Direction of the member's execution.
@@ -93,11 +141,12 @@ def _parse_quantity(raw: dict[str, Any]) -> tuple[Decimal | None, str | None, bo
     """
     parsed = parse_fixed_point(raw.get("count_fp"), "count_fp")
     if parsed is not None:
-        return parsed.value, "count_fp", parsed.source_type == "number"
+        value = _require_positive_quantity(parsed.value, "count_fp")
+        return value, "count_fp", parsed.source_type == "number"
 
     legacy = raw.get("count")
     if isinstance(legacy, int) and not isinstance(legacy, bool):
-        return Decimal(legacy), "count", False
+        return _require_positive_quantity(Decimal(legacy), "count"), "count", False
     return None, None, False
 
 
@@ -111,11 +160,18 @@ def _parse_price(raw: dict[str, Any], side: Side) -> tuple[Decimal | None, str |
     dollars_key = "yes_price_dollars" if side is Side.YES else "no_price_dollars"
     parsed = parse_fixed_point(raw.get(dollars_key), dollars_key)
     if parsed is not None:
-        return parsed.value, "price_dollars", parsed.source_type == "number"
+        value = _require_price_in_range(parsed.value, dollars_key)
+        return value, "price_dollars", parsed.source_type == "number"
 
     cents_key = "yes_price" if side is Side.YES else "no_price"
     cents = raw.get(cents_key)
     if isinstance(cents, int) and not isinstance(cents, bool):
+        if not (MIN_PRICE_CENTS < cents < MAX_PRICE_CENTS):
+            raise SchemaError(
+                f"field {cents_key!r} was outside the valid contract price range "
+                f"(must be greater than 0 and less than 100 cents)"
+            )
+        # Exact: Decimal / Decimal, never float division.
         return Decimal(cents) / Decimal(100), "price_cents", False
     return None, None, False
 

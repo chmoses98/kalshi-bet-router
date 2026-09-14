@@ -57,6 +57,9 @@ class AuditReport:
     # --- why classification failed (per fill)
     unresolved_competition_absent: int = 0
     unresolved_competition_unknown: int = 0
+    unresolved_competition_ambiguous: int = 0
+    unresolved_milestone_conflict: int = 0
+    unresolved_malformed_event_metadata: int = 0
     unresolved_evidence_conflict: int = 0
     unresolved_ambiguous_family: int = 0
     unresolved_metadata_lookup_failed: int = 0
@@ -70,6 +73,7 @@ class AuditReport:
     events_with_metadata_retrieved: int = 0
     events_with_competition: int = 0
     events_with_competition_scope: int = 0
+    events_with_malformed_metadata: int = 0
     event_metadata_lookup_failures: int = 0
     metadata_lookup_failures: int = 0
     metadata_partial_failures: int = 0
@@ -79,12 +83,14 @@ class AuditReport:
     taxonomy_available: bool = False
     taxonomy_sports: int = 0
     taxonomy_competitions: int = 0
+    taxonomy_competition_collisions: int = 0
     taxonomy_skipped_sports: int = 0
 
     # --- public milestone backstop
     milestone_index_built: bool = False
     milestone_requests_issued: int = 0
     milestone_events_indexed: int = 0
+    milestone_event_conflicts: int = 0
     milestone_fetch_failed: bool = False
     milestone_budget_exhausted: bool = False
 
@@ -175,6 +181,9 @@ class AuditReport:
             "unresolved reasons (fills):",
             f"  competition absent: {self.unresolved_competition_absent}",
             f"  competition unknown (fail-closed): {self.unresolved_competition_unknown}",
+            f"  competition ambiguous in taxonomy: {self.unresolved_competition_ambiguous}",
+            f"  milestone competition conflict: {self.unresolved_milestone_conflict}",
+            f"  malformed event metadata: {self.unresolved_malformed_event_metadata}",
             f"  authoritative evidence conflict: {self.unresolved_evidence_conflict}",
             f"  ambiguous sport family: {self.unresolved_ambiguous_family}",
             f"  metadata lookup failed: {self.unresolved_metadata_lookup_failed}",
@@ -188,6 +197,7 @@ class AuditReport:
             f"  events with metadata retrieved: {self.events_with_metadata_retrieved}",
             f"  events with non-null competition: {self.events_with_competition}",
             f"  events with non-null competition_scope: {self.events_with_competition_scope}",
+            f"  events with malformed metadata: {self.events_with_malformed_metadata}",
             f"  event metadata lookup failures: {self.event_metadata_lookup_failures}",
             f"  market lookup failures: {self.metadata_lookup_failures}",
             f"  partial lookup failures: {self.metadata_partial_failures}",
@@ -198,12 +208,15 @@ class AuditReport:
             f"  taxonomy available: {self.taxonomy_available}",
             f"  sports in taxonomy: {self.taxonomy_sports}",
             f"  competitions in taxonomy: {self.taxonomy_competitions}",
+            f"  competitions claimed by >1 sport (fail-closed): "
+            f"{self.taxonomy_competition_collisions}",
             f"  taxonomy entries skipped: {self.taxonomy_skipped_sports}",
             "",
             "public milestone backstop:",
             f"  milestone index built: {self.milestone_index_built}",
             f"  milestone requests issued: {self.milestone_requests_issued}",
             f"  milestone event links indexed: {self.milestone_events_indexed}",
+            f"  events under >1 competition (fail-closed): {self.milestone_event_conflicts}",
             f"  milestone fetch failed: {self.milestone_fetch_failed}",
             f"  milestone budget exhausted: {self.milestone_budget_exhausted}",
             "",

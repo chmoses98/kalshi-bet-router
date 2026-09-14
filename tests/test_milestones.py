@@ -8,6 +8,7 @@ from kalshi_router.client import KalshiReadOnlyClient
 from kalshi_router.config import AuditConfig
 from kalshi_router.errors import SchemaError
 from kalshi_router.milestones import (
+    MilestoneIndex,
     TARGET_COMPETITIONS,
     build_milestone_index,
     parse_milestones_payload,
@@ -123,10 +124,69 @@ def test_non_object_milestone_entries_are_skipped(signer):
         lambda m, p, q: (200, {"milestones": ["oops", make_milestone("m", ["KXA"])], "cursor": ""}),
         signer,
     )
-    assert build_milestone_index(client).competition_for_event("KXA") is not None
+    index = build_milestone_index(client, competitions=["Pro Football"])
+    assert index.competition_for_event("KXA") == "Pro Football"
 
 
 @pytest.mark.parametrize("payload", [{}, {"milestones": "x"}, {"milestones": 3}])
 def test_parse_milestones_payload_fails_closed(payload):
     with pytest.raises(SchemaError):
         parse_milestones_payload(payload)
+
+
+# ================================ event conflicts ============================
+
+def test_duplicate_link_under_the_same_competition_is_harmless(signer):
+    client, _ = build(milestone_handler({
+        "Pro Football": [make_milestone("m1", ["KXA"]), make_milestone("m2", ["KXA"])],
+    }), signer)
+    index = build_milestone_index(client, competitions=["Pro Football"])
+    assert index.competition_for_event("KXA") == "Pro Football"
+    assert index.conflict_count == 0
+    assert index.indexed_events == 1
+
+
+def test_event_under_two_competitions_becomes_conflicted(signer):
+    client, _ = build(milestone_handler({
+        "Pro Football": [make_milestone("m1", ["KXA", "KXONLYPRO"])],
+        "College Football": [make_milestone("m2", ["KXA", "KXONLYCFB"])],
+    }), signer)
+    index = build_milestone_index(client)
+    assert index.is_conflicted("KXA") is True
+    assert index.competition_for_event("KXA") is None
+    assert index.conflict_count == 1
+    # Unaffected events still resolve.
+    assert index.competition_for_event("KXONLYPRO") == "Pro Football"
+    assert index.competition_for_event("KXONLYCFB") == "College Football"
+
+
+def test_sweep_order_cannot_change_the_result(signer):
+    both = {
+        "Pro Football": [make_milestone("m1", ["KXA"])],
+        "College Football": [make_milestone("m2", ["KXA"])],
+    }
+    client_a, _ = build(milestone_handler(both), signer)
+    client_b, _ = build(milestone_handler(both), signer)
+    forward = build_milestone_index(client_a, competitions=["Pro Football", "College Football"])
+    reverse = build_milestone_index(client_b, competitions=["College Football", "Pro Football"])
+    assert forward.competition_for_event("KXA") is None
+    assert reverse.competition_for_event("KXA") is None
+    assert forward.conflict_count == reverse.conflict_count == 1
+
+
+def test_a_conflicted_event_stays_conflicted_after_a_repeat_link():
+    index = MilestoneIndex()
+    index.record("KXA", "Pro Football")
+    index.record("KXA", "College Football")
+    index.record("KXA", "Pro Football")
+    index.record("KXA", "Pro Football")
+    assert index.competition_for_event("KXA") is None
+    assert index.is_conflicted("KXA") is True
+    assert index.indexed_events == 0
+
+
+def test_record_is_case_insensitive_when_detecting_conflicts():
+    index = MilestoneIndex()
+    index.record("kxa", "Pro Football")
+    index.record("KXA", "College Football")
+    assert index.competition_for_event("KXA") is None

@@ -19,6 +19,17 @@ the published reference, so parsing is deliberately structural rather than
 positional: any list found under a competitions-like or scopes-like key is read,
 and entries are accepted as bare strings or as objects carrying a name field.
 Unrecognized shapes are skipped and counted, never guessed at.
+
+Ownership collisions fail closed
+--------------------------------
+If one normalized competition name appears beneath **more than one sport**, the
+taxonomy cannot say which sport owns it.  Picking whichever sport was parsed
+first would make classification depend on dictionary iteration order, which is
+exactly the kind of silent guess this system exists to avoid.  Such a competition
+is marked ambiguous instead: :meth:`SportTaxonomy.sport_for_competition` returns
+``None`` for it, and the classifier fails closed to ``UNRESOLVED``.  Only an
+aggregate collision count is ever reported; the competition string itself is
+private.
 """
 
 from __future__ import annotations
@@ -58,8 +69,10 @@ def _entry_names(value: Any) -> list[str]:
 class SportTaxonomy:
     """Competition -> sport index built from the live taxonomy."""
 
-    #: normalized competition name -> normalized sport name
+    #: normalized competition name -> normalized sport name (unambiguous only)
     competition_to_sport: dict[str, str] = field(default_factory=dict)
+    #: normalized competitions claimed by more than one sport; never resolvable
+    ambiguous_competitions: set[str] = field(default_factory=set)
     #: normalized sport name -> original display name
     sports: dict[str, str] = field(default_factory=dict)
     #: normalized scope names observed, for diagnostics only
@@ -73,11 +86,29 @@ class SportTaxonomy:
 
     @property
     def competition_count(self) -> int:
+        """Competitions with exactly one owning sport."""
         return len(self.competition_to_sport)
 
+    @property
+    def collision_count(self) -> int:
+        """Competitions claimed by more than one sport.  Aggregate only."""
+        return len(self.ambiguous_competitions)
+
+    def is_ambiguous_competition(self, competition: str) -> bool:
+        """True when more than one sport claims this competition."""
+        return normalize(competition) in self.ambiguous_competitions
+
     def sport_for_competition(self, competition: str) -> str | None:
-        """Return the normalized sport name owning this competition, if known."""
-        return self.competition_to_sport.get(normalize(competition))
+        """Return the sport owning this competition, or ``None``.
+
+        ``None`` covers both "unknown" and "claimed by several sports"; callers
+        must treat either as fail-closed rather than picking a winner.  Use
+        :meth:`is_ambiguous_competition` to tell the two apart for reporting.
+        """
+        key = normalize(competition)
+        if key in self.ambiguous_competitions:
+            return None
+        return self.competition_to_sport.get(key)
 
 
 def parse_filters_by_sport(payload: dict[str, Any]) -> SportTaxonomy:
@@ -96,6 +127,10 @@ def parse_filters_by_sport(payload: dict[str, Any]) -> SportTaxonomy:
         )
 
     taxonomy = SportTaxonomy()
+    # Collect every claimant first, so the outcome cannot depend on the order in
+    # which sports happen to be iterated.
+    claimants: dict[str, set[str]] = {}
+
     for sport_name, details in filters.items():
         if not isinstance(sport_name, str) or not sport_name.strip():
             taxonomy.skipped_sports += 1
@@ -110,9 +145,17 @@ def parse_filters_by_sport(payload: dict[str, Any]) -> SportTaxonomy:
 
         for key in _COMPETITION_KEYS:
             for competition in _entry_names(details.get(key)):
-                taxonomy.competition_to_sport.setdefault(normalize(competition), normalized_sport)
+                claimants.setdefault(normalize(competition), set()).add(normalized_sport)
         for key in _SCOPE_KEYS:
             for scope in _entry_names(details.get(key)):
                 taxonomy.scopes.add(normalize(scope))
+
+    for competition, sports in claimants.items():
+        if len(sports) == 1:
+            taxonomy.competition_to_sport[competition] = next(iter(sports))
+        else:
+            # Two or more sports claim this name: the taxonomy cannot say who
+            # owns it, so nobody does.
+            taxonomy.ambiguous_competitions.add(competition)
 
     return taxonomy

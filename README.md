@@ -141,6 +141,21 @@ Precedence and conflict rules:
 * Ticker resemblance and prefix guessing remain forbidden. L5 matches a full
   series ticker exactly or not at all.
 
+### Ambiguity in the sources themselves also fails closed
+
+Three cases where the *evidence* is internally inconsistent. In each, the answer
+is `UNRESOLVED` and an aggregate count — never a pick:
+
+| Case | Behaviour |
+|---|---|
+| One competition name claimed by **two sports** in the taxonomy | That competition resolves to nothing, for anyone. Not even our own direct rules may override the exchange's own ambiguity. Counted as `competitions claimed by >1 sport`. |
+| One event ticker appearing under **two competitions** in the milestone sweep | That event yields no competition. Once conflicted, always conflicted — sweep order cannot change the verdict. Counted as `events under >1 competition`. |
+| `competition` present but **wrong-typed** (`123`, `[]`, `{}`) | Malformed metadata. Fails closed *before any evidence is gathered*, so it cannot be rescued by L4 series metadata or the L5 registry. A genuine `null` is different: that is a valid absence and does fall through. |
+
+Both collision checks are **order-independent by construction**: claimants are
+collected first and resolved afterwards, so the result never depends on
+dictionary or sweep iteration order.
+
 ## 6. Fail-closed policy
 
 **Unknown does not mean guess.**
@@ -181,14 +196,18 @@ pip install -e ".[dev]"
 pytest
 ```
 
-261 tests cover authentication and secret redaction, missing-credential failure,
+The suite (run `pytest` for the current count — it is deliberately not duplicated
+into prose that can drift) covers authentication and secret redaction,
+missing-credential failure,
 pagination, duplicate fills, malformed responses, empty result sets, rate-limit
 and retry behaviour, metadata lookup, event-metadata competition resolution, the
 sport taxonomy (including malformed taxonomies), the milestone backstop and its
 privacy property, exact `Decimal` parsing of `count_fp` and the dollar price
 fields, each of the six classifications, every fail-closed path, buy/sell, YES/NO,
 multi-fill orders, privacy-safe logging, the sensitive local mode, and the
-workflow's inability to print raw fill objects.
+workflow's inability to print raw fill objects. It also covers every fail-closed
+path added in review: taxonomy competition collisions, milestone event conflicts,
+malformed event metadata, and the quantity/price domain bounds.
 
 ## 9. How to run the safe GitHub Actions audit
 

@@ -279,3 +279,63 @@ def test_details_are_withheld_unless_explicitly_requested(signer):
     assert detailed.details[0].competition == "Pro Baseball"
     assert detailed.details[0].resolved_by is EvidenceLevel.L1_EVENT_COMPETITION
     assert detailed.details[0].evidence
+
+
+# =================== Phase 0.1 fail-closed paths, end to end =================
+
+def test_taxonomy_collision_makes_the_audit_unresolved_and_counted(signer):
+    from .synthetic import make_taxonomy
+
+    colliding = make_taxonomy({
+        "Baseball": ["Pro Baseball"],
+        "Tennis": ["Pro Baseball"],  # same name claimed by two sports
+    })
+    pages = [[make_fill(1, ticker=market_for("MLB"))]]
+    report = run_audit(build_client(pages, signer, taxonomy=colliding)).report
+    assert report.classification_counts[Sport.MLB] == 0
+    assert report.classification_counts[Sport.UNRESOLVED] == 1
+    assert report.unresolved_competition_ambiguous == 1
+    assert report.taxonomy_competition_collisions == 1
+
+
+def test_milestone_conflict_makes_the_audit_unresolved_and_counted(signer):
+    from .synthetic import make_milestone
+
+    metadata = build_metadata()
+    metadata[f"{event_for('AMB')}/metadata"] = make_event_metadata(None, None)
+    # The same event surfaces under two competition sweeps.
+    milestones = [
+        make_milestone("m1", [event_for("AMB")], competition="Pro Football"),
+        make_milestone("m2", [event_for("AMB")], competition="College Football"),
+    ]
+    pages = [[make_fill(1, ticker=market_for("AMB"))]]
+    report = run_audit(
+        build_client(pages, signer, metadata=metadata, milestones=milestones)
+    ).report
+    assert report.classification_counts[Sport.UNRESOLVED] == 1
+    assert report.classification_counts[Sport.NFL] == 0
+    assert report.classification_counts[Sport.CFB] == 0
+    assert report.milestone_event_conflicts >= 1
+    assert report.unresolved_milestone_conflict == 1
+
+
+def test_malformed_event_metadata_is_counted_and_never_rescued(signer):
+    metadata = build_metadata()
+    metadata[f"{event_for('MLB')}/metadata"] = {"competition": 123, "competition_scope": None}
+    pages = [[make_fill(1, ticker=market_for("MLB"))]]
+    report = run_audit(build_client(pages, signer, metadata=metadata)).report
+    assert report.classification_counts[Sport.UNRESOLVED] == 1
+    assert report.classification_counts[Sport.MLB] == 0
+    assert report.unresolved_malformed_event_metadata == 1
+    assert report.events_with_malformed_metadata == 1
+    assert report.events_with_competition == 0
+
+
+def test_a_bad_quantity_fails_the_audit_closed(signer):
+    from kalshi_router.errors import SchemaError
+    import pytest as _pytest
+
+    bad = make_fill(1, ticker=market_for("MLB"))
+    bad["count_fp"] = "0.00"
+    with _pytest.raises(SchemaError):
+        run_audit(build_client([[bad]], signer))

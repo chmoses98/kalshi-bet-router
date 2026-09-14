@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from .classify import MarketContext
+from .classify import MarketContext, validate_metadata_string_field
 from .client import KalshiReadOnlyClient
 from .errors import KalshiRouterError
 
@@ -36,6 +36,7 @@ class ResolverStats:
     event_metadata_failures: int = 0
     events_with_competition: int = 0
     events_with_competition_scope: int = 0
+    events_with_malformed_metadata: int = 0
 
     def as_dict(self) -> dict[str, int]:
         return {
@@ -48,6 +49,7 @@ class ResolverStats:
             "event_metadata_failures": self.event_metadata_failures,
             "events_with_competition": self.events_with_competition,
             "events_with_competition_scope": self.events_with_competition_scope,
+            "events_with_malformed_metadata": self.events_with_malformed_metadata,
         }
 
 
@@ -135,12 +137,17 @@ class MetadataResolver:
             return None, _failure_label(exc)
 
         self.stats.event_metadata_retrieved += 1
-        competition = metadata.get("competition")
-        if isinstance(competition, str) and competition.strip():
-            self.stats.events_with_competition += 1
-        scope = metadata.get("competition_scope")
-        if isinstance(scope, str) and scope.strip():
-            self.stats.events_with_competition_scope += 1
+        # Presence is only counted for a *valid* value; a wrong-typed field is
+        # counted as malformed and will fail the classification closed.
+        competition, competition_error = validate_metadata_string_field(metadata, "competition")
+        scope, scope_error = validate_metadata_string_field(metadata, "competition_scope")
+        if competition_error or scope_error:
+            self.stats.events_with_malformed_metadata += 1
+        else:
+            if competition:
+                self.stats.events_with_competition += 1
+            if scope:
+                self.stats.events_with_competition_scope += 1
 
         self._event_metadata_cache[key] = metadata
         return metadata, None

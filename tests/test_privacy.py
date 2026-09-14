@@ -207,3 +207,51 @@ def test_sensitive_mode_is_the_only_place_competition_appears(signer):
 def test_json_mode_exposes_no_strings(signer):
     data = rich_result(signer).report.as_dict()
     assert all(isinstance(v, (int, bool)) for v in data.values())
+
+
+# ============ Phase 0.1 fail-closed counters stay aggregate-only =============
+
+def test_taxonomy_collisions_are_reported_as_a_count_not_a_name(signer):
+    from kalshi_router.taxonomy import parse_filters_by_sport
+    from .synthetic import make_taxonomy
+
+    taxonomy = parse_filters_by_sport(make_taxonomy({
+        "Football": ["Private Shared Competition"],
+        "Tennis": ["Private Shared Competition"],
+    }))
+    report = rich_result(signer).report
+    report.taxonomy_competition_collisions = taxonomy.collision_count
+    rendered = report.render()
+    assert "competitions claimed by >1 sport (fail-closed): 1" in rendered
+    assert "Private Shared Competition" not in rendered
+
+
+def test_milestone_conflicts_are_reported_as_a_count_not_a_ticker(signer):
+    from kalshi_router.milestones import MilestoneIndex
+
+    index = MilestoneIndex()
+    index.record("KXPRIVATEEVENT-01", "Pro Football")
+    index.record("KXPRIVATEEVENT-01", "College Football")
+    report = rich_result(signer).report
+    report.milestone_event_conflicts = index.conflict_count
+    rendered = report.render()
+    assert "events under >1 competition (fail-closed): 1" in rendered
+    assert "KXPRIVATEEVENT" not in rendered
+
+
+def test_malformed_metadata_counter_names_no_field_value(signer):
+    report = rich_result(signer).report
+    report.unresolved_malformed_event_metadata = 3
+    report.events_with_malformed_metadata = 3
+    rendered = report.render()
+    assert "malformed event metadata: 3" in rendered
+    assert "events with malformed metadata: 3" in rendered
+
+
+def test_all_new_counters_are_still_integers(signer):
+    data = rich_result(signer).report.as_dict()
+    for key in ("taxonomy_competition_collisions", "milestone_event_conflicts",
+                "unresolved_competition_ambiguous", "unresolved_milestone_conflict",
+                "unresolved_malformed_event_metadata", "events_with_malformed_metadata"):
+        assert key in data
+        assert isinstance(data[key], int)

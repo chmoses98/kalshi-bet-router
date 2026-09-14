@@ -69,3 +69,66 @@ def test_empty_taxonomy_is_valid():
 def test_malformed_taxonomy_envelope_fails_closed(payload):
     with pytest.raises(SchemaError):
         parse_filters_by_sport(payload)
+
+
+# ============================ competition ownership collisions ===============
+
+def test_same_competition_repeated_under_one_sport_is_harmless():
+    payload = {
+        "filters_by_sports": {
+            "Football": {
+                "competitions": ["Pro Football", "Pro Football", "pro  FOOTBALL"],
+                "leagues": ["Pro Football"],
+            }
+        },
+        "sport_ordering": ["Football"],
+    }
+    taxonomy = parse_filters_by_sport(payload)
+    assert taxonomy.sport_for_competition("Pro Football") == "football"
+    assert taxonomy.is_ambiguous_competition("Pro Football") is False
+    assert taxonomy.collision_count == 0
+
+
+def test_same_competition_under_two_sports_becomes_ambiguous():
+    taxonomy = parse_filters_by_sport(make_taxonomy({
+        "Football": ["Shared Competition", "Pro Football"],
+        "Tennis": ["Shared Competition", "ATP Madrid"],
+    }))
+    assert taxonomy.is_ambiguous_competition("Shared Competition") is True
+    assert taxonomy.sport_for_competition("Shared Competition") is None
+    assert taxonomy.collision_count == 1
+    # Unaffected competitions still resolve.
+    assert taxonomy.sport_for_competition("Pro Football") == "football"
+    assert taxonomy.sport_for_competition("ATP Madrid") == "tennis"
+
+
+def test_collision_is_detected_across_normalization():
+    taxonomy = parse_filters_by_sport(make_taxonomy({
+        "Football": ["Shared  Competition"],
+        "Tennis": ["shared competition"],
+    }))
+    assert taxonomy.sport_for_competition("SHARED COMPETITION") is None
+    assert taxonomy.collision_count == 1
+
+
+def test_sport_ordering_cannot_change_the_outcome():
+    forward = parse_filters_by_sport(make_taxonomy({
+        "Football": ["Shared Competition"],
+        "Tennis": ["Shared Competition"],
+    }))
+    reverse = parse_filters_by_sport(make_taxonomy({
+        "Tennis": ["Shared Competition"],
+        "Football": ["Shared Competition"],
+    }))
+    assert forward.sport_for_competition("Shared Competition") is None
+    assert reverse.sport_for_competition("Shared Competition") is None
+    assert forward.collision_count == reverse.collision_count == 1
+
+
+def test_three_way_collision_is_still_one_ambiguous_competition():
+    taxonomy = parse_filters_by_sport(make_taxonomy({
+        "Football": ["Shared"], "Tennis": ["Shared"], "Baseball": ["Shared"],
+    }))
+    assert taxonomy.sport_for_competition("Shared") is None
+    assert taxonomy.collision_count == 1
+    assert taxonomy.competition_count == 0

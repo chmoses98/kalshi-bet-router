@@ -450,3 +450,200 @@ def test_classification_carries_auditable_evidence():
 def test_word_boundaries_prevent_substring_false_positives():
     result = classify_market(context(series_extra={"title": "Adaptation index", "tags": []}))
     assert result.sport is Sport.UNRESOLVED
+
+
+# ================== ambiguous taxonomy competition (fail-closed) =============
+
+AMBIGUOUS_TAXONOMY = parse_filters_by_sport(make_taxonomy({
+    "Football": ["Shared Competition", "Pro Football"],
+    "Tennis": ["Shared Competition"],
+}))
+
+
+def test_ambiguous_taxonomy_competition_is_unresolved():
+    result = classify_market(
+        context(competition="Shared Competition"), taxonomy=AMBIGUOUS_TAXONOMY
+    )
+    assert result.sport is Sport.UNRESOLVED
+    assert result.unresolved_reason is UnresolvedReason.COMPETITION_AMBIGUOUS
+
+
+def test_ambiguous_competition_can_never_route_any_classification():
+    """Requirement: never MLB, NFL, CFB, TENNIS or OTHER."""
+    taxonomy = parse_filters_by_sport(make_taxonomy({
+        # A colliding name that our own direct rules would otherwise resolve.
+        "Football": ["Pro Football"],
+        "Tennis": ["Pro Football"],
+    }))
+    result = classify_market(
+        context(
+            market_ticker="KXNFLGAME-SYNTH01-KC",
+            event_ticker="KXNFLGAME-SYNTH01",
+            series_ticker="KXNFLGAME",
+            competition="Pro Football",
+            series_extra={"category": "Sports", "tags": ["NFL"]},
+        ),
+        taxonomy=taxonomy,
+    )
+    assert result.sport is Sport.UNRESOLVED
+    assert result.is_routable is False
+    assert result.resolved_by is None
+
+
+def test_ambiguous_competition_is_not_rescued_by_series_or_registry():
+    result = classify_market(
+        context(
+            market_ticker="KXMLBGAME-SYNTH01-NYY",
+            event_ticker="KXMLBGAME-SYNTH01",
+            series_ticker="KXMLBGAME",
+            competition="Shared Competition",
+            series_extra={"category": "Sports", "tags": ["MLB"]},
+        ),
+        taxonomy=AMBIGUOUS_TAXONOMY,
+    )
+    assert result.sport is Sport.UNRESOLVED
+
+
+def test_taxonomy_sport_ordering_does_not_change_classification():
+    forward = parse_filters_by_sport(make_taxonomy({
+        "Football": ["Shared Competition"], "Tennis": ["Shared Competition"],
+    }))
+    reverse = parse_filters_by_sport(make_taxonomy({
+        "Tennis": ["Shared Competition"], "Football": ["Shared Competition"],
+    }))
+    a = classify_market(context(competition="Shared Competition"), taxonomy=forward)
+    b = classify_market(context(competition="Shared Competition"), taxonomy=reverse)
+    assert a.sport is b.sport is Sport.UNRESOLVED
+
+
+# ==================== conflicted milestone evidence (fail-closed) ============
+
+def test_conflicted_milestone_event_is_unresolved():
+    index = MilestoneIndex()
+    index.record("KXTEST-SYNTH01", "Pro Football")
+    index.record("KXTEST-SYNTH01", "College Football")
+    result = classify_market(context(with_event_metadata=True), milestone_index=index)
+    assert result.sport is Sport.UNRESOLVED
+    assert result.unresolved_reason is UnresolvedReason.MILESTONE_CONFLICT
+
+
+def test_conflicted_milestone_evidence_never_routes_a_wager():
+    index = MilestoneIndex()
+    index.record("KXNFLGAME-SYNTH01", "Pro Football")
+    index.record("KXNFLGAME-SYNTH01", "College Football")
+    result = classify_market(
+        context(
+            market_ticker="KXNFLGAME-SYNTH01-KC",
+            event_ticker="KXNFLGAME-SYNTH01",
+            series_ticker="KXNFLGAME",
+            with_event_metadata=True,
+        ),
+        milestone_index=index,
+    )
+    assert result.sport is Sport.UNRESOLVED
+    assert result.is_routable is False
+
+
+# ================= malformed event metadata (fail-closed) ====================
+
+@pytest.mark.parametrize("bad", [123, 12.5, [], {}, ["Pro Football"], {"name": "Pro Football"}, True])
+def test_wrong_typed_competition_is_malformed_not_absent(bad):
+    result = classify_market(
+        MarketContext(
+            market_ticker="KXTEST-SYNTH01-AAA",
+            market=make_market("KXTEST-SYNTH01-AAA", "KXTEST-SYNTH01"),
+            event_metadata={"competition": bad, "competition_scope": None},
+        )
+    )
+    assert result.sport is Sport.UNRESOLVED
+    assert result.unresolved_reason is UnresolvedReason.MALFORMED_EVENT_METADATA
+
+
+@pytest.mark.parametrize("bad", [123, [], {}, False])
+def test_wrong_typed_competition_scope_is_malformed(bad):
+    result = classify_market(
+        MarketContext(
+            market_ticker="KXTEST-SYNTH01-AAA",
+            market=make_market("KXTEST-SYNTH01-AAA", "KXTEST-SYNTH01"),
+            event_metadata={"competition": "Pro Baseball", "competition_scope": bad},
+        )
+    )
+    assert result.sport is Sport.UNRESOLVED
+    assert result.unresolved_reason is UnresolvedReason.MALFORMED_EVENT_METADATA
+
+
+def test_malformed_competition_cannot_be_rescued_by_series_metadata():
+    # A wrong-typed competition on a market series metadata would otherwise resolve.
+    result = classify_market(
+        MarketContext(
+            market_ticker="KXMLBGAME-SYNTH01-NYY",
+            market=make_market("KXMLBGAME-SYNTH01-NYY", "KXMLBGAME-SYNTH01"),
+            event=make_event("KXMLBGAME-SYNTH01", "KXMLBGAME"),
+            series=make_series("KXMLBGAME", category="Sports", tags=["MLB"]),
+            event_metadata={"competition": 123},
+        )
+    )
+    assert result.sport is Sport.UNRESOLVED
+    assert result.unresolved_reason is UnresolvedReason.MALFORMED_EVENT_METADATA
+    assert result.evidence == ()
+
+
+def test_malformed_competition_cannot_be_rescued_by_the_registry():
+    result = classify_market(
+        MarketContext(
+            market_ticker="KXNFLGAME-SYNTH01-KC",
+            market=make_market("KXNFLGAME-SYNTH01-KC", "KXNFLGAME-SYNTH01"),
+            event=make_event("KXNFLGAME-SYNTH01", "KXNFLGAME"),
+            event_metadata={"competition": []},
+        )
+    )
+    assert result.sport is Sport.UNRESOLVED
+    assert result.unresolved_reason is UnresolvedReason.MALFORMED_EVENT_METADATA
+
+
+def test_null_competition_is_valid_and_falls_through():
+    result = classify_market(
+        MarketContext(
+            market_ticker="KXMLBGAME-SYNTH01-NYY",
+            market=make_market("KXMLBGAME-SYNTH01-NYY", "KXMLBGAME-SYNTH01"),
+            series=make_series("KXMLBGAME", category="Sports", tags=["MLB"]),
+            event_metadata={"competition": None, "competition_scope": None},
+        )
+    )
+    assert result.sport is Sport.MLB
+
+
+def test_valid_string_competition_is_accepted():
+    result = classify_market(
+        MarketContext(
+            market_ticker="KXTEST-SYNTH01-AAA",
+            market=make_market("KXTEST-SYNTH01-AAA", "KXTEST-SYNTH01"),
+            event_metadata={"competition": "Pro Baseball", "competition_scope": "Game"},
+        )
+    )
+    assert result.sport is Sport.MLB
+
+
+def test_empty_string_competition_is_treated_as_an_absence_not_corruption():
+    """An empty string is still the documented type and asserts no competition."""
+    result = classify_market(
+        MarketContext(
+            market_ticker="KXMLBGAME-SYNTH01-NYY",
+            market=make_market("KXMLBGAME-SYNTH01-NYY", "KXMLBGAME-SYNTH01"),
+            series=make_series("KXMLBGAME", category="Sports", tags=["MLB"]),
+            event_metadata={"competition": "   ", "competition_scope": None},
+        )
+    )
+    assert result.sport is Sport.MLB
+    assert result.unresolved_reason is None
+
+
+def test_malformed_metadata_error_never_echoes_the_value():
+    result = classify_market(
+        MarketContext(
+            market_ticker="KXTEST-SYNTH01-AAA",
+            market=make_market("KXTEST-SYNTH01-AAA", "KXTEST-SYNTH01"),
+            event_metadata={"competition": ["Secret Competition"]},
+        )
+    )
+    assert "Secret Competition" not in result.reason

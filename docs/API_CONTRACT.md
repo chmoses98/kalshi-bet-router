@@ -79,6 +79,25 @@ Some markets quote sub-penny ticks as fine as **$0.001**, so an integer-cent fie
 cannot represent every price. That is why the `_dollars` fields exist and why
 reading prices from the legacy integer fields is lossy.
 
+### Value domains (not just syntax)
+
+An exactly-parsed decimal is not automatically a valid fill. `models.py` enforces
+the domains below; `fixedpoint.py` stays purely about decimal syntax so it does
+not become a misleading place to look for financial rules.
+
+| Field | Rule | Basis |
+|---|---|---|
+| `count_fp` / legacy `count` | must be **> 0** | a fill that executed moved a positive number of contracts; direction lives in `action`/`side`, so a signed quantity would mean the schema is not what we think it is |
+| `yes_price_dollars` / `no_price_dollars` | must be **> $0 and < $1** | a contract trades strictly between $0 and $1 and *settles* at $0 or $1; classic range is $0.01–$0.99 at whole-cent ticks, and sub-penny markets taper to deci ($0.001) / centi ($0.0001) ticks below $0.01 and above $0.99 |
+| legacy `yes_price` / `no_price` (cents) | must be **> 0 and < 100** | the integer-cent equivalent of the same interval |
+
+The price bounds are written as an **open interval** rather than as a
+tick-derived min/max, so a future tick change cannot make this reject a real
+fill, while a settlement value, a zero, or a negative is still refused.
+
+Domain errors never echo the offending value — a contract count and a price are
+private account data, and the error text reaches a public log.
+
 ### Internal representation rule
 
 `src/kalshi_router/fixedpoint.py` parses every one of these into
@@ -131,6 +150,16 @@ and critically:
 `competition` is what separates **Pro Football** from **College Football**, which
 is exactly the NFL/CFB ambiguity the Phase 0 classifier had to refuse 144 times.
 
+Both fields are documented as `string | null`, and that contract is enforced
+explicitly rather than by duck-typing:
+
+| Value | Treatment |
+|---|---|
+| `null` or absent | valid absence; falls through to weaker evidence |
+| non-empty string | valid |
+| empty / whitespace-only string | still the documented *type* and asserts no competition, so treated as an absence |
+| any other non-null type (`123`, `[]`, `{}`, `true`) | **malformed**; fails closed to `UNRESOLVED` before any evidence is gathered, so it can never be rescued by L4 or L5. Never coerced. |
+
 The documented response carries these at the top level; a wrapped envelope is
 also accepted, since the envelope is the one part of this route not confirmed
 against a live response. A non-object response fails closed. A **null**
@@ -158,6 +187,12 @@ competitions-like or scopes-like list is read, entries may be bare strings or
 objects carrying a name field, and unrecognized shapes are skipped and counted.
 A malformed top-level envelope raises.
 
+**Ownership collisions fail closed.** If one normalized competition name appears
+under more than one sport, no sport owns it: `sport_for_competition` returns
+`None`, the classifier fails closed, and only an aggregate collision count is
+reported. Claimants are collected before any assignment is made, so the outcome
+cannot depend on iteration order.
+
 ### `GET /milestones` — the backstop
 
 Filters: `category` (`Sports`, `Elections`, `Esports`, `Crypto`), `competition`
@@ -171,6 +206,12 @@ real-world fixture to Kalshi event tickers.
 **Privacy property**: the index is built by asking Kalshi for the *public*
 milestone list of each competition we care about, then looking the account's event
 tickers up **locally**. The account's tickers are never sent to this endpoint.
+
+**Conflicts fail closed.** If one event ticker surfaces under more than one
+competition sweep, the index keeps neither: the event is marked conflicted,
+yields no competition, and the classification stays `UNRESOLVED`. Once conflicted
+an event stays conflicted, so sweep order cannot change a verdict. Only an
+aggregate conflict count is reported.
 
 Scope: a bounded backstop, not a primary signal. It runs only when markets remain
 unresolved for a reason milestones could repair, sweeps only the three

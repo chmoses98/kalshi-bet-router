@@ -99,6 +99,7 @@ def _fetch_taxonomy(client: KalshiReadOnlyClient, report: AuditReport) -> SportT
     report.taxonomy_available = True
     report.taxonomy_sports = taxonomy.sport_count
     report.taxonomy_competitions = taxonomy.competition_count
+    report.taxonomy_competition_collisions = taxonomy.collision_count
     report.taxonomy_skipped_sports = taxonomy.skipped_sports
     return taxonomy
 
@@ -107,6 +108,7 @@ def _record_milestone_stats(report: AuditReport, index: MilestoneIndex) -> None:
     report.milestone_index_built = True
     report.milestone_requests_issued = index.requests_issued
     report.milestone_events_indexed = index.indexed_events
+    report.milestone_event_conflicts = index.conflict_count
     report.milestone_fetch_failed = index.fetch_failed
     report.milestone_budget_exhausted = index.budget_exhausted
 
@@ -189,7 +191,10 @@ def run_audit(
     if use_milestones and repairable:
         index = build_milestone_index(client)
         _record_milestone_stats(report, index)
-        if index.indexed_events:
+        # A conflicted event carries no competition, so ``indexed_events`` can be
+        # zero while the sweep still has something decisive to say: that the
+        # evidence conflicts and the market must stay unresolved.
+        if index.indexed_events or index.conflict_count:
             for ticker in repairable:
                 try:
                     retry = classify_market(
@@ -197,7 +202,9 @@ def run_audit(
                     )
                 except KalshiRouterError:
                     continue
-                if retry.sport is not Sport.UNRESOLVED:
+                if retry.sport is not Sport.UNRESOLVED or (
+                    retry.unresolved_reason is UnresolvedReason.MILESTONE_CONFLICT
+                ):
                     classifications[ticker] = retry
 
     # ------------------------------------------------------------- counting
@@ -209,6 +216,9 @@ def run_audit(
     reason_fields = {
         UnresolvedReason.COMPETITION_ABSENT: "unresolved_competition_absent",
         UnresolvedReason.COMPETITION_UNKNOWN: "unresolved_competition_unknown",
+        UnresolvedReason.COMPETITION_AMBIGUOUS: "unresolved_competition_ambiguous",
+        UnresolvedReason.MILESTONE_CONFLICT: "unresolved_milestone_conflict",
+        UnresolvedReason.MALFORMED_EVENT_METADATA: "unresolved_malformed_event_metadata",
         UnresolvedReason.EVIDENCE_CONFLICT: "unresolved_evidence_conflict",
         UnresolvedReason.AMBIGUOUS_FAMILY: "unresolved_ambiguous_family",
         UnresolvedReason.METADATA_LOOKUP_FAILED: "unresolved_metadata_lookup_failed",
@@ -245,6 +255,7 @@ def run_audit(
     report.events_with_metadata_retrieved = resolver.stats.event_metadata_retrieved
     report.events_with_competition = resolver.stats.events_with_competition
     report.events_with_competition_scope = resolver.stats.events_with_competition_scope
+    report.events_with_malformed_metadata = resolver.stats.events_with_malformed_metadata
     report.event_metadata_lookup_failures = resolver.stats.event_metadata_failures
     report.api_requests = client.request_count
 
