@@ -84,7 +84,8 @@ def test_json_mode_emits_counts_only(monkeypatch, local_env):
     assert data["fills_fetched"] == 3
     assert data["classification_MLB"] == 1
     for key, value in data.items():
-        if key in ("taxonomy_observed_keys", "taxonomy_observed_entry_keys"):
+        if key in ("taxonomy_observed_keys", "taxonomy_observed_entry_keys",
+                   "milestone_entry_keys"):
             # The one vetted exception: public schema names, allowlisted at the
             # source.  Still never a free-form string.
             assert all(safe_schema_name(e.partition(":")[0]) for e in value)

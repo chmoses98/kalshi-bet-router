@@ -190,3 +190,47 @@ def test_record_is_case_insensitive_when_detecting_conflicts():
     index.record("kxa", "Pro Football")
     index.record("KXA", "College Football")
     assert index.competition_for_event("KXA") is None
+
+
+# ============ shape diagnostics (Phase D.3) ==================================
+#
+# L2 failed for exactly one reason -- the parser looked for a key the payload
+# does not use -- and it took three live runs to notice, because the only symptom
+# was a zero. L3 currently reports the same zero. These counters separate "the
+# sweep found nothing" from "the sweep found rows and read the wrong field":
+# two failures with opposite repairs.
+
+def sweep(signer, rows):
+    client, _ = build(milestone_handler({"Pro Baseball": rows}), signer)
+    return build_milestone_index(client, competitions=("Pro Baseball",))
+
+
+def test_rows_are_counted_even_when_no_ticker_can_be_extracted(signer):
+    """The decisive diagnostic: rows seen but zero indexed means wrong field."""
+    index = sweep(signer, [{"id": "m1", "some_other_key": "X"}])
+    assert index.rows_seen == 1
+    assert index.indexed_events == 0
+    assert "some_other_key" in index.observed_entry_keys
+
+
+def test_no_rows_at_all_is_a_different_finding_from_a_wrong_field(signer):
+    index = sweep(signer, [])
+    assert index.rows_seen == 0
+    assert index.indexed_events == 0
+    assert index.observed_entry_keys == {}
+
+
+def test_entry_keys_are_counted_across_rows(signer):
+    index = sweep(signer, [
+        {"primary_event_tickers": ["E1"], "category": "Sports"},
+        {"primary_event_tickers": ["E2"], "category": "Sports"},
+    ])
+    assert index.rows_seen == 2
+    assert index.observed_entry_keys["category"] == 2
+    assert index.indexed_events == 2
+
+
+def test_a_ticker_shaped_key_cannot_reach_the_diagnostic(signer):
+    index = sweep(signer, [{"KXMLBGAME-26SEP01": 1}])
+    assert index.rows_seen == 1
+    assert index.observed_entry_keys == {}

@@ -134,6 +134,12 @@ def _record_milestone_stats(report: AuditReport, index: MilestoneIndex) -> None:
     report.milestone_event_conflicts = index.conflict_count
     report.milestone_fetch_failed = index.fetch_failed
     report.milestone_budget_exhausted = index.budget_exhausted
+    report.milestone_rows_seen = index.rows_seen
+    report.milestone_entry_keys = tuple(
+        name
+        for key in sorted(index.observed_entry_keys)
+        if (name := safe_schema_name(key)) is not None
+    )
 
 
 def run_audit(

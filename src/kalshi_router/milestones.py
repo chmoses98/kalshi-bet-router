@@ -39,6 +39,7 @@ from typing import TYPE_CHECKING, Any, Iterable
 
 from .competitions import normalize
 from .errors import KalshiRouterError, SchemaError
+from .safety import safe_schema_name
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .client import KalshiReadOnlyClient
@@ -68,6 +69,14 @@ class MilestoneIndex:
     competitions_swept: int = 0
     budget_exhausted: bool = False
     fetch_failed: bool = False
+    #: Milestone rows returned at all, before any ticker extraction.  This is
+    #: what separates "the sweep found nothing" from "the sweep found rows and
+    #: read the wrong field" -- two failures with opposite repairs, and the
+    #: audit could not tell them apart while it only reported indexed links.
+    rows_seen: int = 0
+    #: Observed milestone entry key names, allowlisted.  Public catalogue schema,
+    #: recorded for the same reason the taxonomy shape is.
+    observed_entry_keys: dict[str, int] = field(default_factory=dict)
 
     @property
     def indexed_events(self) -> int:
@@ -120,6 +129,27 @@ def _event_tickers(milestone: dict[str, Any]) -> Iterable[str]:
             yield value.strip().upper()
 
 
+#: Cap on remembered schema names, so a pathological payload cannot turn a
+#: diagnostic into an unbounded dump.
+MAX_OBSERVED_KEYS = 40
+
+
+def _observe_entry_keys(milestone: dict[str, Any], index: "MilestoneIndex") -> None:
+    """Record which fields a milestone row actually carries.
+
+    L2 failed for exactly one reason -- the parser looked for a key the payload
+    does not use -- and took three live runs to notice, because the only symptom
+    was a zero. Recording the real key names makes the same failure visible in
+    one run here.
+    """
+    for key in milestone:
+        name = safe_schema_name(key) if isinstance(key, str) else None
+        if name is None:
+            continue
+        if name in index.observed_entry_keys or len(index.observed_entry_keys) < MAX_OBSERVED_KEYS:
+            index.observed_entry_keys[name] = index.observed_entry_keys.get(name, 0) + 1
+
+
 def build_milestone_index(
     client: "KalshiReadOnlyClient",
     competitions: Iterable[str] = TARGET_COMPETITIONS,
@@ -166,6 +196,8 @@ def build_milestone_index(
             for milestone in milestones:
                 if not isinstance(milestone, dict):
                     continue
+                index.rows_seen += 1
+                _observe_entry_keys(milestone, index)
                 for ticker in _event_tickers(milestone):
                     index.record(ticker, competition)
 

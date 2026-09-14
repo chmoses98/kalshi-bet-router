@@ -103,6 +103,8 @@ class AuditReport:
     milestone_events_indexed: int = 0
     milestone_event_conflicts: int = 0
     milestone_fetch_failed: bool = False
+    milestone_rows_seen: int = 0
+    milestone_entry_keys: tuple[str, ...] = ()
     milestone_budget_exhausted: bool = False
 
     # --- fill shape
@@ -232,6 +234,9 @@ class AuditReport:
             f"  milestone requests issued: {self.milestone_requests_issued}",
             f"  milestone event links indexed: {self.milestone_events_indexed}",
             f"  events under >1 competition (fail-closed): {self.milestone_event_conflicts}",
+            f"  milestone rows returned: {self.milestone_rows_seen}",
+            f"  milestone entry keys observed: "
+            f"{', '.join(self.milestone_entry_keys) or '(none)'}",
             f"  milestone fetch failed: {self.milestone_fetch_failed}",
             f"  milestone budget exhausted: {self.milestone_budget_exhausted}",
             "",
