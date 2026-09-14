@@ -147,9 +147,12 @@ def main(argv: list[str] | None = None, stdout=None, stderr=None) -> int:
         payload.update(
             {f"accounting_{k}": v for k, v in result.accounting.as_dict().items()}
         )
+        payload.update({f"schema_{k}": v for k, v in result.coverage.as_dict().items()})
         print(json.dumps(payload, indent=2, sort_keys=True), file=out)
     else:
         print(result.report.render(), file=out)
+        print("", file=out)
+        print(result.coverage.render(), file=out)
         print("", file=out)
         print(result.accounting.render(), file=out)
 

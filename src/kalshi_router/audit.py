@@ -35,6 +35,7 @@ from .models import (
     group_by_order,
     normalize_fill,
 )
+from .schema_probe import SchemaCoverage, probe_fills
 from .sports import REPORT_ORDER, Sport
 from .taxonomy import SportTaxonomy, parse_filters_by_sport
 
@@ -73,6 +74,8 @@ class AuditResult:
     report: AuditReport
     #: Shadow-only accounting counts.  Never routed, never persisted.
     accounting: AccountingDiagnostics = field(default_factory=AccountingDiagnostics)
+    #: Live schema coverage.  Counts only.
+    coverage: SchemaCoverage = field(default_factory=SchemaCoverage)
     details: tuple[SensitiveDetail, ...] = ()
     _classifications: dict[str, Classification] = field(default_factory=dict, repr=False)
 
@@ -132,10 +135,12 @@ def run_audit(
     report = AuditReport()
     resolver = MetadataResolver(client)
 
-    normalized: list[NormalizedFill] = []
-    for raw in client.iter_fills(max_fills=max_fills):
-        normalized.append(normalize_fill(raw))
-    report.fills_fetched = len(normalized)
+    # Strict parsing, tolerant ingestion: a fill that cannot be interpreted is
+    # EXCLUDED from accounting and counted, never admitted with guessed values.
+    # Aborting the whole audit on one odd fill would teach us nothing about the
+    # live schema, which is the entire point of this run.
+    normalized, coverage = probe_fills(client.iter_fills(max_fills=max_fills))
+    report.fills_fetched = coverage.fills_seen
 
     deduped = dedupe_fills(normalized)
     report.unique_fills = deduped.unique_count
@@ -298,6 +303,7 @@ def run_audit(
     return AuditResult(
         report=report,
         accounting=accounting,
+        coverage=coverage,
         details=details,
         _classifications=classifications,
     )

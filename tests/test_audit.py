@@ -333,14 +333,21 @@ def test_malformed_event_metadata_is_counted_and_never_rescued(signer):
     assert report.events_with_competition == 0
 
 
-def test_a_bad_quantity_fails_the_audit_closed(signer):
-    from kalshi_router.errors import SchemaError
-    import pytest as _pytest
-
+def test_a_bad_quantity_is_excluded_from_accounting_and_counted(signer):
+    """Fail closed at the fill, not by aborting: the fill is excluded, never guessed."""
     bad = make_fill(1, ticker=market_for("MLB"))
     bad["count_fp"] = "0.00"
-    with _pytest.raises(SchemaError):
-        run_audit(build_client([[bad]], signer))
+    good = make_fill(2, ticker=market_for("MLB"))
+    result = run_audit(build_client([[bad, good]], signer))
+
+    assert result.coverage.fills_seen == 2
+    assert result.coverage.fills_normalized == 1
+    assert result.coverage.fills_rejected == 1
+    assert result.coverage.rejected_quantity == 1
+    # The rejected fill never reaches accounting.
+    assert result.accounting.fills_replayed == 1
+    # And it is not silently counted as a classified fill.
+    assert sum(result.report.classification_counts.values()) == 1
 
 
 def test_empty_competition_is_counted_malformed_end_to_end(signer):

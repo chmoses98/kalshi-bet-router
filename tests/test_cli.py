@@ -209,13 +209,34 @@ def test_json_mode_includes_accounting_counts_only(monkeypatch, local_env):
     assert data["accounting_claims_complete_position_state"] is False
 
 
-def test_accounting_schema_failure_does_not_abort_the_audit(monkeypatch, local_env):
-    """A fill with no usable timestamp degrades accounting, not classification."""
+def test_undated_fills_are_rejected_at_ingestion_not_mid_replay(monkeypatch, local_env):
+    """An unorderable fill is excluded and counted, leaving accounting intact."""
     undated = [dict(f) for f in SAMPLE[0]]
     for raw in undated:
         raw.pop("created_time", None)
+        raw.pop("ts", None)
     install_fake_api(monkeypatch, [undated])
     code, out, _ = run(["audit"])
     assert code == cli.EXIT_OK
-    assert "fills fetched: 3" in out
-    assert "accounting schema failures: 1" in out
+    assert "fills seen: 3" in out
+    assert "fills rejected (excluded from accounting): 3" in out
+    assert "    timestamp: 3" in out
+    # Accounting still ran cleanly on what remained (nothing).
+    assert "accounting schema failures: 0" in out
+
+
+def test_live_schema_coverage_block_is_printed(monkeypatch, local_env):
+    install_fake_api(monkeypatch, SAMPLE)
+    _, out, _ = run(["audit"])
+    assert "live schema coverage (counts only):" in out
+    assert "with outcome_side (canonical):" in out
+    assert "both present and DISAGREEING:" in out
+    assert "present but malformed:" in out
+
+
+def test_schema_coverage_leaks_nothing(monkeypatch, local_env):
+    install_fake_api(monkeypatch, SAMPLE)
+    _, out, _ = run(["audit"])
+    for token in SENSITIVE_TOKENS:
+        assert token not in out
+    assert "$" not in out
