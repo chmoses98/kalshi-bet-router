@@ -17,7 +17,7 @@ from kalshi_router.models import (
     normalize_fill,
 )
 
-from .synthetic import make_fill
+from .synthetic import complement, make_fill
 
 
 def test_buy_fill_normalizes():
@@ -32,12 +32,14 @@ def test_buy_fill_normalizes():
 def test_sell_fill_normalizes():
     fill = normalize_fill(make_fill(2, action="sell", side="yes"))
     assert fill.legacy_action is Action.SELL
-    # Selling YES leaves the account positioned for NO.
-    assert fill.outcome_side is OutcomeSide.NO
+    # outcome_side reports the CONTRACT, which a sale does not change...
+    assert fill.outcome_side is OutcomeSide.YES
+    # ...while the exposure it creates points the other way.
+    assert fill.exposure_side is OutcomeSide.NO
 
 
-def test_no_outcome_fill_keeps_the_unified_price_uncomplemented():
-    """outcome_side sets direction only; it must not transform the price."""
+def test_a_no_contract_fill_still_reports_the_yes_axis_price():
+    """The axis coordinate is the YES leg whichever contract was traded."""
     fill = normalize_fill(make_fill(3, side="no"))
     assert fill.outcome_side is OutcomeSide.NO
     assert fill.price_dollars == Decimal("0.5700")
@@ -45,10 +47,11 @@ def test_no_outcome_fill_keeps_the_unified_price_uncomplemented():
 
 def test_action_and_side_tokens_are_case_insensitive():
     raw = make_fill(4, action="SELL", side="NO")
-    raw["outcome_side"], raw["book_side"] = "YES", "BID"
+    raw["outcome_side"], raw["book_side"] = "NO", "ASK"
     fill = normalize_fill(raw)
     assert fill.legacy_action is Action.SELL and fill.legacy_side is Side.NO
-    assert fill.outcome_side is OutcomeSide.YES
+    assert fill.outcome_side is OutcomeSide.NO        # contract
+    assert fill.exposure_side is OutcomeSide.YES      # sell-NO moves toward YES
 
 
 def test_subpenny_price_survives_exactly():
@@ -71,12 +74,17 @@ def test_market_ticker_alias_is_accepted():
     assert normalize_fill(raw).ticker.startswith("KXMLBGAME")
 
 
-def test_canonical_only_payload_parses_without_legacy_fields():
+def test_canonical_only_payload_cannot_prove_a_direction():
+    """The canonical pair names the contract; only `action` names the verb.
+
+    Live data: buy-NO and sell-NO fills both report book_side=ask, so dropping
+    the deprecated pair loses the buy/sell bit entirely.  Refusing is the only
+    safe answer -- guessing "buy" would turn a sale into a purchase.
+    """
     raw = make_fill(7)
     del raw["action"], raw["side"]
-    fill = normalize_fill(raw)
-    assert fill.outcome_side is OutcomeSide.YES
-    assert fill.legacy_action is None and fill.legacy_side is None
+    with pytest.raises(SchemaError, match="buy/sell verb"):
+        normalize_fill(raw)
 
 
 @pytest.mark.parametrize("field", ["fill_id", "ticker"])
@@ -144,13 +152,14 @@ def test_price_is_optional_and_never_required():
     assert fill.price_dollars is None and fill.price_source is None
 
 
-def test_either_price_field_alone_gives_the_unified_price():
-    """Only one field present: it IS the price, not half of a complement."""
+def test_a_lone_no_leg_still_places_the_fill_on_the_yes_axis():
+    """One leg is enough: the other is its complement."""
     raw = make_fill(12)
     del raw["yes_price_dollars"]
     raw["no_price_dollars"] = "0.3500"
     fill = normalize_fill(raw)
-    assert fill.price_dollars == Decimal("0.3500")
+    assert fill.price_dollars == Decimal("0.6500")       # YES axis
+    assert fill.leg_price_dollars == Decimal("0.6500")   # this fill traded YES
 
 
 # --------------------------------------------------------------- dedupe/group
@@ -195,17 +204,17 @@ def test_fills_without_an_order_id_are_not_grouped():
 # exclusively rather than as $0.01/$0.99.
 
 def fill_with(**overrides):
-    """Build a fill, keeping the two price fields at one unified value.
+    """Build a fill, keeping the two price fields complementary.
 
-    The current contract requires both to carry the same execution price, so a
-    test that overrides one is overriding the unified price.
+    The legs of a binary contract sum to 1.00, so overriding one leg derives
+    the other unless the test names both deliberately.
     """
     raw = make_fill(1)
     raw.update(overrides)
     for key, other in (("yes_price_dollars", "no_price_dollars"),
                        ("no_price_dollars", "yes_price_dollars")):
         if key in overrides and other not in overrides:
-            raw[other] = overrides[key]
+            raw[other] = complement(overrides[key])
     if "yes_price" in overrides or "no_price" in overrides:
         raw.pop("yes_price_dollars", None)
         raw.pop("no_price_dollars", None)

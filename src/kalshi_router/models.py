@@ -43,6 +43,9 @@ MAX_PRICE_DOLLARS = Decimal("1")
 MIN_PRICE_CENTS = 0
 MAX_PRICE_CENTS = 100
 
+#: One whole contract: the two legs of a binary market sum to this.
+ONE = Decimal(1)
+
 #: Fees are a non-negative cost.  Kalshi's schedule is
 #: ``ceil(0.07 * P * (1-P) * contracts)`` for takers and about a quarter of that
 #: for makers, so a fee is never negative and may legitimately be zero.
@@ -110,6 +113,11 @@ class BookSide(str, Enum):
 
 
 #: The documented pairing between the two canonical vocabularies.
+#: ``book_side`` corroborates WHICH CONTRACT was traded, not whether it was
+#: bought or sold.  Live evidence (200 fills): every ``side=yes`` fill carried
+#: ``book_side=bid`` and every ``side=no`` fill carried ``book_side=ask``,
+#: including the sells -- 31 buy-NO and 2 sell-NO fills all reported ``ask``.
+#: So this mapping is a contract cross-check and nothing more.
 BOOK_SIDE_TO_OUTCOME: dict[BookSide, OutcomeSide] = {
     BookSide.BID: OutcomeSide.YES,
     BookSide.ASK: OutcomeSide.NO,
@@ -141,12 +149,19 @@ def sources_to_fields(sources: tuple[str, ...]) -> tuple[str, ...]:
     return sources
 
 
-def outcome_from_legacy(action: Action, side: Side) -> OutcomeSide:
-    """Project the deprecated ``(action, side)`` pair onto canonical direction.
+def exposure_from_legacy(action: Action, side: Side) -> OutcomeSide:
+    """Which way one execution moves the position, from ``(action, side)``.
 
-    Documented equivalences: buying YES and selling NO both leave the member
-    positioned for YES; buying NO and selling YES both leave them positioned
-    for NO.
+    Buying YES and selling NO both move the position toward YES; buying NO and
+    selling YES both move it toward NO.
+
+    This is **exposure**, not the ``outcome_side`` field.  Those are different
+    things, and conflating them was a real defect: live data shows
+    ``outcome_side`` reports the CONTRACT traded (it equalled legacy ``side`` on
+    all 200 observed fills, sells included), so a sell-NO arrives as
+    ``outcome_side=no`` even though it moves the position toward YES.  Reading
+    the field as exposure made those fills look self-contradictory and rejected
+    them.
     """
     positioned_for_yes = (action is Action.BUY) == (side is Side.YES)
     return OutcomeSide.YES if positioned_for_yes else OutcomeSide.NO
@@ -156,9 +171,9 @@ def outcome_from_legacy(action: Action, side: Side) -> OutcomeSide:
 class NormalizedFill:
     """One execution, normalized and kept in memory only.
 
-    Direction comes from :class:`OutcomeSide`, Kalshi's canonical field.  The
-    deprecated ``action``/``side`` pair is retained as metadata for historical
-    analysis but never drives signed inventory.
+    ``outcome_side`` names the contract traded; ``exposure_side`` names the
+    direction.  The deprecated ``action``/``side`` pair is retained because it
+    is currently the only carrier of the buy/sell verb.
 
     Quantities, prices and fees are :class:`~decimal.Decimal`, parsed exactly
     from Kalshi's fixed-point decimal strings.  Binary floating point is never
@@ -167,8 +182,13 @@ class NormalizedFill:
 
     fill_id: str
     ticker: str
-    #: Canonical direction. Positive exposure when ``YES``, negative when ``NO``.
+    #: WHICH CONTRACT was traded, from Kalshi's ``outcome_side``.  This is not
+    #: the direction: a sell-NO reports ``no`` while moving the position toward
+    #: YES.  Use :attr:`exposure_side` for direction.
     outcome_side: OutcomeSide
+    #: Which way this execution moves the position on the signed YES axis.
+    #: Derived from the buy/sell verb together with the contract.
+    exposure_side: OutcomeSide = OutcomeSide.YES
     #: Corroborating book vocabulary, when the payload carried it.
     book_side: BookSide | None = None
     #: DEPRECATED legacy fields, preserved only as evidence of the original
@@ -186,9 +206,12 @@ class NormalizedFill:
 
     count: Decimal | None = None
     count_source: str | None = None
-    #: The fill's **unified execution price**, in dollars.  Direction lives in
-    #: ``outcome_side``; the price is never complemented because of it.
+    #: Execution price on the **YES axis**, in dollars -- the coordinate the
+    #: signed position ledger is denominated in, whichever contract was traded.
     price_dollars: Decimal | None = None
+    #: Price of the contract actually traded, in dollars: what was paid or
+    #: received per contract.  Complements :attr:`price_dollars` for a NO fill.
+    leg_price_dollars: Decimal | None = None
     price_source: str | None = None
     #: True for a legacy-only payload, where the historic price semantics are
     #: not established, so economics are marked incomplete rather than guessed.
@@ -239,67 +262,89 @@ def _parse_quantity(raw: dict[str, Any]) -> tuple[Decimal | None, str | None, bo
 
 
 def _parse_price(
-    raw: dict[str, Any], canonical: bool
-) -> tuple[Decimal | None, str | None, bool, bool]:
-    """Resolve the **unified execution price**, in dollars.
+    raw: dict[str, Any], contract: OutcomeSide, canonical: bool
+) -> tuple[Decimal | None, Decimal | None, str | None, bool, bool]:
+    """Resolve the execution price on the **YES axis**, in dollars.
 
-    Kalshi's ``order_direction`` documentation is explicit: *"outcome_side
-    describes directional exposure only; it does not change the order's price.
-    An order at price p with outcome_side=no is matched by an order at the same
-    price p with outcome_side=yes: both parties trade at the same price, just on
-    opposite directions."*
+    ``yes_price_dollars`` and ``no_price_dollars`` are the two legs of one
+    trade and sum to ``1.00``.  Live evidence is unanimous: across 200 fills,
+    200 pairs summed to exactly 1.00, 0 were equal anywhere other than even
+    odds, and 0 matched no model at all.  An earlier reading of this pair as a
+    single "unified" price -- identical in both fields -- is therefore refuted;
+    it accepted only the 6 even-odds fills, where a complementary pair happens
+    to coincide, and rejected the other 194.
 
-    So a fill has **one** execution price on a single axis.  Direction lives
-    entirely in ``outcome_side``; the price is never complemented because of it.
-    Complementing here and then applying the signed position factor in the
-    ledger would transform the same value twice.
+    Positions live on one signed axis (positive = long YES), so the accounting
+    price must be a coordinate on that same axis.  The **YES leg** is that
+    coordinate, whichever contract was traded:
 
-    Returns ``(price, source, number_typed, legacy_semantics_unproven)``.
+    * buy 10 YES at yes=0.56  -> ``+10`` at axis price ``0.56``
+    * buy 10 NO  at no=0.44   -> ``-10`` at axis price ``0.56``
+
+    This is selection, not complementing.  Direction is carried entirely by the
+    sign of the quantity, so the axis price is never transformed a second time.
+
+    The **leg price** -- what was actually paid or received per contract -- is
+    returned alongside it, so cash flow stays exact without re-deriving it.
+
+    Returns ``(yes_axis_price, leg_price, source, number_typed, unproven)``.
     """
-    if not canonical:
-        # Legacy-only payload (no outcome_side/book_side).  Whether the historic
-        # yes_price/no_price pair was a unified price or complementary leg
-        # prices is not established by current documentation, so the economics
-        # are marked unproven rather than guessed.  Direction still resolves
-        # from the deprecated action/side pair.
-        return None, None, False, True
-
-    quoted: list[tuple[Decimal, str, bool]] = []
-    for key in ("yes_price_dollars", "no_price_dollars"):
+    legs: dict[str, Decimal] = {}
+    number_typed = False
+    for key, leg in (("yes_price_dollars", "yes"), ("no_price_dollars", "no")):
         parsed = parse_fixed_point(raw.get(key), key)
         if parsed is not None:
-            quoted.append((
-                _require_price_in_range(parsed.value, key),
-                "unified_price_dollars",
-                parsed.source_type == "number",
-            ))
+            legs[leg] = _require_price_in_range(parsed.value, key)
+            number_typed = number_typed or parsed.source_type == "number"
 
-    if not quoted:
-        for key in ("yes_price", "no_price"):
-            cents = raw.get(key)
-            if isinstance(cents, int) and not isinstance(cents, bool):
-                if not (MIN_PRICE_CENTS < cents < MAX_PRICE_CENTS):
-                    raise SchemaError(
-                        f"field {key!r} was outside the valid contract price range "
-                        f"(must be greater than 0 and less than 100 cents)"
-                    )
-                quoted.append((Decimal(cents) / Decimal(100), "legacy_price_cents", False))
+    if legs:
+        return _resolve_legs(legs, contract, "unified_price_dollars", number_typed, ONE)
 
-    if not quoted:
-        return None, None, False, False
+    legacy: dict[str, Decimal] = {}
+    for key, leg in (("yes_price", "yes"), ("no_price", "no")):
+        cents = raw.get(key)
+        if isinstance(cents, int) and not isinstance(cents, bool):
+            if not (MIN_PRICE_CENTS < cents < MAX_PRICE_CENTS):
+                raise SchemaError(
+                    f"field {key!r} was outside the valid contract price range "
+                    f"(must be greater than 0 and less than 100 cents)"
+                )
+            legacy[leg] = Decimal(cents) / Decimal(100)
 
-    values = {value for value, _, _ in quoted}
-    if len(values) > 1:
-        # Under the current contract both fields carry the same unified price.
-        # Disagreement means this payload is not what the contract describes.
-        raise SchemaError(
-            "canonical fill reported conflicting execution prices in "
-            "'yes_price_dollars' and 'no_price_dollars'; the current contract "
-            "requires one unified price"
-        )
+    if not legacy:
+        return None, None, None, False, False
 
-    value, source, number_typed = quoted[0]
-    return value, source, number_typed, False
+    if not canonical and len(legacy) < 2:
+        # A single legacy price with no canonical fields cannot be checked for
+        # complementarity, so its axis meaning is not established.  Direction
+        # still resolves; the economics are flagged rather than guessed.
+        return None, None, None, False, True
+
+    return _resolve_legs(legacy, contract, "legacy_price_cents", False, ONE)
+
+
+def _resolve_legs(
+    legs: dict[str, Decimal],
+    contract: OutcomeSide,
+    source: str,
+    number_typed: bool,
+    whole: Decimal,
+) -> tuple[Decimal | None, Decimal | None, str | None, bool, bool]:
+    """Turn one or both leg prices into an axis price and a leg price."""
+    if len(legs) == 2:
+        if legs["yes"] + legs["no"] != whole:
+            raise SchemaError(
+                "fill reported yes and no prices that do not sum to one; the "
+                "two legs of a binary contract must be complements"
+            )
+        yes_axis = legs["yes"]
+    elif "yes" in legs:
+        yes_axis = legs["yes"]
+    else:
+        yes_axis = whole - legs["no"]
+
+    leg_price = yes_axis if contract is OutcomeSide.YES else whole - yes_axis
+    return yes_axis, leg_price, source, number_typed, False
 
 
 def _parse_fee(raw: dict[str, Any]) -> tuple[Decimal | None, str | None]:
@@ -344,19 +389,25 @@ def _parse_fee(raw: dict[str, Any]) -> tuple[Decimal | None, str | None]:
 
 def _resolve_direction(
     raw: dict[str, Any]
-) -> tuple[OutcomeSide, BookSide | None, Action | None, Side | None, tuple[str, ...]]:
-    """Determine canonical direction, failing closed on any disagreement.
+) -> tuple[OutcomeSide, OutcomeSide, BookSide | None, Action | None, Side | None, tuple[str, ...]]:
+    """Resolve the CONTRACT traded and the EXPOSURE it creates.
 
-    Precedence is ``outcome_side`` first, because Kalshi documents it as
-    canonical.  ``book_side`` carries the same bit in book vocabulary and
-    corroborates it.  The deprecated ``action``/``side`` pair is validated
-    against the canonical answer and kept only as metadata.
+    These are two different facts and the live schema reports them in two
+    different places:
+
+    * **contract** -- ``outcome_side``, corroborated by ``book_side`` and by the
+      deprecated ``side``.  All three agreed on all 200 observed fills.
+    * **exposure** -- whether the position moved toward YES or NO, which needs
+      the buy/sell verb.  Only the deprecated ``action`` field carries it.
+
+    ``book_side`` does **not** carry buy/sell: 31 buy-NO and 2 sell-NO fills all
+    reported ``ask``.  So when ``action`` is absent the exposure is genuinely
+    unknown, and this fails closed rather than assuming a buy -- assuming would
+    silently invert a sale into a purchase.
 
     Legacy-only payloads are still accepted: the deprecated fields are not
     removed before 2026-05-28, and historical fills fetched from
-    ``GET /historical/fills`` may predate the canonical fields entirely.  Losing
-    the ability to replay history would be a worse failure than reading a
-    documented deprecated field.
+    ``GET /historical/fills`` may predate the canonical fields entirely.
     """
     sources: list[str] = []
     candidates: dict[str, OutcomeSide] = {}
@@ -402,7 +453,9 @@ def _resolve_direction(
                 f"fill carried an unrecognized side; expected one of "
                 f"{[s.value for s in Side]}"
             ) from None
-        candidates["legacy_action_side"] = outcome_from_legacy(action, side)
+        # The deprecated pair corroborates the CONTRACT through `side`; the
+        # exposure it implies is computed separately below.
+        candidates["legacy_side"] = OutcomeSide(side.value)
 
     if not candidates:
         raise SchemaError(
@@ -414,14 +467,26 @@ def _resolve_direction(
     if len(distinct) > 1:
         disagreeing = ", ".join(sorted(candidates))
         raise SchemaError(
-            f"fill direction fields disagree ({disagreeing}); refusing to guess "
-            f"which representation is correct"
+            f"fill contract fields disagree ({disagreeing}); refusing to guess "
+            f"which contract was traded"
         )
 
-    for name in ("outcome_side", "book_side", "legacy_action_side"):
+    contract = next(iter(distinct))
+
+    # Exposure needs the buy/sell verb, and only the deprecated `action` carries
+    # it.  No verb -> no exposure -> reject, rather than defaulting to "buy".
+    if action is None or side is None:
+        raise SchemaError(
+            "fill carried no buy/sell verb; 'outcome_side' and 'book_side' "
+            "identify the contract but not the direction, so the exposure "
+            "cannot be determined without the deprecated 'action'/'side' pair"
+        )
+    exposure = exposure_from_legacy(action, side)
+
+    for name in ("outcome_side", "book_side", "legacy_side"):
         if name in candidates:
             sources.append(name)
-    return next(iter(distinct)), book_side, action, side, tuple(sources)
+    return contract, exposure, book_side, action, side, tuple(sources)
 
 
 #: Kalshi numbers the primary account 0 and named subaccounts 1-63.
@@ -465,9 +530,9 @@ def normalize_fill(raw: dict[str, Any]) -> NormalizedFill:
     """Convert one raw fill object into a :class:`NormalizedFill`.
 
     Fails closed on any required field that is absent or uninterpretable: fill
-    id, market ticker, direction and quantity.  Direction comes from Kalshi's
-    canonical ``outcome_side``/``book_side``; the deprecated ``action``/``side``
-    pair is validated against it and kept only as metadata.
+    id, market ticker, contract, buy/sell verb and quantity.  ``outcome_side``
+    and ``book_side`` identify the contract; the deprecated ``action``/``side``
+    pair supplies the direction, which nothing else currently carries.
     """
     if not isinstance(raw, dict):
         raise SchemaError(f"fill was {type(raw).__name__}, expected object")
@@ -480,14 +545,16 @@ def normalize_fill(raw: dict[str, Any]) -> NormalizedFill:
     if not isinstance(ticker, str) or not ticker:
         raise SchemaError("fill is missing a usable market ticker")
 
-    outcome, book_side, action, side, sources = _resolve_direction(raw)
+    outcome, exposure, book_side, action, side, sources = _resolve_direction(raw)
 
     count, count_source, count_was_number = _parse_quantity(raw)
     if count is None:
         raise SchemaError("fill carried neither 'count_fp' nor a legacy 'count'")
 
     canonical = bool({"outcome_side", "book_side"} & set(sources_to_fields(sources)))
-    price, price_source, price_was_number, price_unproven = _parse_price(raw, canonical)
+    price, leg_price, price_source, price_was_number, price_unproven = _parse_price(
+        raw, outcome, canonical
+    )
     fee, fee_source = _parse_fee(raw)
 
     order_id = _first_present(raw, "order_id")
@@ -501,6 +568,7 @@ def normalize_fill(raw: dict[str, Any]) -> NormalizedFill:
         fill_id=fill_id,
         ticker=ticker,
         outcome_side=outcome,
+        exposure_side=exposure,
         book_side=book_side,
         legacy_action=action,
         legacy_side=side,
@@ -511,6 +579,7 @@ def normalize_fill(raw: dict[str, Any]) -> NormalizedFill:
         count=count,
         count_source=count_source,
         price_dollars=price,
+        leg_price_dollars=leg_price,
         price_source=price_source,
         legacy_price_semantics_unproven=price_unproven,
         fixed_point_number_typed=count_was_number or price_was_number,

@@ -148,9 +148,11 @@ def run_audit(
     fills = deduped.fills
 
     for fill in fills:
-        # Canonical direction: which outcome the fill left the account
-        # positioned for. buy-yes and sell-no both count as YES.
-        if fill.outcome_side is OutcomeSide.YES:
+        # Which outcome the fill left the account positioned for. That is
+        # the EXPOSURE, not the `outcome_side` field: live data shows the field
+        # reports the contract, so a sell-NO arrives as `no` while moving the
+        # position toward YES.
+        if fill.exposure_side is OutcomeSide.YES:
             report.yes_side_fills += 1
         else:
             report.no_side_fills += 1

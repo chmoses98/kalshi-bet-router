@@ -139,12 +139,17 @@ def aggregate_orders(
 
         tickers = {f.ticker for f in ordered}
         outcomes = {f.outcome_side for f in ordered}
+        exposures = {f.exposure_side for f in ordered}
         subaccounts = {f.subaccount_number for f in ordered}
         book_sides = {f.book_side for f in ordered if f.book_side is not None}
         if len(tickers) > 1:
             raise SchemaError("one order_id spanned more than one market ticker")
         if len(outcomes) > 1:
             raise SchemaError("one order_id spanned more than one outcome_side")
+        if len(exposures) > 1:
+            # One submission cannot both buy and sell, so mixed exposure under a
+            # single order id means the grouping key is not what it claims.
+            raise SchemaError("one order_id spanned more than one exposure")
         if len(book_sides) > 1:
             raise SchemaError("one order_id spanned more than one book_side")
         if len(subaccounts) > 1:

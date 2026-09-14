@@ -280,7 +280,7 @@ def _classify_rejection(raw: dict[str, Any]) -> str:
         return "identity"
 
     try:
-        _, _, _, _, sources = _resolve_direction(raw)
+        contract, _exposure, _book, _action, _side, sources = _resolve_direction(raw)
     except SchemaError:
         return "direction"
 
@@ -298,7 +298,7 @@ def _classify_rejection(raw: dict[str, Any]) -> str:
 
     canonical = bool({"outcome_side", "book_side"} & set(sources))
     try:
-        _parse_price(raw, canonical)
+        _parse_price(raw, contract, canonical)
     except SchemaError:
         return "price"
 
