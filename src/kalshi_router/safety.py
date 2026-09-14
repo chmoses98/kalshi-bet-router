@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import os
 
 from .errors import SensitiveOutputRefused
@@ -42,3 +44,29 @@ def assert_sensitive_output_allowed(env: dict[str, str] | None = None) -> None:
             "automated environment (" + ", ".join(markers) + "). "
             "This mode is for a private local terminal only."
         )
+
+
+#: A JSON schema name we are willing to print in a public log: lowercase words
+#: joined by underscores, nothing else.  Deliberately narrow.  A market ticker
+#: (``KXMLBGAME-26SEP01-NYY``) fails on case and punctuation; an id, a price, a
+#: timestamp and a competition name all fail too.  So the one string-valued
+#: diagnostic on the audit report is bounded by construction, not by convention.
+SCHEMA_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
+
+#: The value-shape label that may accompany a schema name, e.g. ``list[str]``.
+SCHEMA_KIND_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,15}(\[[a-z0-9_|]{0,31}\])?$")
+
+
+def safe_schema_name(key: str, kind: str | None = None) -> str | None:
+    """Return ``key`` (optionally ``key:kind``) if it is safe to print, else None.
+
+    Fails closed: anything that is not plainly a schema identifier is dropped
+    rather than sanitized, because a partially-scrubbed value is still a value.
+    """
+    if not isinstance(key, str) or not SCHEMA_NAME_PATTERN.match(key):
+        return None
+    if kind is None:
+        return key
+    if not isinstance(kind, str) or not SCHEMA_KIND_PATTERN.match(kind):
+        return f"{key}:?"
+    return f"{key}:{kind}"

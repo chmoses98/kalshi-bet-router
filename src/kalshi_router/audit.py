@@ -35,6 +35,7 @@ from .models import (
     group_by_order,
     normalize_fill,
 )
+from .safety import safe_schema_name
 from .schema_probe import SchemaCoverage, probe_fills
 from .sports import REPORT_ORDER, Sport
 from .taxonomy import SportTaxonomy, parse_filters_by_sport
@@ -108,6 +109,18 @@ def _fetch_taxonomy(client: KalshiReadOnlyClient, report: AuditReport) -> SportT
     report.taxonomy_competitions = taxonomy.competition_count
     report.taxonomy_competition_collisions = taxonomy.collision_count
     report.taxonomy_skipped_sports = taxonomy.skipped_sports
+    # Sorted so the diagnostic is stable run to run, and rendered as key:kind so
+    # one line says both what exists and what type it holds.
+    report.taxonomy_observed_keys = tuple(
+        name
+        for key in sorted(taxonomy.observed_keys)
+        if (name := safe_schema_name(key, taxonomy.observed_key_kinds.get(key))) is not None
+    )
+    report.taxonomy_observed_entry_keys = tuple(
+        name
+        for key in sorted(taxonomy.observed_entry_keys)
+        if (name := safe_schema_name(key)) is not None
+    )
     return taxonomy
 
 

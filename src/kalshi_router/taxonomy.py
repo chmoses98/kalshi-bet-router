@@ -14,11 +14,18 @@ name (``ATP Madrid``) resolve to TENNIS without hard-coding every tournament,
 and it is what tells us that an unfamiliar competition sits under Football and
 therefore must fail closed rather than be guessed.
 
-The exact inner shape of each sport's filter object is not fully pinned down in
-the published reference, so parsing is deliberately structural rather than
+The exact inner shape of each sport's filter object is not pinned down in the
+published reference, so parsing is deliberately structural rather than
 positional: any list found under a competitions-like or scopes-like key is read,
 and entries are accepted as bare strings or as objects carrying a name field.
 Unrecognized shapes are skipped and counted, never guessed at.
+
+**The guessed key list is wrong.** Two live runs reported 22 sports, 0
+competitions and 0 skipped sports -- so every sport's object parsed as a dict
+and none of the competition-like keys matched.  Rather than guess again, the
+parser now records the inner KEY NAMES it actually saw, so the next run reports
+the real shape.  These are exchange schema names from a public endpoint, not
+account data, so naming them discloses nothing about the owner.
 
 Ownership collisions fail closed
 --------------------------------
@@ -79,6 +86,13 @@ class SportTaxonomy:
     scopes: set[str] = field(default_factory=set)
     #: sport entries whose shape could not be read
     skipped_sports: int = 0
+    #: observed inner key -> how many sports carried it.  Public schema names
+    #: only; this is the diagnostic that says why no competition was found.
+    observed_keys: dict[str, int] = field(default_factory=dict)
+    #: observed inner key -> the JSON kind of its value, e.g. "list[str]".
+    observed_key_kinds: dict[str, str] = field(default_factory=dict)
+    #: keys seen inside list-of-object entries, for the same reason.
+    observed_entry_keys: dict[str, int] = field(default_factory=dict)
 
     @property
     def sport_count(self) -> int:
@@ -109,6 +123,50 @@ class SportTaxonomy:
         if key in self.ambiguous_competitions:
             return None
         return self.competition_to_sport.get(key)
+
+
+#: Cap on how many distinct schema names are remembered, so a pathological
+#: payload cannot turn the diagnostic into an unbounded dump.
+MAX_OBSERVED_KEYS = 40
+
+
+def _kind_of(value: Any) -> str:
+    """A short, non-revealing description of a value's JSON shape."""
+    if isinstance(value, dict):
+        return "object"
+    if isinstance(value, (list, tuple)):
+        if not value:
+            return "list[empty]"
+        inner = {"object" if isinstance(i, dict) else type(i).__name__ for i in value}
+        return f"list[{'|'.join(sorted(inner))}]"
+    if isinstance(value, bool):
+        return "bool"
+    return type(value).__name__
+
+
+def _bump(counter: dict[str, int], key: str) -> None:
+    if key in counter or len(counter) < MAX_OBSERVED_KEYS:
+        counter[key] = counter.get(key, 0) + 1
+
+
+def _observe_shape(details: dict[str, Any], taxonomy: SportTaxonomy) -> None:
+    """Record the inner schema of one sport's filter object.
+
+    Names and value KINDS only -- never a value.  A competition name is public
+    taxonomy data anyway, but keeping values out of the diagnostic means this
+    stays safe if the endpoint ever carries something less public.
+    """
+    for key, value in details.items():
+        if not isinstance(key, str):
+            continue
+        _bump(taxonomy.observed_keys, key)
+        taxonomy.observed_key_kinds.setdefault(key, _kind_of(value))
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                if isinstance(item, dict):
+                    for sub in item:
+                        if isinstance(sub, str):
+                            _bump(taxonomy.observed_entry_keys, sub)
 
 
 def parse_filters_by_sport(payload: dict[str, Any]) -> SportTaxonomy:
@@ -142,6 +200,8 @@ def parse_filters_by_sport(payload: dict[str, Any]) -> SportTaxonomy:
             # The sport is still known to exist; only its filters are unreadable.
             taxonomy.skipped_sports += 1
             continue
+
+        _observe_shape(details, taxonomy)
 
         for key in _COMPETITION_KEYS:
             for competition in _entry_names(details.get(key)):
