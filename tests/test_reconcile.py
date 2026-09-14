@@ -146,4 +146,102 @@ def test_counts_are_all_integers_or_schema_name_tuples():
             assert isinstance(value, tuple)
             assert all(isinstance(v, str) for v in value)
             continue
+        if name == "settlement_field_coverage":
+            assert isinstance(value, dict)
+            assert all(isinstance(v, int) for v in value.values())
+            continue
         assert isinstance(value, int), f"{name} is not a count"
+
+
+def test_the_flattened_report_is_entirely_scalar_or_name_tuples():
+    report = probe(settlements=[{"ticker": "A", "value": "1.00", "revenue": "2.00"}])
+    for name, value in report.as_dict().items():
+        assert isinstance(value, (int, tuple)), f"{name} is neither a count nor names"
+
+
+# ============ corrections forced by the first live reconciliation run ========
+#
+#   position rows: 0        settlement rows: 755 (all "without a result")
+#   markets only in the replay: 155
+#   settlement keys observed: ..., market_result, ..., value, yes_count_fp, ...
+#
+# Two assumptions in this module were wrong, and the measurement is what caught
+# them.
+
+def test_the_result_field_is_market_result():
+    """755 of 755 rows read as "no result" purely because of a field guess."""
+    report = probe(settlements=[{"ticker": "A", "market_result": "yes"}])
+    assert report.settlement_rows_with_result == 1
+    assert "yes" in report.settlement_results
+
+
+def test_the_legacy_result_spelling_is_still_accepted():
+    report = probe(settlements=[{"ticker": "A", "result": "no"}])
+    assert report.settlement_rows_with_result == 1
+
+
+def test_a_settled_market_is_absent_from_positions_not_flat():
+    """The live account reported 0 position rows against 155 replayed markets.
+
+    A settled market leaves the positions response; it does not appear with a
+    zero quantity. So absence explained by a settlement is expected, not a gap.
+    """
+    report = probe(
+        positions=[],
+        settlements=[{"ticker": "A", "market_result": "yes"}],
+        replayed={"A": Decimal("10.00")},
+    )
+    assert report.markets_only_in_replay == 1
+    assert report.markets_absent_but_settled == 1
+    assert report.markets_absent_and_unexplained == 0
+    assert report.markets_replay_open_exchange_flat == 0
+
+
+def test_an_absence_no_settlement_explains_is_the_one_that_means_missing_history():
+    report = probe(positions=[], settlements=[], replayed={"A": Decimal("10.00")})
+    assert report.markets_absent_but_settled == 0
+    assert report.markets_absent_and_unexplained == 1
+
+
+def test_settled_and_unexplained_absences_are_counted_separately():
+    report = probe(
+        positions=[],
+        settlements=[{"ticker": "A", "market_result": "yes"}],
+        replayed={"A": Decimal("1.00"), "B": Decimal("2.00")},
+    )
+    assert report.markets_absent_but_settled == 1
+    assert report.markets_absent_and_unexplained == 1
+
+
+def test_settlement_economics_coverage_is_reported_per_field():
+    """A settlement carries its own quantities and cost, so it is a complete
+    accounting event rather than a bare notification."""
+    report = probe(settlements=[{
+        "ticker": "A", "market_result": "yes", "value": "1.00",
+        "revenue": "10.00", "yes_count_fp": "10.00", "no_count_fp": "0.00",
+        "yes_total_cost_dollars": "5.60", "no_total_cost_dollars": "0.00",
+        "fee_cost": "0.07", "settled_time": "2026-09-01T12:00:00Z",
+    }])
+    coverage = report.settlement_field_coverage
+    for name in ("value", "revenue", "yes_count_fp", "yes_total_cost_dollars",
+                 "fee_cost", "settled_time"):
+        assert coverage[name] == 1
+
+
+def test_distinct_settled_markets_are_counted():
+    report = probe(settlements=[
+        {"ticker": "A"}, {"ticker": "A"}, {"ticker": "B"},
+    ])
+    assert report.settlement_rows == 3
+    assert report.settlement_markets == 2
+
+
+def test_settlement_economics_values_never_reach_the_output():
+    report = probe(settlements=[{
+        "ticker": "KXMLBGAME-Z", "market_result": "yes",
+        "revenue": "1234.56", "yes_total_cost_dollars": "98.76",
+    }])
+    rendered = report.render()
+    assert "1234.56" not in rendered
+    assert "98.76" not in rendered
+    assert "KXMLBGAME" not in rendered
