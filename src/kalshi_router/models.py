@@ -43,6 +43,11 @@ MAX_PRICE_DOLLARS = Decimal("1")
 MIN_PRICE_CENTS = 0
 MAX_PRICE_CENTS = 100
 
+#: Fees are a non-negative cost.  Kalshi's schedule is
+#: ``ceil(0.07 * P * (1-P) * contracts)`` for takers and about a quarter of that
+#: for makers, so a fee is never negative and may legitimately be zero.
+MIN_FEE_DOLLARS = Decimal("0")
+
 
 def _require_positive_quantity(value: Decimal, field: str) -> Decimal:
     """A fill that executed moved a positive number of contracts.
@@ -54,6 +59,13 @@ def _require_positive_quantity(value: Decimal, field: str) -> Decimal:
     """
     if value <= 0:
         raise SchemaError(f"field {field!r} was not a positive contract quantity")
+    return value
+
+
+def _require_non_negative_fee(value: Decimal, field: str) -> Decimal:
+    """A fee is a cost; a negative one means the field is not what we think."""
+    if value < MIN_FEE_DOLLARS:
+        raise SchemaError(f"field {field!r} was a negative fee")
     return value
 
 
@@ -116,8 +128,21 @@ class NormalizedFill:
     #: True when a fixed-point field arrived as a JSON number rather than the
     #: documented decimal string, so schema drift is observable in aggregate.
     fixed_point_number_typed: bool = False
+    #: Exchange-reported fee for this execution, in dollars.  ``None`` when the
+    #: fill carried no fee field -- never reconstructed from the fee schedule,
+    #: because an estimate would silently contaminate realized economics.
+    fee_dollars: Decimal | None = None
+    #: Which field the fee came from, for schema diagnostics.
+    fee_source: str | None = None
     is_taker: bool | None = None
+    #: RFC3339 execution time as reported by Kalshi.
     created_time: str | None = None
+    #: Unix-seconds execution time, when present.
+    ts: int | None = None
+
+    @property
+    def has_fee(self) -> bool:
+        return self.fee_dollars is not None
 
     @property
     def has_quantity(self) -> bool:
@@ -176,6 +201,25 @@ def _parse_price(raw: dict[str, Any], side: Side) -> tuple[Decimal | None, str |
     return None, None, False
 
 
+def _parse_fee(raw: dict[str, Any]) -> tuple[Decimal | None, str | None]:
+    """Resolve the exchange-reported fee, preferring the fixed-point dollar field.
+
+    Never falls back to computing the fee from Kalshi's published schedule: the
+    authoritative value is what the exchange charged, and a reconstruction would
+    be an estimate wearing the costume of a fact.
+    """
+    for key in ("fee_cost_dollars", "fee_dollars", "fees_paid_dollars"):
+        parsed = parse_fixed_point(raw.get(key), key)
+        if parsed is not None:
+            return _require_non_negative_fee(parsed.value, key), key
+
+    legacy = raw.get("fee_cost")
+    if isinstance(legacy, int) and not isinstance(legacy, bool):
+        # Pre-migration ``fee_cost`` was integer cents.
+        return _require_non_negative_fee(Decimal(legacy), "fee_cost") / Decimal(100), "fee_cost"
+    return None, None
+
+
 def normalize_fill(raw: dict[str, Any]) -> NormalizedFill:
     """Convert one raw fill object into a :class:`NormalizedFill`.
 
@@ -220,6 +264,10 @@ def normalize_fill(raw: dict[str, Any]) -> NormalizedFill:
     order_id = _first_present(raw, "order_id")
     trade_id = _first_present(raw, "trade_id")
     is_taker = raw.get("is_taker")
+    fee, fee_source = _parse_fee(raw)
+    ts = raw.get("ts")
+    if isinstance(ts, bool) or not isinstance(ts, int):
+        ts = None
 
     return NormalizedFill(
         fill_id=fill_id,
@@ -233,8 +281,11 @@ def normalize_fill(raw: dict[str, Any]) -> NormalizedFill:
         price_dollars=price,
         price_source=price_source,
         fixed_point_number_typed=count_was_number or price_was_number,
+        fee_dollars=fee,
+        fee_source=fee_source,
         is_taker=is_taker if isinstance(is_taker, bool) else None,
-        created_time=_first_present(raw, "created_time", "ts"),
+        created_time=raw.get("created_time") if isinstance(raw.get("created_time"), str) else None,
+        ts=ts,
     )
 
 

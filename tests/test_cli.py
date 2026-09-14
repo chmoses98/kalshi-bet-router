@@ -169,3 +169,53 @@ def test_workflow_invocation_under_actions_emits_only_aggregates(monkeypatch, lo
 def test_unknown_subcommand_is_rejected():
     with pytest.raises(SystemExit):
         cli.main(["route"], stdout=io.StringIO(), stderr=io.StringIO())
+
+
+# ---------------------------- Phase 1A: shadow accounting in the live audit
+
+def test_audit_prints_the_shadow_accounting_block(monkeypatch, local_env):
+    install_fake_api(monkeypatch, SAMPLE)
+    code, out, _ = run(["audit"])
+    assert code == cli.EXIT_OK
+    assert "shadow accounting diagnostics (no routing, no persistence)" in out
+    assert "orders with partial fills" in out
+    assert "position episodes observed" in out
+
+
+def test_audit_never_claims_position_state_from_a_bounded_window(monkeypatch, local_env):
+    install_fake_api(monkeypatch, SAMPLE)
+    _, out, _ = run(["audit"])
+    assert "history supplied is complete: False" in out
+    assert "position state claimed as authoritative: False" in out
+    assert "NOT the account's position state" in out
+
+
+def test_accounting_block_leaks_no_identifiers_or_values(monkeypatch, local_env):
+    install_fake_api(monkeypatch, SAMPLE)
+    _, out, _ = run(["audit"])
+    for token in SENSITIVE_TOKENS:
+        assert token not in out
+    assert "KX" not in out
+    assert "$" not in out
+
+
+def test_json_mode_includes_accounting_counts_only(monkeypatch, local_env):
+    install_fake_api(monkeypatch, SAMPLE)
+    _, out, _ = run(["audit", "--json"])
+    data = json.loads(out)
+    accounting_keys = [k for k in data if k.startswith("accounting_")]
+    assert accounting_keys
+    assert all(isinstance(data[k], (int, bool)) for k in accounting_keys)
+    assert data["accounting_claims_complete_position_state"] is False
+
+
+def test_accounting_schema_failure_does_not_abort_the_audit(monkeypatch, local_env):
+    """A fill with no usable timestamp degrades accounting, not classification."""
+    undated = [dict(f) for f in SAMPLE[0]]
+    for raw in undated:
+        raw.pop("created_time", None)
+    install_fake_api(monkeypatch, [undated])
+    code, out, _ = run(["audit"])
+    assert code == cli.EXIT_OK
+    assert "fills fetched: 3" in out
+    assert "accounting schema failures: 1" in out

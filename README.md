@@ -291,7 +291,20 @@ See [`docs/PHASE_1_REQUIREMENTS.md`](docs/PHASE_1_REQUIREMENTS.md) for the fill-
 findings (partial fills, buy/sell, YES/NO, order grouping, position exit) and the
 list of what a position-accounting layer will need before routing can be built.
 
+## Phase 1A — shadow accounting
+
+A shadow-only `fill → order → position` accounting engine lives in
+`src/kalshi_router/accounting/`. It **routes nothing and persists nothing**; the
+public audit prints accounting counts only, and explicitly refuses to describe a
+bounded window as the account's position state.
+
+Kalshi models a market position as **one signed quantity per ticker**
+(`position_fp`), so YES and NO are binary complements on a single axis rather
+than separate inventories — buying NO at $0.43 is selling YES at $0.57. See
+[`docs/ACCOUNTING.md`](docs/ACCOUNTING.md).
+
 ## Documentation index
 
 * [`docs/API_CONTRACT.md`](docs/API_CONTRACT.md) — the exact Kalshi API contract used, and its verification status.
 * [`docs/PHASE_1_REQUIREMENTS.md`](docs/PHASE_1_REQUIREMENTS.md) — position-accounting research and Phase 1 scope.
+* [`docs/ACCOUNTING.md`](docs/ACCOUNTING.md) — the Phase 1A shadow accounting model: fill/order/position layers, ordering, cost basis, fees, history requirements and the downstream importer contract.

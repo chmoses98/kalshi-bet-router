@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from .accounting.diagnostics import AccountingDiagnostics, build_diagnostics
+from .accounting.engine import AccountingEngine, HistoryCompleteness
 from .aggregate import AuditReport
 from .classify import (
     Classification,
@@ -21,7 +23,7 @@ from .classify import (
     classify_market,
 )
 from .client import KalshiReadOnlyClient
-from .errors import KalshiRouterError
+from .errors import KalshiRouterError, SchemaError
 from .metadata import MetadataResolver
 from .milestones import MilestoneIndex, build_milestone_index
 from .models import (
@@ -69,6 +71,8 @@ class SensitiveDetail:
 @dataclass
 class AuditResult:
     report: AuditReport
+    #: Shadow-only accounting counts.  Never routed, never persisted.
+    accounting: AccountingDiagnostics = field(default_factory=AccountingDiagnostics)
     details: tuple[SensitiveDetail, ...] = ()
     _classifications: dict[str, Classification] = field(default_factory=dict, repr=False)
 
@@ -164,6 +168,15 @@ def run_audit(
 
     report.orders_observed = len(group_by_order(fills))
     report.partial_order_groups = count_partial_order_groups(fills)
+
+    # ---- shadow accounting (Phase 1A): replay only, routes nothing ----------
+    # The audit samples a bounded recent window, so the replay is told exactly
+    # that and refuses to describe its output as the account's position state.
+    try:
+        replay = AccountingEngine().replay(fills, HistoryCompleteness.BOUNDED_WINDOW)
+        accounting = build_diagnostics(replay)
+    except SchemaError:
+        accounting = AccountingDiagnostics(accounting_schema_failures=1)
 
     tickers = sorted({fill.ticker for fill in fills})
     report.unique_markets_observed = len(tickers)
@@ -277,4 +290,9 @@ def run_audit(
             for ticker, c in sorted(classifications.items())
         )
 
-    return AuditResult(report=report, details=details, _classifications=classifications)
+    return AuditResult(
+        report=report,
+        accounting=accounting,
+        details=details,
+        _classifications=classifications,
+    )

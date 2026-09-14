@@ -239,3 +239,48 @@ def paged_fills_handler(
         return 404, {"error": "unknown path"}
 
     return handler
+
+
+SYNTH_TICKER = "KXSYNTH-ACCT01-AAA"
+
+
+def make_accounting_fill(
+    index: int,
+    quantity: str,
+    action: str = "buy",
+    side: str = "yes",
+    yes_price: str | None = "0.5700",
+    no_price: str | None = None,
+    order_id: str | None = None,
+    ticker: str = SYNTH_TICKER,
+    minute: int | None = None,
+    created_time: str | None = None,
+    fee: str | None = None,
+    fill_id: str | None = None,
+    **extra: Any,
+) -> dict[str, Any]:
+    """A synthetic fill shaped for accounting tests.
+
+    Every identifier is invented. No value here comes from a real account.
+    """
+    stamp = created_time
+    if stamp is None:
+        stamp = f"2026-09-01T12:{(minute if minute is not None else index):02d}:00Z"
+    raw: dict[str, Any] = {
+        "fill_id": fill_id or f"SYNTHFILL-{index:04d}",
+        "order_id": order_id if order_id is not None else f"SYNTHORDER-{index:04d}",
+        "ticker": ticker,
+        "action": action,
+        "side": side,
+        "count_fp": quantity,
+        "created_time": stamp,
+        "is_taker": True,
+    }
+    if yes_price is not None and side == "yes":
+        raw["yes_price_dollars"] = yes_price
+    if side == "no":
+        raw["no_price_dollars"] = no_price if no_price is not None else "0.4300"
+    if fee is not None:
+        raw["fee_cost_dollars"] = fee
+    raw.update(extra)
+    return raw
