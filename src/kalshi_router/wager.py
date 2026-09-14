@@ -43,7 +43,12 @@ from enum import Enum
 from typing import Any
 
 from .accounting.position import Direction, PositionEpisode
-from .classify import Classification, MarketContext, UnresolvedReason
+from .classify import (
+    Classification,
+    EvidenceLevel,
+    MarketContext,
+    UnresolvedReason,
+)
 from .sports import Sport
 
 ONE = Decimal(1)
@@ -294,6 +299,20 @@ class WagerDiagnostics:
     unresolved_insufficient: int = 0
     unresolved_reason_not_recorded: int = 0
 
+    #: MEASUREMENT ONLY -- the verdict is unchanged. Deliberately NOT named
+    #: with the ``unresolved_`` prefix: that prefix is the reason breakdown, and
+    #: a test sums it against the unresolved total. A second axis sharing the
+    #: prefix would double-count and break an invariant that is doing real work.
+    #: Of the markets a terminal
+    #: L1/L2 refusal stopped, how many carried decisive evidence at a lower
+    #: level, and which. L4 is KALSHI'S OWN series metadata; L5 is this
+    #: project's registry. Falling back on the first would be consulting the
+    #: exchange, falling back on the second would be overruling it, so they are
+    #: counted apart and no policy is changed on either.
+    rescue_by_kalshi_series: int = 0
+    rescue_by_local_registry: int = 0
+    rescue_by_nothing: int = 0
+
     #: Where the game dates that WERE established came from. An explicit field
     #: is evidence; a ticker parse is a convention, and knowing the split is
     #: what tells us whether that convention is load-bearing.
@@ -362,6 +381,13 @@ class WagerDiagnostics:
             f"        insufficient authoritative metadata: "
             f"{self.unresolved_insufficient}",
             f"        reason not recorded: {self.unresolved_reason_not_recorded}",
+            "      what a fall-through WOULD have decided (measurement only):",
+            f"        Kalshi's own series metadata (L4): "
+            f"{self.rescue_by_kalshi_series}",
+            f"        this project's series registry (L5): "
+            f"{self.rescue_by_local_registry}",
+            f"        nothing would have decided it: "
+            f"{self.rescue_by_nothing}",
             f"    never classified (outside the bound): "
             f"{self.routable_not_classified}",
             "",
@@ -563,6 +589,13 @@ def build_shadow_wagers(
                             diagnostics, counter,
                             getattr(diagnostics, counter) + 1,
                         )
+                    rescuable = classification.terminal_rescuable_by
+                    if rescuable is EvidenceLevel.L4_SERIES_METADATA:
+                        diagnostics.rescue_by_kalshi_series += 1
+                    elif rescuable is EvidenceLevel.L5_SERIES_REGISTRY:
+                        diagnostics.rescue_by_local_registry += 1
+                    else:
+                        diagnostics.rescue_by_nothing += 1
         wager, refusal = build_shadow_wager(
             episode,
             classifications.get(episode.ticker),
