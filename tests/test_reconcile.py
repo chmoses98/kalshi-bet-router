@@ -347,3 +347,43 @@ def test_economics_semantics_emit_no_amounts():
     rendered = report.render()
     for amount in ("13.00", "7.28", "1.0000"):
         assert amount not in rendered
+
+
+# ============ self-review fixes: scalar is not a mismatch (Phase C.5) ========
+
+def test_a_scalar_settlement_is_not_counted_as_a_binary_mismatch():
+    """A non-binary result has no $1 par to be away from.
+
+    Bucketing it as "off par" would make every scalar settlement look like a
+    fault the moment tennis is enabled -- the exact shape of failure this
+    system keeps warning about: correct on every row seen so far, wrong on the
+    first row of a new sport.
+    """
+    report = probe(settlements=[settlement(
+        market_result="scalar", yes_count_fp="3.00", no_count_fp="0.00",
+        revenue="1.26",
+    )])
+    assert report.settlements_revenue_non_binary_result == 1
+    assert report.settlements_revenue_off_binary_par == 0
+    assert report.settlements_revenue_at_binary_par == 0
+
+
+def test_a_genuine_binary_mismatch_is_still_reported():
+    report = probe(settlements=[settlement(
+        market_result="yes", yes_count_fp="10.00", no_count_fp="0.00",
+        revenue="1000.00",
+    )])
+    assert report.settlements_revenue_off_binary_par == 1
+    assert report.settlements_revenue_non_binary_result == 0
+
+
+def test_a_settlement_with_no_result_has_no_par_to_compare_against():
+    report = probe(settlements=[settlement(revenue="5.00")])
+    assert report.settlements_revenue_non_binary_result == 1
+
+
+def test_a_negative_settlement_value_gets_its_own_bucket():
+    """Different, and more alarming, than an unexpectedly large one."""
+    report = probe(settlements=[settlement(market_result="yes", value="-1.0000")])
+    assert report.settlements_value_negative == 1
+    assert report.settlements_value_above_one == 0
