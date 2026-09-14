@@ -9,6 +9,7 @@ import pytest
 from kalshi_router.errors import SchemaError
 from kalshi_router.models import (
     Action,
+    OutcomeSide,
     Side,
     count_partial_order_groups,
     dedupe_fills,
@@ -21,41 +22,47 @@ from .synthetic import make_fill
 
 def test_buy_fill_normalizes():
     fill = normalize_fill(make_fill(1, action="buy", side="yes"))
-    assert fill.action is Action.BUY and fill.side is Side.YES
+    assert fill.outcome_side is OutcomeSide.YES
+    assert fill.legacy_action is Action.BUY and fill.legacy_side is Side.YES
     assert fill.count == Decimal("10.00") and fill.count_source == "count_fp"
-    assert fill.price_dollars == Decimal("0.5700") and fill.price_source == "price_dollars"
+    assert fill.price_dollars == Decimal("0.5700")
+    assert fill.price_source == "unified_price_dollars"
 
 
 def test_sell_fill_normalizes():
     fill = normalize_fill(make_fill(2, action="sell", side="yes"))
-    assert fill.action is Action.SELL
+    assert fill.legacy_action is Action.SELL
+    # Selling YES leaves the account positioned for NO.
+    assert fill.outcome_side is OutcomeSide.NO
 
 
-def test_no_side_fill_uses_the_no_price_leg():
+def test_no_outcome_fill_keeps_the_unified_price_uncomplemented():
+    """outcome_side sets direction only; it must not transform the price."""
     fill = normalize_fill(make_fill(3, side="no"))
-    assert fill.side is Side.NO and fill.price_dollars == Decimal("0.4300")
+    assert fill.outcome_side is OutcomeSide.NO
+    assert fill.price_dollars == Decimal("0.5700")
 
 
 def test_action_and_side_tokens_are_case_insensitive():
-    fill = normalize_fill(make_fill(4, action="SELL", side="NO"))
-    assert fill.action is Action.SELL and fill.side is Side.NO
+    raw = make_fill(4, action="SELL", side="NO")
+    raw["outcome_side"], raw["book_side"] = "YES", "BID"
+    fill = normalize_fill(raw)
+    assert fill.legacy_action is Action.SELL and fill.legacy_side is Side.NO
+    assert fill.outcome_side is OutcomeSide.YES
 
 
 def test_subpenny_price_survives_exactly():
     """A $0.001 tick cannot be represented in integer cents."""
-    raw = make_fill(5)
-    raw["yes_price_dollars"] = "0.6125"
+    raw = fill_with(yes_price_dollars="0.6125")
     fill = normalize_fill(raw)
     assert fill.price_dollars == Decimal("0.6125")
     assert str(fill.price_dollars) == "0.6125"
 
 
 def test_legacy_integer_cent_price_is_converted_exactly():
-    raw = make_fill(5)
-    del raw["yes_price_dollars"]
-    raw["yes_price"] = 61
-    fill = normalize_fill(raw)
-    assert fill.price_dollars == Decimal("0.61") and fill.price_source == "price_cents"
+    fill = normalize_fill(fill_with(yes_price=61))
+    assert fill.price_dollars == Decimal("0.61")
+    assert fill.price_source == "legacy_price_cents"
 
 
 def test_market_ticker_alias_is_accepted():
@@ -64,13 +71,15 @@ def test_market_ticker_alias_is_accepted():
     assert normalize_fill(raw).ticker.startswith("KXMLBGAME")
 
 
-def test_outcome_side_alias_is_accepted():
+def test_canonical_only_payload_parses_without_legacy_fields():
     raw = make_fill(7)
-    raw["outcome_side"] = raw.pop("side")
-    assert normalize_fill(raw).side is Side.YES
+    del raw["action"], raw["side"]
+    fill = normalize_fill(raw)
+    assert fill.outcome_side is OutcomeSide.YES
+    assert fill.legacy_action is None and fill.legacy_side is None
 
 
-@pytest.mark.parametrize("field", ["fill_id", "ticker", "action", "side"])
+@pytest.mark.parametrize("field", ["fill_id", "ticker"])
 def test_missing_required_field_fails_closed(field):
     raw = make_fill(8)
     del raw[field]
@@ -78,7 +87,19 @@ def test_missing_required_field_fails_closed(field):
         normalize_fill(raw)
 
 
-@pytest.mark.parametrize("bad", [{"action": "hedge"}, {"side": "maybe"}])
+def test_a_fill_with_no_direction_evidence_at_all_fails_closed():
+    raw = make_fill(8)
+    for key in ("outcome_side", "book_side", "action", "side"):
+        raw.pop(key, None)
+    with pytest.raises(SchemaError, match="direction"):
+        normalize_fill(raw)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [{"action": "hedge"}, {"side": "maybe"}, {"outcome_side": "perhaps"},
+     {"book_side": "sideways"}],
+)
 def test_unrecognized_tokens_fail_closed_rather_than_defaulting(bad):
     raw = make_fill(9)
     raw.update(bad)
@@ -118,9 +139,18 @@ def test_legacy_integer_count_is_accepted_but_not_preferred():
 
 def test_price_is_optional_and_never_required():
     raw = make_fill(12)
-    del raw["yes_price_dollars"]
+    del raw["yes_price_dollars"], raw["no_price_dollars"]
     fill = normalize_fill(raw)
     assert fill.price_dollars is None and fill.price_source is None
+
+
+def test_either_price_field_alone_gives_the_unified_price():
+    """Only one field present: it IS the price, not half of a complement."""
+    raw = make_fill(12)
+    del raw["yes_price_dollars"]
+    raw["no_price_dollars"] = "0.3500"
+    fill = normalize_fill(raw)
+    assert fill.price_dollars == Decimal("0.3500")
 
 
 # --------------------------------------------------------------- dedupe/group
@@ -165,8 +195,20 @@ def test_fills_without_an_order_id_are_not_grouped():
 # exclusively rather than as $0.01/$0.99.
 
 def fill_with(**overrides):
+    """Build a fill, keeping the two price fields at one unified value.
+
+    The current contract requires both to carry the same execution price, so a
+    test that overrides one is overriding the unified price.
+    """
     raw = make_fill(1)
     raw.update(overrides)
+    for key, other in (("yes_price_dollars", "no_price_dollars"),
+                       ("no_price_dollars", "yes_price_dollars")):
+        if key in overrides and other not in overrides:
+            raw[other] = overrides[key]
+    if "yes_price" in overrides or "no_price" in overrides:
+        raw.pop("yes_price_dollars", None)
+        raw.pop("no_price_dollars", None)
     return raw
 
 
@@ -224,26 +266,23 @@ def test_valid_boundary_and_subpenny_prices_are_accepted(price):
     assert fill.price_dollars == Decimal(price)
 
 
-def test_no_side_price_is_validated_too():
-    with pytest.raises(SchemaError, match="valid contract price range"):
-        normalize_fill(fill_with(side="no", no_price_dollars="1.0000"))
-
-
-@pytest.mark.parametrize("cents", [0, 100, -5, 250])
-def test_invalid_legacy_cent_prices_fail_closed(cents):
-    raw = fill_with()
-    del raw["yes_price_dollars"]
-    raw["yes_price"] = cents
+def test_no_outcome_price_is_validated_too():
+    raw = fill_with(side="no", action="buy", no_price_dollars="1.0000")
+    raw["outcome_side"], raw["book_side"] = "no", "ask"
     with pytest.raises(SchemaError, match="valid contract price range"):
         normalize_fill(raw)
 
 
+@pytest.mark.parametrize("cents", [0, 100, -5, 250])
+def test_invalid_legacy_cent_prices_fail_closed(cents):
+    with pytest.raises(SchemaError, match="valid contract price range"):
+        normalize_fill(fill_with(yes_price=cents))
+
+
 @pytest.mark.parametrize("cents", [1, 50, 99])
 def test_valid_legacy_cent_prices_convert_exactly(cents):
-    raw = fill_with()
-    del raw["yes_price_dollars"]
-    raw["yes_price"] = cents
-    assert normalize_fill(raw).price_dollars == Decimal(cents) / Decimal(100)
+    fill = normalize_fill(fill_with(yes_price=cents))
+    assert fill.price_dollars == Decimal(cents) / Decimal(100)
 
 
 def test_domain_errors_never_echo_the_offending_value():

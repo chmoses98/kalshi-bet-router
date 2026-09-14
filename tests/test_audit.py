@@ -109,7 +109,9 @@ def test_audit_classifies_every_sport_from_competition_metadata(signer):
     assert report.supported_sport_count == 5
     assert report.classification_failures == 0
     assert report.buy_fills == 6 and report.sell_fills == 1
-    assert report.yes_side_fills == 5 and report.no_side_fills == 2
+    # Canonical outcome_side: selling NO leaves the account positioned for YES,
+    # so the one sell/no fill counts as YES rather than NO.
+    assert report.yes_side_fills == 6 and report.no_side_fills == 1
 
 
 def test_resolution_levels_are_attributed(signer):

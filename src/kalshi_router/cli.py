@@ -143,9 +143,15 @@ def main(argv: list[str] | None = None, stdout=None, stderr=None) -> int:
         return EXIT_API
 
     if args.json:
-        print(json.dumps(result.report.as_dict(), indent=2, sort_keys=True), file=out)
+        payload = dict(result.report.as_dict())
+        payload.update(
+            {f"accounting_{k}": v for k, v in result.accounting.as_dict().items()}
+        )
+        print(json.dumps(payload, indent=2, sort_keys=True), file=out)
     else:
         print(result.report.render(), file=out)
+        print("", file=out)
+        print(result.accounting.render(), file=out)
 
     if args.show_sensitive_details:
         print("", file=out)

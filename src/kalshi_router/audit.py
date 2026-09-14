@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from .accounting.diagnostics import AccountingDiagnostics, build_diagnostics
+from .accounting.engine import AccountingEngine, HistoryCompleteness
 from .aggregate import AuditReport
 from .classify import (
     Classification,
@@ -21,13 +23,13 @@ from .classify import (
     classify_market,
 )
 from .client import KalshiReadOnlyClient
-from .errors import KalshiRouterError
+from .errors import KalshiRouterError, SchemaError
 from .metadata import MetadataResolver
 from .milestones import MilestoneIndex, build_milestone_index
 from .models import (
     Action,
     NormalizedFill,
-    Side,
+    OutcomeSide,
     count_partial_order_groups,
     dedupe_fills,
     group_by_order,
@@ -69,6 +71,8 @@ class SensitiveDetail:
 @dataclass
 class AuditResult:
     report: AuditReport
+    #: Shadow-only accounting counts.  Never routed, never persisted.
+    accounting: AccountingDiagnostics = field(default_factory=AccountingDiagnostics)
     details: tuple[SensitiveDetail, ...] = ()
     _classifications: dict[str, Classification] = field(default_factory=dict, repr=False)
 
@@ -139,23 +143,28 @@ def run_audit(
     fills = deduped.fills
 
     for fill in fills:
-        if fill.action is Action.BUY:
-            report.buy_fills += 1
-        else:
-            report.sell_fills += 1
-        if fill.side is Side.YES:
+        # Canonical direction: which outcome the fill left the account
+        # positioned for. buy-yes and sell-no both count as YES.
+        if fill.outcome_side is OutcomeSide.YES:
             report.yes_side_fills += 1
         else:
             report.no_side_fills += 1
+        # The deprecated action verb, reported only while Kalshi still sends it.
+        if fill.legacy_action is Action.BUY:
+            report.buy_fills += 1
+        elif fill.legacy_action is Action.SELL:
+            report.sell_fills += 1
+        else:
+            report.fills_without_legacy_action += 1
         if not fill.order_id:
             report.fills_without_an_order_id += 1
         if fill.count_source == "count_fp":
             report.fills_quantity_from_count_fp += 1
         elif fill.count_source == "count":
             report.fills_quantity_from_legacy_count += 1
-        if fill.price_source == "price_dollars":
+        if fill.price_source == "unified_price_dollars":
             report.fills_price_from_dollars += 1
-        elif fill.price_source == "price_cents":
+        elif fill.price_source == "legacy_price_cents":
             report.fills_price_from_legacy_cents += 1
         else:
             report.fills_without_price += 1
@@ -164,6 +173,15 @@ def run_audit(
 
     report.orders_observed = len(group_by_order(fills))
     report.partial_order_groups = count_partial_order_groups(fills)
+
+    # ---- shadow accounting (Phase 1A): replay only, routes nothing ----------
+    # The audit samples a bounded recent window, so the replay is told exactly
+    # that and refuses to describe its output as the account's position state.
+    try:
+        replay = AccountingEngine().replay(fills, HistoryCompleteness.BOUNDED_WINDOW)
+        accounting = build_diagnostics(replay)
+    except SchemaError:
+        accounting = AccountingDiagnostics(accounting_schema_failures=1)
 
     tickers = sorted({fill.ticker for fill in fills})
     report.unique_markets_observed = len(tickers)
@@ -277,4 +295,9 @@ def run_audit(
             for ticker, c in sorted(classifications.items())
         )
 
-    return AuditResult(report=report, details=details, _classifications=classifications)
+    return AuditResult(
+        report=report,
+        accounting=accounting,
+        details=details,
+        _classifications=classifications,
+    )
