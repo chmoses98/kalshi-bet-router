@@ -51,7 +51,12 @@ jobs:
   audit:
     name: Aggregate read-only audit
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Classifying every routable market costs several metadata requests each,
+    # and a complete history touches ~1700 markets. Ten minutes was enough only
+    # while the sweep was bounded to a few hundred; it is not enough to classify
+    # the whole routable set, and a run that dies at the cap produces a bounded
+    # answer that LOOKS like a complete one.
+    timeout-minutes: 30
     steps:
       - name: Refuse to run credentialed code from an untrusted ref
         run: |

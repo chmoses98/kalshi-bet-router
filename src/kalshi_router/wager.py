@@ -264,6 +264,19 @@ class WagerDiagnostics:
     refused_no_settlement_economics: int = 0
     refused_non_binary_settlement: int = 0
 
+    #: What the ROUTABLE episodes -- those with an importable identity -- were
+    #: classified as. Without this the refusal counts say a sport could not be
+    #: resolved but never what the market was, and "296 unresolved" reads as a
+    #: classifier defect when it may be an account that simply trades markets
+    #: this router is right to refuse.
+    routable_classified_mlb: int = 0
+    routable_classified_nfl: int = 0
+    routable_classified_cfb: int = 0
+    routable_classified_tennis: int = 0
+    routable_classified_other: int = 0
+    routable_classified_unresolved: int = 0
+    routable_not_classified: int = 0
+
     #: Where the game dates that WERE established came from. An explicit field
     #: is evidence; a ticker parse is a convention, and knowing the split is
     #: what tells us whether that convention is load-bearing.
@@ -306,6 +319,17 @@ class WagerDiagnostics:
             f"{self.refused_fee_allocation_ambiguous}",
             f"    no settlement economics: {self.refused_no_settlement_economics}",
             f"    settlement not binary: {self.refused_non_binary_settlement}",
+            "",
+            "  routable episodes (importable identity) by classification:",
+            f"    MLB: {self.routable_classified_mlb}",
+            f"    NFL: {self.routable_classified_nfl}",
+            f"    CFB: {self.routable_classified_cfb}",
+            f"    TENNIS: {self.routable_classified_tennis}",
+            f"    OTHER (not a sport this router carries): "
+            f"{self.routable_classified_other}",
+            f"    UNRESOLVED: {self.routable_classified_unresolved}",
+            f"    never classified (outside the bound): "
+            f"{self.routable_not_classified}",
             "",
             "  game date evidence, where one was established:",
             f"    from an explicit event field: {self.game_date_from_event_field}",
@@ -456,8 +480,27 @@ def build_shadow_wagers(
     diagnostics = WagerDiagnostics()
     wagers: list[ShadowWager] = []
 
+    routable_counters = {
+        Sport.MLB: "routable_classified_mlb",
+        Sport.NFL: "routable_classified_nfl",
+        Sport.CFB: "routable_classified_cfb",
+        Sport.TENNIS: "routable_classified_tennis",
+        Sport.OTHER: "routable_classified_other",
+        Sport.UNRESOLVED: "routable_classified_unresolved",
+    }
+
     for episode in episodes:
         diagnostics.episodes_considered += 1
+        # Recorded before the refusal, because the question "what ARE the
+        # markets this account could route?" is not answered by the reason the
+        # wager was refused.
+        if episode.is_importable:
+            classification = classifications.get(episode.ticker)
+            if classification is None:
+                diagnostics.routable_not_classified += 1
+            else:
+                name = routable_counters[classification.sport]
+                setattr(diagnostics, name, getattr(diagnostics, name) + 1)
         wager, refusal = build_shadow_wager(
             episode,
             classifications.get(episode.ticker),
