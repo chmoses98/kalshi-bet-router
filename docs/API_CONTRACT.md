@@ -6,6 +6,14 @@ mistakes a reasonable inference for an established fact.
 
 ## Verification status
 
+> **Acceptance run (200 fills, corrected model).** After the price and direction
+> corrections, the same bounded window normalized **200 of 200 fills, 0
+> rejected**, with **0 canonical-vs-legacy conflicts** — down from 194 rejected.
+> Accounting then ran over real data for the first time: 164 orders, **25 of them
+> partially filled**, 155 markets, 200 transitions, complete cost basis and
+> complete exchange fees on all 155 episodes, and an exact account-level fee
+> total. That is the evidence the corrections below rest on.
+
 Three sources back this document:
 
 1. **Kalshi's published API reference** (`docs.kalshi.com`), consulted for each
