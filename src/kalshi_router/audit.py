@@ -35,6 +35,7 @@ from .models import (
     group_by_order,
     normalize_fill,
 )
+from .reconcile import ReconciliationReport, probe_reconciliation
 from .safety import safe_schema_name
 from .schema_probe import SchemaCoverage, probe_fills
 from .sports import REPORT_ORDER, Sport
@@ -77,6 +78,8 @@ class AuditResult:
     accounting: AccountingDiagnostics = field(default_factory=AccountingDiagnostics)
     #: Live schema coverage.  Counts only.
     coverage: SchemaCoverage = field(default_factory=SchemaCoverage)
+    #: Replay-versus-exchange measurement.  Empty unless explicitly requested.
+    reconciliation: ReconciliationReport | None = None
     details: tuple[SensitiveDetail, ...] = ()
     _classifications: dict[str, Classification] = field(default_factory=dict, repr=False)
 
@@ -138,6 +141,7 @@ def run_audit(
     max_fills: int | None = None,
     collect_details: bool = False,
     use_milestones: bool = True,
+    reconcile: bool = False,
 ) -> AuditResult:
     """Run one complete Phase 0.1 audit.
 
@@ -197,6 +201,7 @@ def run_audit(
     # ---- shadow accounting (Phase 1A): replay only, routes nothing ----------
     # The audit samples a bounded recent window, so the replay is told exactly
     # that and refuses to describe its output as the account's position state.
+    replay = None
     try:
         replay = AccountingEngine().replay(fills, HistoryCompleteness.BOUNDED_WINDOW)
         accounting = build_diagnostics(replay)
@@ -315,10 +320,34 @@ def run_audit(
             for ticker, c in sorted(classifications.items())
         )
 
+    # A replay that failed has nothing to reconcile against, and comparing an
+    # empty replay would report every market as "missing from the replay" --
+    # a fabricated finding.
+    reconciliation = (
+        _probe_reconciliation(client, replay) if reconcile and replay is not None else None
+    )
+
     return AuditResult(
         report=report,
         accounting=accounting,
         coverage=coverage,
+        reconciliation=reconciliation,
         details=details,
         _classifications=classifications,
+    )
+
+
+def _probe_reconciliation(client: KalshiReadOnlyClient, replay) -> ReconciliationReport:
+    """Measure the replay against the exchange's own position view.
+
+    Opt-in, because it walks two more paginated collections and the bounded
+    200-fill audit already issues hundreds of requests.  Nothing downstream
+    depends on the result: it is a measurement, not a verdict.
+    """
+    replayed = {
+        ticker: ledger.position
+        for (_subaccount, ticker), ledger in replay.ledgers.items()
+    }
+    return probe_reconciliation(
+        client.iter_positions(), client.iter_settlements(), replayed
     )

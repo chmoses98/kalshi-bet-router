@@ -20,6 +20,11 @@ on:
         description: "Bounded recent fill sample size (1-500)"
         required: false
         default: "200"
+      reconcile:
+        description: "Also measure the replay against the exchange's positions and settlements"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -57,8 +62,13 @@ jobs:
           KALSHI_API_KEY_ID: ${{ secrets.KALSHI_API_KEY_ID }}
           KALSHI_PRIVATE_KEY: ${{ secrets.KALSHI_PRIVATE_KEY }}
           MAX_FILLS: ${{ inputs.max_fills }}
+          RECONCILE: ${{ inputs.reconcile }}
         run: |
           set -euo pipefail
-          python -m kalshi_router.cli audit --max-fills "${MAX_FILLS}"
+          RECONCILE_FLAG=""
+          if [ "${RECONCILE}" = "true" ]; then
+            RECONCILE_FLAG="--reconcile"
+          fi
+          python -m kalshi_router.cli audit --max-fills "${MAX_FILLS}" ${RECONCILE_FLAG}
           echo "Audit completed. Exit code 0 covers a successful audit of an"
           echo "account with no fills; an API or schema failure exits non-zero."
