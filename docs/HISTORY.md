@@ -695,6 +695,48 @@ One ticker held in two subaccounts is also `CONFLICTED`: the positions response
 carries no subaccount field, and attributing one reported quantity to one of two
 independent positions would merge them.
 
+### What the correction did to live data
+
+Run 20, same account, same complete history as run 19:
+
+```
+provable opening (from the fill history): 1698
+
+position authority (is the position story proven, and by what):
+  EARNED, closed by observed fills:                 0
+  EARNED, closed by a settlement:                 747
+  EARNED, open and reconciled with the exchange:    0
+  UNEARNED, open and unexplained:                 943
+  UNEARNED, conflicts with exchange truth:          8
+  UNEARNED, never reconciled (no exchange view):    0
+
+with an importable identity: 747
+
+fill history is complete:                True
+exchange position view supplied:         True
+position state claimed as authoritative: False
+```
+
+**Importable identities fell from 1,698 to 747.** That is the whole correction in
+one number. Every episode used to expose a stable `source_key` because the fill
+walk had finished — including the 943 markets the exchange does not report and
+the 8 whose settlements disagree on size. A downstream importer asking for a key
+would have been given one for all of them.
+
+The 951 unearned episodes partition exactly against the reconciliation buckets:
+943 `UNEXPLAINED` matching "absent from positions, outside settlement evidence",
+and 8 `CONFLICTED` matching the refused settlements. Two independently computed
+views of the same fact, agreeing.
+
+`EARNED, closed by observed fills: 0` is correct and worth noting: this account
+never traded a market fully back to flat (0 `close` transitions, 2 `reduce`).
+Every closed episode was closed by the exchange at expiry.
+
+And the two values now sit side by side with honest names —
+`fill history is complete: True` next to
+`position state claimed as authoritative: False` — where a single name used to
+carry both answers depending on who was reading.
+
 ### The governing principle
 
 > **A complete walk of fills proves the fill history. It does not, by itself,
