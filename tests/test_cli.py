@@ -282,3 +282,46 @@ def test_settlement_replay_output_leaks_nothing(monkeypatch, local_env):
     assert "KX" not in out
     assert "$" not in out
     assert "settled by the exchange" in out
+
+
+# ============ full history: claiming COMPLETE must be earned =================
+
+def test_history_evidence_is_always_rendered(monkeypatch, local_env):
+    install_fake_api(monkeypatch, SAMPLE)
+    _, out, _ = run(["audit"])
+    assert "history completeness evidence:" in out
+
+
+def test_a_default_audit_never_claims_a_complete_history(monkeypatch, local_env):
+    """It never walks the archive, so it cannot know what predates the cutoff."""
+    install_fake_api(monkeypatch, SAMPLE)
+    _, out, _ = run(["audit"])
+    assert "archive skipped: True" in out
+    assert "HISTORY IS COMPLETE: False" in out
+
+
+def test_a_full_history_walk_that_exhausts_both_routes_claims_complete(
+    monkeypatch, local_env
+):
+    install_fake_api(monkeypatch, SAMPLE)
+    _, out, _ = run(["audit", "--full-history"])
+    assert "HISTORY IS COMPLETE: True" in out
+
+
+def test_a_truncated_full_history_walk_still_refuses_to_claim_complete(
+    monkeypatch, local_env
+):
+    """Asking for a full history does not grant the claim; exhausting does."""
+    install_fake_api(monkeypatch, SAMPLE)
+    _, out, _ = run(["audit", "--full-history", "--max-fills", "1"])
+    assert "walk truncated (budget ran out): True" in out
+    assert "HISTORY IS COMPLETE: False" in out
+
+
+def test_history_evidence_leaks_nothing(monkeypatch, local_env):
+    install_fake_api(monkeypatch, SAMPLE)
+    _, out, _ = run(["audit", "--full-history"])
+    for token in SENSITIVE_TOKENS:
+        assert token not in out
+    assert "KX" not in out
+    assert "$" not in out
