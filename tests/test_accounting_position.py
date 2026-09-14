@@ -42,21 +42,26 @@ def test_sell_yes_is_negative_at_the_execution_price():
     assert signed == Decimal("-10.00") and price == Decimal("0.6000")
 
 
-def test_buy_no_is_negative_at_the_unified_price():
-    """outcome_side sets direction only; the price is NOT complemented."""
-    signed, price = project_fill(normalize_fill(
+def test_buy_no_is_negative_at_the_yes_axis_price():
+    """Buying NO at 0.43 is a -10 exposure at the 0.57 axis coordinate."""
+    fill = normalize_fill(
         make_accounting_fill(index=1, quantity="10.00", action="buy", side="no",
-                             no_price="0.4300")))
+                             no_price="0.4300"))
+    signed, price = project_fill(fill)
     assert signed == Decimal("-10.00")
-    assert price == Decimal("0.4300")
+    assert price == Decimal("0.5700")                    # YES axis
+    assert fill.leg_price_dollars == Decimal("0.4300")   # cash per contract
 
 
-def test_sell_no_is_positive_at_the_unified_price():
-    signed, price = project_fill(normalize_fill(
+def test_sell_no_is_positive_at_the_same_axis_price():
+    """Selling NO moves toward YES even though the contract is NO."""
+    fill = normalize_fill(
         make_accounting_fill(index=1, quantity="10.00", action="sell", side="no",
-                             no_price="0.4300")))
+                             no_price="0.4300"))
+    signed, price = project_fill(fill)
     assert signed == Decimal("10.00")
-    assert price == Decimal("0.4300")
+    assert price == Decimal("0.5700")
+    assert fill.leg_price_dollars == Decimal("0.4300")
 
 
 # ----------------------------------------------------- the ten requirements
@@ -189,8 +194,13 @@ def test_10_fills_from_more_than_one_page_replay_as_one_stream():
 
 # ------------------------------------------------------------ NO-side flows
 
-def test_no_side_open_and_close_realizes_correctly():
-    """A long-NO position profits as the unified price falls."""
+def test_long_no_sold_cheaper_than_it_was_bought_is_a_loss():
+    """Buy NO at 0.40, sell NO at 0.30: paid more than received, so a loss.
+
+    The refuted unified-price model scored this as +3.00 -- it read a FALLING
+    no-leg price as a gain for a long-NO holder, which is backwards.  Putting
+    both fills on the YES axis (0.60 then 0.70) gets the sign right.
+    """
     result = replay(
         {"index": 1, "quantity": "30.00", "side": "no", "no_price": "0.4000"},
         {"index": 2, "quantity": "30.00", "side": "no", "no_price": "0.3000",
@@ -199,32 +209,35 @@ def test_no_side_open_and_close_realizes_correctly():
     assert kinds(result) == ["open", "close"]
     episode = ledger(result).episodes[0]
     assert episode.direction is Direction.LONG_NO
-    assert episode.average_entry_price == Decimal("0.4000")  # not complemented
-    # (0.30 - 0.40) * 30 * sign(-1) = +3.00
-    assert episode.realized_pnl == Decimal("3.00")
+    assert episode.average_entry_price == Decimal("0.6000")  # YES axis
+    # (0.70 - 0.60) * 30 * sign(-1) = -3.00
+    assert episode.realized_pnl == Decimal("-3.00")
 
 
-def test_long_no_losing_trade_has_the_correct_sign():
-    """A long-NO position loses as the unified price rises."""
+def test_long_no_sold_dearer_than_it_was_bought_is_a_profit():
+    """Buy NO at 0.40, sell NO at 0.50: +0.10 a contract on 30 contracts."""
     result = replay(
         {"index": 1, "quantity": "30.00", "side": "no", "no_price": "0.4000"},
         {"index": 2, "quantity": "30.00", "side": "no", "no_price": "0.5000",
          "action": "sell"},
     )
-    # (0.50 - 0.40) * 30 * sign(-1) = -3.00
-    assert ledger(result).episodes[0].realized_pnl == Decimal("-3.00")
+    # (0.50 - 0.60) * 30 * sign(-1) = +3.00
+    assert ledger(result).episodes[0].realized_pnl == Decimal("3.00")
 
 
 def test_buying_no_reduces_a_long_yes_position():
-    """Buy-NO is long-NO exposure, so it reduces a long-YES inventory."""
+    """Buy-NO is NO exposure, so it reduces a long-YES inventory.
+
+    Buying NO at 0.70 is selling YES at 0.30, against a 0.60 basis: a loss.
+    """
     result = replay(
         {"index": 1, "quantity": "100.00", "yes_price": "0.6000"},
         {"index": 2, "quantity": "40.00", "side": "no", "no_price": "0.7000"},
     )
     assert kinds(result) == ["open", "reduce"]
     assert ledger(result).position == Decimal("60.00")
-    # Exit at the unified price 0.70, no complement: (0.70 - 0.60) * 40 = +4.00
-    assert ledger(result).episodes[0].realized_pnl == Decimal("4.00")
+    # (0.30 - 0.60) * 40 * sign(+1) = -12.00
+    assert ledger(result).episodes[0].realized_pnl == Decimal("-12.00")
 
 
 # ---------------------------------------------------------------- economics
@@ -340,9 +353,9 @@ def test_ambiguous_allocation_is_reported_as_an_aggregate_count():
     assert "0.3000" not in rendered
 
 
-def test_transition_records_the_unified_execution_price_field():
-    """Naming regression: the field is the execution price, not a YES-equivalent."""
+def test_transition_records_the_axis_execution_price_field():
+    """Naming regression: one field, holding the YES-axis execution price."""
     result = replay({"index": 1, "quantity": "10.00", "side": "no", "no_price": "0.4300"})
     transition = result.transitions[0]
-    assert transition.execution_price == Decimal("0.4300")
+    assert transition.execution_price == Decimal("0.5700")
     assert not hasattr(transition, "yes_equivalent_price")

@@ -36,15 +36,28 @@ def test_direction_field_coverage_is_recorded():
 
 
 def test_price_field_agreement_is_recorded():
-    agreeing = official_fill()
-    disagreeing = official_fill(fill_id="F2", yes_price_dollars="0.5600",
-                                no_price_dollars="0.4400")
-    accepted, coverage = probe(agreeing, disagreeing)
+    """Raw equality of the two fields, kept as a plain shape observation.
+
+    Equality is no longer what acceptance turns on -- complementarity is -- so
+    a complementary pair away from even odds is counted as DISAGREEING here and
+    still normalizes.
+    """
+    at_even_odds = official_fill(yes_price_dollars="0.5000",
+                                 no_price_dollars="0.5000")
+    complementary = official_fill(fill_id="F2", yes_price_dollars="0.5600",
+                                  no_price_dollars="0.4400")
+    accepted, coverage = probe(at_even_odds, complementary)
     assert coverage.both_price_fields_present == 2
     assert coverage.price_fields_agreed == 1
     assert coverage.price_fields_disagreed == 1
-    # The disagreeing one is rejected, not silently resolved.
-    assert len(accepted) == 1
+    assert len(accepted) == 2
+    assert coverage.rejected_price == 0
+
+
+def test_a_non_complementary_pair_is_rejected():
+    accepted, coverage = probe(official_fill(yes_price_dollars="0.6000",
+                                             no_price_dollars="0.3000"))
+    assert accepted == []
     assert coverage.rejected_price == 1
 
 
@@ -120,8 +133,10 @@ def test_non_object_entries_are_rejected_without_crashing():
 
 
 def test_legacy_price_unproven_fills_are_counted():
-    raw = official_fill()
+    """A lone legacy integer price with no canonical fields is uncheckable."""
+    raw = official_fill(yes_price=56)
     del raw["outcome_side"], raw["book_side"]
+    del raw["yes_price_dollars"], raw["no_price_dollars"]
     accepted, coverage = probe(raw)
     assert len(accepted) == 1
     assert coverage.legacy_price_unproven_fills == 1
@@ -249,9 +264,9 @@ def test_direction_matrix_never_echoes_an_unexpected_value():
 def test_rejected_fills_still_contribute_price_model_evidence():
     """Evidence must survive rejection -- otherwise a schema we got wrong would
     hide the very data proving it wrong."""
-    disagreeing = official_fill(yes_price_dollars="0.5600",
-                                no_price_dollars="0.4400")
-    accepted, coverage = probe(disagreeing)
+    unexplained = official_fill(yes_price_dollars="0.6000",
+                                no_price_dollars="0.3000")
+    accepted, coverage = probe(unexplained)
     assert accepted == []
     assert coverage.rejected_price == 1
-    assert coverage.price_pairs_complementary == 1
+    assert coverage.price_pairs_unexplained == 1

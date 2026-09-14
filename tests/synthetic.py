@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import urllib.parse
+from decimal import Decimal
 from typing import Any, Callable
 
 from cryptography.hazmat.primitives import serialization
@@ -39,14 +40,28 @@ def generate_fake_private_key_pem() -> str:
 
 
 def canonical_outcome(action: str, side: str) -> str:
-    """Documented equivalence: buy-yes and sell-no both position you for YES."""
-    positioned_for_yes = (action == "buy") == (side == "yes")
-    return "yes" if positioned_for_yes else "no"
+    """``outcome_side`` reports the CONTRACT, so it mirrors ``side``.
+
+    Live evidence: all 200 observed fills had ``outcome_side == side``, sells
+    included -- a sell-NO reports ``no`` even though it moves the position
+    toward YES.  ``action`` is unused here and is accepted only so callers can
+    keep passing it.
+    """
+    return side
 
 
 def canonical_book_side(action: str, side: str) -> str:
-    """``bid`` pairs with ``outcome_side=yes``; ``ask`` with ``no``."""
-    return "bid" if canonical_outcome(action, side) == "yes" else "ask"
+    """``book_side`` tracks the contract too, not the buy/sell verb.
+
+    Every observed ``side=no`` fill reported ``ask`` -- the 31 buys and the 2
+    sells alike -- so this is derived from ``side`` alone.
+    """
+    return "bid" if side == "yes" else "ask"
+
+
+def complement(price: str) -> str:
+    """The other leg of a binary contract: the pair sums to 1.00."""
+    return f"{Decimal('1') - Decimal(price):.4f}"
 
 
 def make_fill(
@@ -73,11 +88,11 @@ def make_fill(
         "side": side,
         "subaccount_number": 0,
         "is_taker": True,
-        # Current (post Q1-2026 fixed-point migration) field shapes. Both price
-        # fields carry the SAME unified execution price: outcome_side controls
-        # direction, not price.
+        # Current (post Q1-2026 fixed-point migration) field shapes. The two
+        # price fields are COMPLEMENTARY legs of one trade and sum to 1.00, as
+        # every observed live fill does.
         "yes_price_dollars": "0.5700",
-        "no_price_dollars": "0.5700",
+        "no_price_dollars": complement("0.5700"),
         "created_time": "2026-09-01T12:00:00Z",
     }
     if count is not None:
@@ -298,13 +313,16 @@ def make_accounting_fill(
         "created_time": stamp,
         "is_taker": True,
     }
-    # One unified execution price, written to both documented fields exactly as
-    # the published Get Fills example does. ``yes_price``/``no_price`` are just
-    # the caller's way of naming it; neither is complemented.
-    unified = yes_price if side == "yes" else (no_price if no_price is not None else "0.4300")
-    if unified is not None:
-        raw["yes_price_dollars"] = unified
-        raw["no_price_dollars"] = unified
+    # The two documented price fields are complementary legs of one trade.
+    # Whichever leg the caller names, the other is derived so the pair sums to
+    # 1.00 exactly as live fills do.
+    # A caller naming the NO leg means it; otherwise the YES default applies.
+    if no_price is not None:
+        raw["no_price_dollars"] = no_price
+        raw["yes_price_dollars"] = complement(no_price)
+    elif yes_price is not None:
+        raw["yes_price_dollars"] = yes_price
+        raw["no_price_dollars"] = complement(yes_price)
     if fee is not None:
         # Current published field name and representation: a dollar string.
         raw["fee_cost"] = fee

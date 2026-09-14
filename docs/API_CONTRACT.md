@@ -28,6 +28,12 @@ GitHub Actions run, which prints aggregate counts only.
 | Cursor pagination | 2 pages walked, 0 duplicates, no cursor fault |
 | `market -> event -> series` resolution | 154 unique markets, 0 lookup failures |
 | **`count_fp` has replaced integer `count`** | **200/200 fills carried no usable `count`** |
+| **`yes_price_dollars` + `no_price_dollars` are complementary legs** | **200/200 pairs summed to exactly `1.00`** |
+| **`outcome_side` reports the CONTRACT, not the exposure** | **`outcome_side == side` on 200/200 fills, sells included** |
+| **`book_side` tracks the contract, not the buy/sell verb** | **31 buy-NO and 2 sell-NO fills all reported `ask`** |
+| `fee_cost` is a decimal **dollar string** | 200/200 fills carried it as a string; 0 as an integer |
+| `subaccount_number` is present on current fills | 200/200 present and in range; 0 absent, 0 malformed |
+| `created_time` is present on current fills | 200/200; 0 fills needed the `ts` fallback |
 
 ### Disproven by the live run
 
@@ -35,6 +41,17 @@ GitHub Actions run, which prints aggregate counts only.
 * *"Series tags/categories identify the league."* Not sufficient: classification
   reached only 28% with **zero** `OTHER` verdicts across 154 markets, which is the
   signature of no league-level series metadata being recognized at all.
+* *"A fill carries one unified execution price, identical in `yes_price_dollars`
+  and `no_price_dollars`."* **False.** The two fields agreed on only 6 of 200
+  fills, and all 6 were at even odds — where a complementary pair coincides.
+  Zero fills were equal anywhere else. They are leg prices, and reading them as
+  a unified price rejected 194 of 200 fills and inverted the sign of realized
+  P&L on NO-side trades.
+* *"`outcome_side` and `book_side` carry the same bit in two vocabularies, so new
+  integrations can read only those two fields."* The first half holds — but both
+  fields carry the **contract**, so the pair cannot distinguish a buy from a
+  sell. Only the deprecated `action` does. Reading `outcome_side` as exposure
+  made the 2 sell-NO fills look self-contradictory and rejected them.
 
 ## Base URL
 
@@ -252,16 +269,27 @@ the first live run issued 331 requests for 200 fills across 154 markets.
 
 1. **`competition_scope` value set.** No published enum. Observed: `"Game"`.
    Treated as supporting evidence only, and its presence is reported as a count.
-2. **`filters_by_sport` inner object shape.** Parsed structurally; the next live
-   run's `competitions in taxonomy` counter will show whether it was read correctly
-   (a zero there with a non-zero sport count means the shape differs).
+2. **`filters_by_sport` inner object shape.** **Answered, negatively.** Two live
+   runs reported `sports in taxonomy: 22` with `competitions in taxonomy: 0` — the
+   exact signature predicted for "the shape differs". The L2 layer is therefore
+   non-functional and is tracked as a defect to repair, not as working evidence.
 3. **Event metadata envelope.** Top-level vs wrapped; both are accepted.
 4. **Coverage of `competition` on older events.** The `events with non-null
    competition` counter measures this directly on the next run.
-5. **Price field family in practice.** The next run reports
-   `price from *_price_dollars` vs `price from legacy integer cents`.
+5. **Price field family in practice.** **Answered.** 200/200 fills used
+   `*_price_dollars`; 0 used legacy integer cents. The pair is complementary (see
+   "Confirmed by the live run").
 6. **Subaccounts.** `/portfolio/fills` documents a `subaccount` parameter; unused
-   and unexamined. Must be settled before Phase 1 aggregates positions.
+   and unexamined. Live fills all carried `subaccount_number` in range, and only
+   one distinct subaccount was observed, so the multi-subaccount path is still
+   untested against real data. Must be settled before Phase 1 aggregates positions.
 7. **Series ticker registry.** Still unverified (`verified=False` throughout). It
    is now the last resort and can never override stronger evidence, and every
    audit reports how many classifications leaned on it.
+8. **Buy/sell after `action` removal.** Kalshi deprecated `action`/`side` on
+   2026-05-14 with removal not before 2026-05-28. On live evidence `action` is the
+   **only** field distinguishing a buy from a sell, so its removal would make
+   exposure unobservable from a fill alone. Open, and material: the router refuses
+   such a fill rather than guessing. The sell sample is small (2 fills), so this is
+   treated as fail-closed guidance rather than a proven exchange-wide rule, and it
+   needs confirmation against a larger sell population (see `GET /historical/fills`).

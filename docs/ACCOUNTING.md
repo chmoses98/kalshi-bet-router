@@ -21,7 +21,8 @@ it. `NormalizedFill` retains, in memory only:
 | `legacy_action` / `legacy_side` | DEPRECATED, metadata only, never drives inventory |
 | `subaccount_number` | part of position identity — see §3b |
 | `count` | `Decimal`, from `count_fp` |
-| `price_dollars` | `Decimal`, the fill's **unified execution price** — never complemented |
+| `price_dollars` | `Decimal`, the fill's execution price on the **YES axis** |
+| `leg_price_dollars` | `Decimal`, the price of the contract actually traded — cash per contract |
 | `fee_dollars` | `Decimal`, from `fee_cost` — see §9 |
 | `created_time` / `ts` | execution time |
 | `is_taker` | liquidity role |
@@ -61,73 +62,109 @@ market ticker:
 
 - positive → long YES · negative → long NO · zero → flat
 
-### Price is unified; `outcome_side` never changes it
+### Prices are complementary legs; the accounting axis is YES
 
-Kalshi's `order_direction` documentation is explicit:
-
-> *"`outcome_side` describes directional exposure only; it does not change the
-> order's price. An order at price p with `outcome_side=no` is matched by an
-> order at the same price p with `outcome_side=yes`: both parties trade at the
-> same price, just on opposite directions."*
-
-So a fill carries **one unified execution price**, and the published Get Fills
-example shows `yes_price_dollars` and `no_price_dollars` holding the *same*
-value. Projection is therefore:
-
-| `outcome_side` | Signed quantity | Accounting price |
-|---|---|---|
-| `yes` | `+count` | `p` (unchanged) |
-| `no` | `-count` | `p` (unchanged) |
-
-**The price is never complemented.** An earlier version of this engine mapped a
-NO fill to `1 - p`; that was wrong and is retracted. Complementing the price
-*and* applying the `position_sign` factor when realizing P&L transforms the same
-value twice. Direction is carried entirely by the sign of the quantity.
-
-Worked example -- open NO at `p = 0.57`, later reduce at `p = 0.50`:
+**This section was corrected against live data.** The earlier reading — that
+both price fields carry one identical "unified" price — is **refuted**. The
+read-only audit over 200 real fills reported:
 
 ```
-realized = (0.50 - 0.57) x quantity x sign(-1)   ->   positive
+complementary (sum to exactly 1.00):              200
+equal at even odds (consistent with both models):   6
+equal away from even odds (unified model only):     0
+neither complementary nor equal:                    0
 ```
 
-A long-NO position profits as the unified price falls, which is correct, and the
-entry basis stays `0.57` rather than being rewritten to `0.43`.
+`yes_price_dollars` and `no_price_dollars` are the two **legs** of one trade and
+sum to `1.00`. They coincide only at even odds, which is exactly why the refuted
+model accepted 6 fills and rejected the other 194.
 
-If both price fields are present they must agree, since the contract says they
-carry the same unified price; **disagreement fails closed** rather than one being
-silently preferred.
+Because positions live on one signed YES axis, the accounting price must be a
+coordinate on that axis, so the **YES leg** is used whichever contract was
+traded. Direction comes from the buy/sell verb together with the contract:
 
-### 3a. Canonical direction
+| `action` | `side` | Signed quantity | Accounting price |
+|---|---|---|---|
+| `buy` | `yes` | `+count` | yes leg |
+| `sell` | `no` | `+count` | yes leg |
+| `buy` | `no` | `-count` | yes leg |
+| `sell` | `yes` | `-count` | yes leg |
 
-Kalshi's `order_direction` documentation states that `outcome_side` and
-`book_side` "carry the same bit in two vocabularies" and that **new integrations
-should read only those two fields**. `side` and `action` were deprecated on the
-Fill schema on 2026-05-14, with removal not before 2026-05-28.
+Selecting the YES leg is **not** complementing. The axis price is a single
+consistent coordinate and is never transformed twice; direction is carried
+entirely by the sign of the quantity. The price actually paid or received per
+contract is kept separately as `leg_price_dollars`, so cash flow stays exact.
 
-`outcome_side` has already absorbed the buy/sell distinction, so it alone fixes
-the sign:
+Worked example — buy NO at a `0.43` leg price (a `0.57` axis price), later sell
+NO at `0.30` (a `0.70` axis price):
 
-| Legacy pair | Canonical `outcome_side` | Axis |
+```
+realized = (0.70 - 0.57) x quantity x sign(-1)   ->   negative
+```
+
+That is a **loss**, correctly: the contracts were bought at `0.43` and sold at
+`0.30`. The refuted model scored this same trade as a *profit* — it read a
+falling no-leg price as a gain for a long-NO holder. So the defect was not only
+rejecting fills; it was inverting the sign of realized P&L on NO-side trades.
+
+If both legs are present they must **sum to one**; a pair that does not is
+refused rather than one leg being silently preferred.
+
+### `outcome_side` is the contract, not the direction
+
+Live data settles this too. The direction-vocabulary co-occurrence over the same
+200 fills was:
+
+```
+yes|bid|buy|yes: 167     no|ask|buy|no: 31     no|ask|sell|no: 2
+```
+
+`outcome_side` equalled the deprecated `side` on **every** fill, sells included:
+a sell-NO arrives as `outcome_side=no` while moving the position toward YES.
+`book_side` tracks the contract as well — the 31 buy-NO and the 2 sell-NO fills
+all reported `ask` — so it does not carry the verb either.
+
+Therefore **only the deprecated `action` field distinguishes a buy from a sell**,
+and a fill without it is **refused**, not assumed to be a buy: assuming would
+turn a sale into a purchase and silently invert the position.
+
+> **Deprecation risk.** Kalshi deprecated `action`/`side` on 2026-05-14 with
+> removal not before 2026-05-28. On the evidence above, removing them would make
+> buy/sell unobservable from the fill payload alone. This is recorded as an open
+> risk rather than worked around. The sell sample is small (2 fills), so the
+> conclusion is treated as fail-closed guidance, not a proven exchange-wide rule.
+
+### 3a. Direction resolution
+
+**Corrected against live data.** The documentation's phrasing — that
+`outcome_side` and `book_side` "carry the same bit in two vocabularies", and that
+new integrations should read only those two fields — led to an incorrect
+inference here: that `outcome_side` had *absorbed* the buy/sell distinction. It
+has not. See the section above for the 200-fill evidence.
+
+Two separate facts are resolved from three fields:
+
+| Fact | Source | Cross-checks |
 |---|---|---|
-| buy yes | `yes` | + |
-| sell no | `yes` | + |
-| buy no | `no` | − |
-| sell yes | `no` | − |
+| **Contract** — which leg was traded | `outcome_side` | `book_side` (`bid`↔`yes`, `ask`↔`no`), deprecated `side` |
+| **Exposure** — which way the position moved | `action` + `side` | none available |
 
-`book_side` pairs `bid`↔`yes` and `ask`↔`no`.
+Exposure is `buy yes` / `sell no` → toward YES; `buy no` / `sell yes` → toward
+NO. That mapping is unchanged and correct; what was wrong was equating its result
+with the `outcome_side` *field*.
 
-**Resolution and fail-closed rules.** `outcome_side` is preferred; `book_side`
-corroborates; the deprecated pair is validated against the result and kept only
-as metadata. **Any disagreement between any two of the three fails closed** — no
-precedence rule silently picks a winner. A payload with no direction evidence at
-all fails closed.
+**Fail-closed rules.** Any disagreement among the contract fields fails closed —
+no precedence rule silently picks a winner. A payload with no contract evidence
+fails closed. **A payload with no buy/sell verb also fails closed**, because
+nothing else carries it and assuming `buy` would invert a sale.
 
 Legacy-only payloads are still accepted, deliberately: the deprecated fields are
 not removed before 2026-05-28, and historical fills from `GET /historical/fills`
 may predate the canonical fields. Losing the ability to replay history would be a
 worse failure than reading a documented deprecated field.
 
-Position projection **does not require `action` to exist**.
+Position projection therefore **does require the buy/sell verb to exist**, which
+is the reverse of what this document previously claimed.
 
 ### 3b. Subaccounts are part of accounting identity
 
@@ -233,7 +270,7 @@ timestamp **fails closed** rather than being appended arbitrarily.
 
 ## 7. Cost-basis policy
 
-**Weighted average** on the open inventory, in unified execution-price dollars.
+**Weighted average** on the open inventory, in YES-axis dollars.
 
 - **Increase:** `new_avg = (avg·|before| + price·|Δ|) / |after|`
 - **Reduce / close:** basis unchanged; realized P&L recognized on the closed part.
@@ -244,15 +281,15 @@ propagates silently into realized P&L.
 
 ### Legacy price compatibility
 
-A **legacy-only** payload (no `outcome_side`/`book_side`, only the deprecated
-`action`/`side`) still resolves *direction*, but whether its historic
-`yes_price`/`no_price` pair was a unified price or complementary leg prices is
-**not established by current documentation**. Rather than guess, such a fill is
-marked `legacy_price_semantics_unproven` and carries **no price at all**, so any
-episode touching it reports `cost_basis_complete = False`.
+Complementarity is checkable **from the pair itself**, so it does not depend on
+which direction fields a payload carried: a legacy-only fill carrying both legs
+resolves a proven price like any other.
 
-Legacy complement logic is therefore never applied anywhere — least of all to a
-current canonical fill.
+What remains unprovable is a **single** legacy integer price (`yes_price` or
+`no_price` alone) on a payload with no canonical fields — there is no second leg
+to check it against. Rather than guess, such a fill is marked
+`legacy_price_semantics_unproven` and carries **no price at all**, so any episode
+touching it reports `cost_basis_complete = False`.
 
 ## 8. Reduction / close / reverse semantics
 
@@ -265,9 +302,9 @@ current canonical fill.
 | `REVERSE` | crosses zero — old episode closes, new one opens on the other side |
 
 Realized P&L on a reduction is `(exit − entry) × quantity × sign(position)`, both
-prices being unified execution prices. The `sign(position)` factor is what makes
-a long-NO position realize correctly — which is precisely why the price must not
-also be complemented.
+prices being **YES-axis** coordinates. The `sign(position)` factor is what makes
+a long-NO position realize correctly — which is precisely why the axis price must
+not *also* be flipped per fill.
 
 **Reversal is legal, not an error.** Selling more YES than held carries the
 position through zero into long-NO, which Kalshi's signed representation permits.

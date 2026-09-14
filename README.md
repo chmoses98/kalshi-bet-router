@@ -300,9 +300,12 @@ bounded window as the account's position state.
 
 Kalshi models a market position as **one signed quantity per ticker**
 (`position_fp`), so YES and NO are two directions on a single signed axis rather
-than separate inventories. `outcome_side` carries the direction and **does not
-change the price** — both counterparties of a trade record the same unified
-execution price — so the engine never complements a NO fill's price. See
+than separate inventories. `yes_price_dollars` and `no_price_dollars` are the two
+**complementary legs** of one trade (verified on 200 live fills: 200 summed to
+exactly 1.00), so the engine denominates the ledger in the **YES leg** whichever
+contract was traded. `outcome_side` names the *contract*, not the direction —
+only the deprecated `action` distinguishes a buy from a sell, and a fill without
+it is refused rather than assumed. See
 [`docs/ACCOUNTING.md`](docs/ACCOUNTING.md).
 
 ## Documentation index

@@ -143,12 +143,17 @@ def test_order_spanning_two_markets_fails_closed():
         aggregate_orders(group)
 
 
-def test_order_spanning_two_outcome_sides_fails_closed():
+def test_order_spanning_a_buy_and_a_sell_fails_closed():
+    """One submission cannot both buy and sell the same contract.
+
+    The two fills carry the same `outcome_side` -- that field reports the
+    contract -- so the contradiction is only visible in the exposure.
+    """
     group = fills(
         {"index": 1, "quantity": "1.00", "order_id": "O1", "action": "buy"},
         {"index": 2, "quantity": "1.00", "order_id": "O1", "action": "sell"},
     )
-    with pytest.raises(SchemaError, match="outcome_side"):
+    with pytest.raises(SchemaError, match="exposure"):
         aggregate_orders(group)
 
 
