@@ -56,6 +56,22 @@ class AccountingDiagnostics:
     #: two episodes and Kalshi documents no allocation rule.
     episodes_with_ambiguous_fee_allocation: int = 0
     episodes_provable: int = 0
+    #: Open episodes sitting where the settlements route demonstrably had data.
+    #: No settlement closed them and the route was exhausted, so these really
+    #: are open -- and if the exchange also reports no position, that is a
+    #: genuine contradiction, not a coverage artefact.
+    episodes_open_within_settlement_evidence: int = 0
+    #: Open episodes whose outcome the evidence cannot establish either way.
+    #: NOT open positions: markets whose settlement, if any, predates the
+    #: settlements route's reach. Downstream must treat them as unknown.
+    episodes_with_an_unprovable_outcome: int = 0
+    #: The subset of the above explained specifically by settlement coverage,
+    #: rather than by a missing or unreadable clock.
+    episodes_bounded_by_settlement_coverage: int = 0
+    #: True when a trustworthy settlement floor existed and was applied. False
+    #: means nothing was reclassified -- the counts above are then all zero by
+    #: construction, not by measurement.
+    settlement_floor_applied: bool = False
     #: Episodes whose opening boundary is provable, so their identity is safe for
     #: a future idempotent import.
     episodes_with_importable_identity: int = 0
@@ -84,10 +100,32 @@ class AccountingDiagnostics:
     #: settlements close positions without a fill, and the settlement route
     #: does not reach as far back as the archive fill route does.
     position_state_contradicted_by_exchange: bool = False
+    #: The replay holds markets whose outcome no available route can establish,
+    #: because a settlement that would have closed them predates the settlements
+    #: route's reach. A STATED LIMIT, not a defect -- but it denies authority
+    #: just as firmly, because a portfolio of unknown outcomes is not a
+    #: portfolio.
+    position_state_bounded_by_settlement_coverage: bool = False
     history_is_complete: bool = False
 
+    @property
+    def position_state_is_authoritative(self) -> bool:
+        """The single place the authority claim is decided.
+
+        Three conditions, all necessary: the fill history is complete, the
+        exchange's own view does not contradict it, and no episode's outcome is
+        beyond what the available routes can establish.
+        """
+        return (
+            self.claims_complete_position_state
+            and not self.position_state_contradicted_by_exchange
+            and not self.position_state_bounded_by_settlement_coverage
+        )
+
     def as_dict(self) -> dict[str, int | bool]:
-        return dict(vars(self))
+        payload = dict(vars(self))
+        payload["position_state_is_authoritative"] = self.position_state_is_authoritative
+        return payload
 
     def render(self) -> str:
         lines = [
@@ -120,7 +158,15 @@ class AccountingDiagnostics:
             f"{self.settlements_refused_ambiguous_subaccount}",
             "",
             f"  position episodes observed: {self.episodes_observed}",
-            f"    still open at end of window: {self.episodes_open_at_end}",
+            f"    still open in the replay: {self.episodes_open_at_end}",
+            f"      open, inside settlement evidence: "
+            f"{self.episodes_open_within_settlement_evidence}",
+            f"      OUTCOME UNPROVABLE (not open, not closed): "
+            f"{self.episodes_with_an_unprovable_outcome}",
+            f"        of which bounded by settlement coverage: "
+            f"{self.episodes_bounded_by_settlement_coverage}",
+            f"      settlement evidence floor applied: "
+            f"{self.settlement_floor_applied}",
             f"    closed within window: {self.episodes_closed}",
             f"    with complete cost basis: {self.episodes_with_complete_cost_basis}",
             f"    with complete exchange fees: {self.episodes_with_complete_fees}",
@@ -139,7 +185,7 @@ class AccountingDiagnostics:
             "",
             f"  history supplied is complete: {self.history_is_complete}",
             f"  position state claimed as authoritative: "
-            f"{self.claims_complete_position_state and not self.position_state_contradicted_by_exchange}",
+            f"{self.position_state_is_authoritative}",
         ]
         if self.position_state_contradicted_by_exchange:
             lines.append(
@@ -154,6 +200,24 @@ class AccountingDiagnostics:
                 "  A complete fill history does not by itself earn authority "
                 "over positions."
             )
+        if self.position_state_bounded_by_settlement_coverage:
+            lines.append(
+                "  POSITION STATE IS BOUNDED BY SETTLEMENT COVERAGE: the replay "
+                "holds"
+            )
+            lines.append(
+                "  markets whose outcome no available route can establish. A "
+                "settlement"
+            )
+            lines.append(
+                "  that would have closed them predates the settlements route's "
+                "reach,"
+            )
+            lines.append(
+                "  so they are neither open nor closed. This is a stated limit, "
+                "not a"
+            )
+            lines.append("  defect -- and it is not authority either.")
         if not self.claims_complete_position_state:
             lines += [
                 "",
@@ -224,4 +288,24 @@ def build_diagnostics(result: AccountingResult) -> AccountingDiagnostics:
     diagnostics.episodes_with_ambiguous_fee_allocation = sum(
         1 for e in episodes if e.fee_allocation_ambiguous
     )
+    diagnostics.settlement_floor_applied = result.settlement_floor is not None
+    # Derived here, not by the caller: the replay already knows which episodes
+    # it cannot follow, and a flag this important should not depend on an
+    # orchestrator remembering to set it.
+    diagnostics.position_state_bounded_by_settlement_coverage = any(
+        e.is_open and not e.outcome_provable for e in episodes
+    )
+    diagnostics.episodes_with_an_unprovable_outcome = sum(
+        1 for e in episodes if e.is_open and not e.outcome_provable
+    )
+    diagnostics.episodes_bounded_by_settlement_coverage = sum(
+        1 for e in episodes if e.is_open and e.outcome_bounded_by_settlement_coverage
+    )
+    # Only meaningful once a floor exists. Without one, "open and provable" is
+    # just "open", and reporting it as inside the evidence would assert coverage
+    # that was never established.
+    if result.settlement_floor is not None:
+        diagnostics.episodes_open_within_settlement_evidence = sum(
+            1 for e in episodes if e.is_open and e.outcome_provable
+        )
     return diagnostics

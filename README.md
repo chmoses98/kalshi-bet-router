@@ -308,11 +308,32 @@ only the deprecated `action` distinguishes a buy from a sell, and a fill without
 it is refused rather than assumed. See
 [`docs/ACCOUNTING.md`](docs/ACCOUNTING.md).
 
+## Phase C.15 — two provability questions, not one
+
+Position state now answers two separate questions, because two different routes
+answer them:
+
+* **Where did this position open?** The fill routes (`/portfolio/fills` plus
+  `/historical/fills`) answer it, and a walk that exhausts both earns
+  `HISTORY IS COMPLETE`.
+* **Did this position ever close?** Only `/portfolio/settlements` can answer it,
+  and that route does **not** reach as far back. A market bought, held and
+  settled before its reach leaves a complete fill trail and no settlement row.
+
+So an episode carries both `provable` (its opening) and `outcome_provable` (its
+end). An episode with `outcome_provable = False` is **not an open position** —
+it is a market the evidence cannot follow to its end, and it may never be
+written downstream as live inventory. The audit reports the boundary as a day
+span, fails closed by withholding it whenever it cannot be trusted, and probes
+`GET /historical/settlements` in case an archive route exists that would close
+the gap instead of bounding it. See
+[`docs/HISTORY.md`](docs/HISTORY.md).
+
 ## Documentation index
 
 * [`docs/API_CONTRACT.md`](docs/API_CONTRACT.md) — the exact Kalshi API contract used, and its verification status.
 * [`docs/PHASE_1_REQUIREMENTS.md`](docs/PHASE_1_REQUIREMENTS.md) — position-accounting research and Phase 1 scope.
 * [`docs/WAGER_CONTRACT.md`](docs/WAGER_CONTRACT.md) — Phase E: why a logical wager is a position episode rather than an order, and how it maps onto the MLB ledger's existing `executionEconomics` slot.
-* [`docs/HISTORY.md`](docs/HISTORY.md) — Phase C: why full replay and the positions checkpoint are complementary rather than alternatives, why settlements are a first-class replay event, and the reconciliation invariants.
+* [`docs/HISTORY.md`](docs/HISTORY.md) — Phase C: why full replay and the positions checkpoint are complementary rather than alternatives, why settlements are a first-class replay event, why settlement coverage is a second completeness dimension, and the reconciliation invariants.
 * [`docs/DOWNSTREAM_REPOS.md`](docs/DOWNSTREAM_REPOS.md) — what each sport repository can actually accept today (only MLB has an importer).
 * [`docs/ACCOUNTING.md`](docs/ACCOUNTING.md) — the Phase 1A shadow accounting model: fill/order/position layers, ordering, cost basis, fees, history requirements and the downstream importer contract.

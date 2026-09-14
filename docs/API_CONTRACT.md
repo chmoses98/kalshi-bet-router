@@ -212,6 +212,35 @@ position rows against 155 replayed markets and 755 settlements. A replayed
 ticker missing from positions is therefore only evidence of missing history when
 no settlement explains it.
 
+### The route does not reach as far back as `GET /historical/fills`
+
+Measured, not assumed: the exhaustive run walked both fill routes to the end
+(883 live + 1,050 archived, 1,698 markets with activity) and the settlements
+walk returned **755 rows**. Those are the only markets the route will speak
+about. The remaining 943 settled — if they settled — outside its reach, and no
+request to this route will ever say so.
+
+The audit therefore records the **earliest `settled_time` in an exhausted
+walk** as a coverage floor, and treats it asymmetrically: above it, silence is
+evidence of absence; below it, silence is no evidence at all. See
+`docs/HISTORY.md`, "Settlement coverage is a second completeness dimension".
+
+The floor is a **lower bound on the route's reach**, not the reach itself — it
+is the oldest row *this account* has. Whether the route accepts a `min_ts` that
+would reach further is not yet established.
+
+## `GET /historical/settlements` — PROBED, not confirmed
+
+`/portfolio/fills` has an archive counterpart at `/historical/fills`. Whether
+settlements have the same pair decides whether the 943-market gap can be closed
+or only bounded, so the audit asks — one request, one page, never walked — and
+records the HTTP status either way.
+
+**Status: unverified.** The route is on the read-only allowlist and the probe
+ships; no live answer has been read yet. An absent route is recorded as a
+finding rather than raised as an error, so the audit degrades its measurement
+instead of failing.
+
 ## Classification metadata endpoints
 
 ### `GET /events/{event_ticker}/metadata` — the primary signal

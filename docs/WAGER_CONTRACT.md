@@ -140,6 +140,37 @@ Tests pin all three halves of that: settled-but-provisional under a bounded
 window, settled-and-stable under complete history, and that replaying
 settlements never upgrades the replay's own completeness claim.
 
+### Two provability flags, and an importer must read both
+
+An episode carries two independent claims, and they answer different questions:
+
+| Flag | Question | Cleared by |
+|---|---|---|
+| `provable` | Is the OPENING boundary established? | a bounded fill window |
+| `outcome_provable` | Is the OUTCOME established? | settlement evidence that does not reach this episode, or a settlement that could not be applied |
+
+`provable` gates **identity** — an unprovable opening means a
+`ProvisionalIdentity` and nothing may be imported. `outcome_provable` gates
+**resolution**: identity is fine, cost basis is fine, but whether the position
+still exists is unknown.
+
+An episode with `outcome_provable = False` is **not an open position**. It is a
+market the evidence cannot follow to its end — most often because a settlement
+that would have closed it predates the settlements route's reach, sometimes
+because a settlement exists but disagreed with the replay on size. Either way:
+
+* it must never be written as live inventory, or as an unsettled wager awaiting
+  a result;
+* it must never be settled from a reconstructed outcome — the whole point is
+  that the outcome is unknown;
+* its cost basis and identity remain valid, so it may be recorded as a wager of
+  **unknown resolution**, if the downstream schema has a state for that. If it
+  does not, the episode is not importable and the missing state is the thing to
+  build.
+
+See `docs/HISTORY.md`, "Settlement coverage is a second completeness dimension",
+for how the boundary is measured and why it fails closed.
+
 ## Open questions this contract does not yet answer
 
 * **A reduction that is not a close.** MLB's record has one stake and one payout.
@@ -155,3 +186,7 @@ settlements never upgrades the replay's own completeness claim.
 * **Multi-leg.** MLB supports `MULTI_LEG` for one economic position spanning
   several contracts. A router that emits one wager per ticker cannot produce one,
   and must not silently flatten a deliberate multi-leg bet into unrelated singles.
+* **A state for unknown resolution.** `outcome_provable = False` describes a
+  wager that is neither pending nor settled. MLB's schema has no such state
+  today, and inventing one downstream is a ledger decision, not a router one.
+  Until it exists, these episodes stay out of any import.

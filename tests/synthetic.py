@@ -224,6 +224,7 @@ def paged_fills_handler(
     positions: list[dict[str, Any]] | None = None,
     settlements: list[dict[str, Any]] | None = None,
     archived_fills: list[dict[str, Any]] | None = None,
+    archived_settlements: list[dict[str, Any]] | None = None,
 ) -> Handler:
     """Serve the full read-only surface used by an audit.
 
@@ -240,6 +241,13 @@ def paged_fills_handler(
 
         if path.endswith("/historical/fills"):
             return 200, {"fills": archived_fills or [], "cursor": ""}
+
+        if path.endswith("/historical/settlements"):
+            # ``None`` means the route does not exist, which is the live
+            # expectation until a run proves otherwise.
+            if archived_settlements is None:
+                return 404, {"error": "not found"}
+            return 200, {"settlements": archived_settlements, "cursor": ""}
 
         if path.endswith("/portfolio/positions"):
             return 200, {"market_positions": positions or [], "cursor": ""}

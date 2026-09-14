@@ -24,38 +24,24 @@ still sorts coherently.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Iterable
 
 from ..errors import SchemaError
 from ..models import NormalizedFill
-
-EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+from ..timeaxis import parse_rfc3339_seconds
 
 
 def parse_execution_time(fill: NormalizedFill) -> Decimal:
     """Return the fill's execution time as exact seconds since the epoch.
 
-    Fails closed when neither timestamp field is usable.
+    Fails closed when neither timestamp field is usable.  The parse itself lives
+    in :mod:`kalshi_router.timeaxis`, shared with settlement times so that a
+    fill and a settlement are always compared on the same scale.
     """
-    raw = fill.created_time
-    if isinstance(raw, str) and raw.strip():
-        text = raw.strip()
-        # ``fromisoformat`` accepts a trailing 'Z' from Python 3.11 onward, but
-        # normalize it anyway so the parse does not depend on the interpreter.
-        if text.endswith(("Z", "z")):
-            text = text[:-1] + "+00:00"
-        try:
-            parsed = datetime.fromisoformat(text)
-        except ValueError:
-            parsed = None
-        if parsed is not None:
-            if parsed.tzinfo is None:
-                # Kalshi reports UTC; an offset-naive value is treated as UTC
-                # rather than as local time, which would vary by machine.
-                parsed = parsed.replace(tzinfo=timezone.utc)
-            return Decimal(str((parsed - EPOCH).total_seconds()))
+    parsed = parse_rfc3339_seconds(fill.created_time)
+    if parsed is not None:
+        return parsed
 
     if fill.ts is not None:
         return Decimal(fill.ts)

@@ -407,3 +407,128 @@ def test_a_bound_larger_than_the_market_count_changes_nothing(signer):
     result = run_audit(build_client(pages, signer), max_classify_markets=99)
     assert result.report.markets_not_classified == 0
     assert result.report.markets_classified == 1
+
+
+# ================= Phase C.15: settlement coverage, end to end ===============
+
+def coverage_client(signer, pages, settlements, archived_settlements=None, positions=None):
+    handler = paged_fills_handler(
+        pages,
+        build_metadata(),
+        taxonomy=TAXONOMY,
+        positions=positions,
+        settlements=settlements,
+        archived_settlements=archived_settlements,
+    )
+    return KalshiReadOnlyClient(
+        signer=signer,
+        config=AuditConfig(max_fills=500, page_limit=100, max_retries=0),
+        transport=FakeTransport(handler),
+        sleep=lambda _: None,
+    )
+
+
+def settlement(ticker, settled_time):
+    return {
+        "ticker": ticker,
+        "settled_time": settled_time,
+        "market_result": "yes",
+        "revenue": "1000",
+        "value": "100",
+        "fee_cost": "0.0700",
+        "yes_count_fp": "1.00",
+        "no_count_fp": "0.00",
+    }
+
+
+def test_audit_measures_settlement_reach_and_bounds_what_it_cannot_prove(signer):
+    # One position opened well before any settlement the route will serve, one
+    # opened well after. The first is unprovable; the second is really open.
+    pages = [[
+        make_fill(1, ticker=market_for("MLB"), created_time="2026-01-01T00:00:00Z"),
+        make_fill(2, ticker=market_for("NFL"), created_time="2026-08-01T00:00:00Z"),
+    ]]
+    settlements = [settlement(market_for("CFB"), "2026-06-01T00:00:00Z")]
+    result = run_audit(
+        coverage_client(signer, pages, settlements), reconcile=True, full_history=True
+    )
+
+    assert result.settlement_coverage.rows == 1
+    assert result.settlement_coverage.floor_is_usable
+    assert result.accounting.settlement_floor_applied
+    assert result.accounting.episodes_with_an_unprovable_outcome == 1
+    assert result.accounting.episodes_bounded_by_settlement_coverage == 1
+    assert result.accounting.episodes_open_within_settlement_evidence == 1
+    # Bounded, not contradicted: a limit to state, not a defect to chase.
+    assert result.accounting.position_state_bounded_by_settlement_coverage
+    assert not result.accounting.position_state_is_authoritative
+    assert result.reconciliation.markets_absent_but_outside_settlement_evidence == 1
+    assert result.reconciliation.markets_absent_and_unexplained == 1
+
+
+def test_an_absent_archive_settlements_route_is_recorded_not_fatal(signer):
+    pages = [[make_fill(1, ticker=market_for("MLB"))]]
+    result = run_audit(
+        coverage_client(signer, pages, []), reconcile=True, full_history=True
+    )
+    coverage = result.settlement_coverage
+    assert coverage.archive_route_probed
+    assert not coverage.archive_route_available
+    assert coverage.archive_route_status == 404
+
+
+def test_an_available_archive_settlements_route_is_reported(signer):
+    # If the route ever appears, the gap closes outright rather than being
+    # bounded, so the audit must notice the day that changes.
+    pages = [[make_fill(1, ticker=market_for("MLB"))]]
+    result = run_audit(
+        coverage_client(
+            signer,
+            pages,
+            [],
+            archived_settlements=[settlement(market_for("CFB"), "2020-01-01T00:00:00Z")],
+        ),
+        reconcile=True,
+        full_history=True,
+    )
+    coverage = result.settlement_coverage
+    assert coverage.archive_route_available
+    assert coverage.archive_route_status == 200
+    assert coverage.archive_first_page_rows == 1
+
+
+def test_the_settlements_route_is_walked_once_per_audit(signer):
+    # It used to be walked twice -- once for the replay and once inside the
+    # reconciliation probe -- which doubled the cost and let the two views
+    # disagree if a settlement landed between them.
+    pages = [[make_fill(1, ticker=market_for("MLB"))]]
+    handler = paged_fills_handler(
+        pages, build_metadata(), taxonomy=TAXONOMY,
+        settlements=[settlement(market_for("MLB"), "2026-06-01T00:00:00Z")],
+    )
+    transport = FakeTransport(handler)
+    client = KalshiReadOnlyClient(
+        signer=signer,
+        config=AuditConfig(max_fills=500, page_limit=100, max_retries=0),
+        transport=transport,
+        sleep=lambda _: None,
+    )
+    run_audit(client, reconcile=True, full_history=True)
+    walks = [p for p in transport.paths if "/portfolio/settlements" in p]
+    assert len(walks) == 1
+
+
+def test_without_reconcile_no_settlement_route_is_touched_at_all(signer):
+    pages = [[make_fill(1, ticker=market_for("MLB"))]]
+    handler = paged_fills_handler(pages, build_metadata(), taxonomy=TAXONOMY)
+    transport = FakeTransport(handler)
+    client = KalshiReadOnlyClient(
+        signer=signer,
+        config=AuditConfig(max_fills=500, page_limit=100, max_retries=0),
+        transport=transport,
+        sleep=lambda _: None,
+    )
+    result = run_audit(client)
+    assert not any("settlements" in p for p in transport.paths)
+    assert not result.settlement_coverage.archive_route_probed
+    assert not result.accounting.settlement_floor_applied

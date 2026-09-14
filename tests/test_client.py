@@ -351,7 +351,8 @@ def test_the_allowlist_itself_contains_no_order_route():
 
 @pytest.mark.parametrize(
     "path", ["/portfolio/positions", "/portfolio/settlements",
-             "/historical/fills", "/historical/cutoff"],
+             "/historical/fills", "/historical/cutoff",
+             "/historical/settlements"],
 )
 def test_phase_c_read_only_history_routes_are_allowed(signer, path):
     client, _ = build_client(lambda m, p, q: (200, {}), signer)
@@ -426,3 +427,41 @@ def test_an_empty_account_has_no_positions_and_that_is_valid(signer):
 def test_historical_cutoff_is_fetched_as_an_object(signer):
     client, _ = build_client(lambda m, p, q: (200, {"cutoff_ts": 1788000000}), signer)
     assert client.get_historical_cutoff()["cutoff_ts"] == 1788000000
+
+
+# ================= Phase C.15: settlement coverage and its archive probe ======
+
+def test_the_settlements_walk_reports_how_it_ended(signer):
+    from kalshi_router.client import WalkStats
+
+    client, _ = build_client(paged("settlements", [[{"ticker": "A"}], [{"ticker": "B"}]]), signer)
+    stats = WalkStats()
+    rows = list(client.iter_settlements(stats=stats))
+    assert len(rows) == 2
+    assert stats.pages == 2
+    assert stats.rows == 2
+    # The walk takes no budget, so exhaustion is the only way it ends -- which
+    # is what makes its earliest row a usable coverage floor.
+    assert stats.exhausted
+    assert not stats.truncated
+
+
+def test_the_archive_settlements_probe_costs_exactly_one_request(signer):
+    calls = []
+
+    def handler(method, path, query):
+        calls.append(path)
+        return 200, {"settlements": [{"ticker": "A"}], "cursor": "more"}
+
+    client, _ = build_client(handler, signer)
+    payload = client.probe_historical_settlements()
+    # A probe asks whether the route answers. It does not walk it, cursor or no.
+    assert calls == ["/trade-api/v2/historical/settlements"]
+    assert payload["settlements"] == [{"ticker": "A"}]
+
+
+def test_the_archive_settlements_probe_surfaces_a_missing_route(signer):
+    client, _ = build_client(lambda m, p, q: (404, {}), signer)
+    with pytest.raises(HttpStatusError) as excinfo:
+        client.probe_historical_settlements()
+    assert excinfo.value.status == 404
