@@ -273,6 +273,38 @@ That mattered: a reconciliation that flagged "revenue and value disagree" would
 have raised 120 false alarms on an account with nothing wrong with it, and the
 natural response to a false alarm at that volume is to loosen the check.
 
+## Settlement replay
+
+Implemented, using only exchange-stated economics:
+
+* realized P&L is the settlement's own `revenue` against the episode's cost
+  basis — no closing price is invented, the same rule already applied to fees;
+* the settlement's `fee_cost` is charged as stated;
+* `revenue` and `value` are converted from cents to dollars **explicitly**, in
+  one place, because the units are mixed within a single row.
+
+Applied after the fills rather than merged into them: a market settles at expiry
+and cannot take a fill afterwards, so for any one ticker every fill already
+precedes its settlement. Settlements are ordered among themselves by
+`settled_time` so the result stays deterministic.
+
+### Two refusals, both fail-closed
+
+**Size disagreement.** When a settlement states a quantity that does not match
+the replayed position, some of the settled contracts were bought outside the
+window. Applying it anyway would credit the full payout against a partial cost
+basis and **overstate profit silently**, so the settlement is refused and
+counted, and the position is left open rather than zeroed.
+
+**Ambiguous subaccount.** The live settlement schema carries **no subaccount
+field**. With one subaccount that is harmless; with several, a settlement cannot
+be attributed to one, and guessing would merge two independent positions. A
+ticker held in more than one subaccount refuses its settlement.
+
+That second limit is a property of the exchange's schema, not of this code, and
+it constrains any multi-subaccount future: settlement-aware accounting is only
+sound while a ticker is held in at most one subaccount.
+
 ## Still open
 
 * **`/historical/cutoff` response shape** is unverified against a live response.

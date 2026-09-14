@@ -64,7 +64,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import Enum
 
-from ..models import NormalizedFill, OutcomeSide
+from ..models import NormalizedFill, NormalizedSettlement, OutcomeSide
 from .identity import (
     Identity,
     ProvisionalIdentity,
@@ -84,6 +84,8 @@ class TransitionKind(str, Enum):
     REDUCE = "reduce"
     CLOSE = "close"
     REVERSE = "reverse"
+    #: The exchange closed the position itself, at expiry, with no fill.
+    SETTLE = "settle"
 
 
 class Direction(str, Enum):
@@ -113,6 +115,104 @@ def project_fill(fill: NormalizedFill) -> tuple[Decimal, Decimal | None]:
 
 def _sign(value: Decimal) -> int:
     return (value > 0) - (value < 0)
+
+
+class SettlementRefused(Exception):
+    """A settlement that cannot be applied safely, with the reason why.
+
+    Raised rather than applied, because the alternatives are worse: forcing the
+    position to zero would invent a close the evidence does not support, and
+    skipping silently would leave an episode open forever with no record of why.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+def apply_settlement(
+    ledger: MarketLedger, settlement: NormalizedSettlement
+) -> PositionTransition:
+    """Close a market at expiry, using the exchange's own economics.
+
+    A settlement pays out against the final result and generates **no fill**, so
+    a replay built only from fills reports a long-settled market as still open.
+    The live audit showed exactly that: 155 episodes open, 0 closed, in a window
+    of games that had all finished.
+
+    Nothing is reconstructed. Realized P&L is the exchange's stated ``revenue``
+    against the episode's own cost basis, and the fee is the exchange's
+    ``fee_cost``.
+
+    Two refusals, both fail-closed:
+
+    * **Size disagreement.** When the settlement states a quantity and it does
+      not match the replayed position, this history is incomplete for that
+      market -- some of the settled contracts were bought outside the window.
+      Applying it anyway would attribute a payout to a cost basis that does not
+      cover it, and quietly overstate profit.
+    * **Ambiguous subaccount.** The live settlement schema carries **no**
+      subaccount field. With one subaccount that is harmless; with several, a
+      settlement cannot be attributed, and guessing would merge two independent
+      positions. The caller must establish that only one subaccount holds the
+      ticker.
+    """
+    before = ledger.position
+    if before == 0:
+        raise SettlementRefused("settlement for a market the replay shows as flat")
+
+    stated = settlement.settled_quantity
+    if stated is not None and stated != before:
+        raise SettlementRefused(
+            "settlement quantity does not match the replayed position; the "
+            "history for this market is incomplete"
+        )
+
+    closed = abs(before)
+    realized: Decimal | None = None
+    if ledger.cost_basis_complete and ledger.average_entry_price is not None:
+        # The member paid the cost basis for `closed` contracts on their side;
+        # the exchange paid back `revenue`. Both are exchange-stated.
+        cost = ledger.average_entry_price if before > 0 else ONE - ledger.average_entry_price
+        realized = settlement.revenue_dollars - (cost * closed)
+
+    episode = ledger.current_episode
+    ledger.position = ZERO
+    ledger.average_entry_price = None
+
+    transition = PositionTransition(
+        fill_id=f"settlement:{settlement.ticker}",
+        order_id=None,
+        ticker=ledger.ticker,
+        kind=TransitionKind.SETTLE,
+        signed_quantity=-before,
+        position_before=before,
+        position_after=ZERO,
+        execution_price=settlement.market_value_dollars,
+        quantity_opened=ZERO,
+        quantity_closed=closed,
+        realized_pnl=realized,
+        fee_dollars=settlement.fee_dollars,
+    )
+
+    if episode is not None:
+        episode.closed_at = episode.opened_at
+        episode.closing_fill_id = transition.fill_id
+        episode.remaining_quantity = ZERO
+        episode.total_closed_quantity += closed
+        episode.transitions.append(transition)
+        if realized is None:
+            episode.cost_basis_complete = False
+        else:
+            episode.realized_pnl += realized
+        if settlement.fee_dollars is None:
+            episode.fee_complete = False
+        else:
+            episode.fees_paid += settlement.fee_dollars
+        ledger.closed_episodes.append(episode)
+        ledger.current_episode = None
+
+    return transition
 
 
 @dataclass(frozen=True)

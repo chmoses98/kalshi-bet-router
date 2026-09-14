@@ -94,6 +94,8 @@ class AuditReport:
     #: Every element is filtered through SCHEMA_NAME_PATTERN before it is stored,
     #: so the exception is bounded by construction rather than by convention: a
     #: ticker (`KXMLBGAME-...`), an id or any value-looking token cannot match.
+    settlements_fetched: int = 0
+    settlements_rejected: int = 0
     taxonomy_observed_keys: tuple[str, ...] = ()
     taxonomy_observed_entry_keys: tuple[str, ...] = ()
 
@@ -261,6 +263,9 @@ class AuditReport:
             "",
             f"classifications relying on an unverified series ticker: "
             f"{self.classifications_using_unverified_series_ticker}",
+            f"settlements fetched: {self.settlements_fetched}",
+            f"settlements rejected (excluded from accounting): "
+            f"{self.settlements_rejected}",
             f"API requests issued: {self.api_requests}",
         ]
         if self.account_has_no_fills:

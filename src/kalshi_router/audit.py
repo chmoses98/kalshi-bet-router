@@ -27,6 +27,7 @@ from .errors import KalshiRouterError, SchemaError
 from .metadata import MetadataResolver
 from .milestones import MilestoneIndex, build_milestone_index
 from .models import (
+    normalize_settlement,
     Action,
     NormalizedFill,
     OutcomeSide,
@@ -207,9 +208,16 @@ def run_audit(
     # ---- shadow accounting (Phase 1A): replay only, routes nothing ----------
     # The audit samples a bounded recent window, so the replay is told exactly
     # that and refuses to describe its output as the account's position state.
+    # Settlements are fetched only when reconciliation was asked for, because
+    # the walk is unbounded. Without them the replay cannot see a close: a
+    # settled market pays out with no fill at all.
+    settlements = _fetch_settlements(client, report) if reconcile else []
+
     replay = None
     try:
-        replay = AccountingEngine().replay(fills, HistoryCompleteness.BOUNDED_WINDOW)
+        replay = AccountingEngine().replay(
+            fills, HistoryCompleteness.BOUNDED_WINDOW, settlements=settlements
+        )
         accounting = build_diagnostics(replay)
     except SchemaError:
         accounting = AccountingDiagnostics(accounting_schema_failures=1)
@@ -341,6 +349,22 @@ def run_audit(
         details=details,
         _classifications=classifications,
     )
+
+
+def _fetch_settlements(client: KalshiReadOnlyClient, report: AuditReport) -> list:
+    """Normalize the settlement walk, excluding-and-counting what will not parse.
+
+    Same rule as the fill probe: a settlement that cannot be interpreted is left
+    out of accounting and counted, never admitted with an invented payout.
+    """
+    settlements = []
+    for raw in client.iter_settlements():
+        try:
+            settlements.append(normalize_settlement(raw))
+        except SchemaError:
+            report.settlements_rejected += 1
+    report.settlements_fetched = len(settlements) + report.settlements_rejected
+    return settlements
 
 
 def _probe_reconciliation(client: KalshiReadOnlyClient, replay) -> ReconciliationReport:

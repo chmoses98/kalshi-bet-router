@@ -640,3 +640,122 @@ def group_by_order(fills: Iterable[NormalizedFill]) -> dict[str, list[Normalized
 def count_partial_order_groups(fills: Iterable[NormalizedFill]) -> int:
     """Number of orders that produced more than one fill (i.e. partial fills)."""
     return sum(1 for group in group_by_order(fills).values() if len(group) > 1)
+
+
+# ============================== settlements ==================================
+#
+# Verified against 755 live rows. A settlement is a COMPLETE accounting event:
+# it carries its own per-leg quantities, per-leg cost basis, fee, payout and
+# timestamp, so replaying one never requires inventing a closing price.
+#
+# Units are MIXED WITHIN ONE ROW. `yes_total_cost_dollars` is dollars while
+# `revenue` and `value` are integer CENTS -- Kalshi marks dollar fields with a
+# `_dollars` suffix and those two lack it, and the live data agrees: 355 paying
+# settlements sat at cents par and none at dollar par. Reading cents as dollars
+# would misstate every payout by 100x, silently, so the conversion is explicit
+# and exact here rather than implied at the call site.
+
+#: One dollar, in the cents unit the settlement payout fields use.
+CENTS_PER_DOLLAR = Decimal(100)
+
+
+@dataclass(frozen=True)
+class NormalizedSettlement:
+    """One market's settlement, normalized. Kept in memory only."""
+
+    ticker: str
+    settled_time: str
+    #: ``yes`` | ``no`` | ``scalar`` | ... -- whatever the exchange reported.
+    market_result: str
+    #: The MEMBER's payout, converted from cents to dollars exactly.
+    revenue_dollars: Decimal
+    #: The MARKET's settlement price for a YES contract, in dollars.
+    market_value_dollars: Decimal | None = None
+    fee_dollars: Decimal | None = None
+    yes_count: Decimal | None = None
+    no_count: Decimal | None = None
+    yes_cost_dollars: Decimal | None = None
+    no_cost_dollars: Decimal | None = None
+
+    @property
+    def settled_quantity(self) -> Decimal | None:
+        """Signed YES-axis quantity this settlement closed.
+
+        Positive when the member held YES, negative when they held NO. ``None``
+        when neither leg count parsed, because a settlement whose size is
+        unknown cannot be checked against the replay.
+        """
+        if self.yes_count is None and self.no_count is None:
+            return None
+        return (self.yes_count or ZERO_QUANTITY) - (self.no_count or ZERO_QUANTITY)
+
+
+ZERO_QUANTITY = Decimal(0)
+
+
+def _cents_to_dollars(raw: Any, field_name: str) -> Decimal | None:
+    """Convert an integer-cents field to dollars, exactly."""
+    parsed = parse_fixed_point(raw, field_name)
+    if parsed is None:
+        return None
+    return parsed.value / CENTS_PER_DOLLAR
+
+
+def normalize_settlement(raw: dict[str, Any]) -> NormalizedSettlement:
+    """Convert one raw settlement row, failing closed on anything uninterpretable.
+
+    Note what is NOT here: a subaccount. The live settlement schema carries no
+    subaccount field, so a settlement cannot be attributed to one of several
+    subaccounts. That is recorded as a hard limit rather than papered over --
+    see :func:`~kalshi_router.accounting.position.apply_settlement`.
+    """
+    if not isinstance(raw, dict):
+        raise SchemaError(f"settlement was {type(raw).__name__}, expected object")
+
+    ticker = _first_present(raw, "ticker", "market_ticker")
+    if not isinstance(ticker, str) or not ticker.strip():
+        raise SchemaError("settlement is missing a usable market ticker")
+
+    settled_time = raw.get("settled_time")
+    if not isinstance(settled_time, str) or not settled_time.strip():
+        raise SchemaError("settlement is missing 'settled_time'; it cannot be ordered")
+
+    result = _first_present(raw, "market_result", "result")
+    if not isinstance(result, str) or not result.strip():
+        raise SchemaError("settlement is missing 'market_result'")
+
+    revenue = _cents_to_dollars(raw.get("revenue"), "revenue")
+    if revenue is None:
+        raise SchemaError(
+            "settlement is missing 'revenue'; the payout is never reconstructed "
+            "from the result and a count when the exchange states it"
+        )
+
+    return NormalizedSettlement(
+        ticker=ticker.strip(),
+        settled_time=settled_time.strip(),
+        market_result=result.strip().lower(),
+        revenue_dollars=revenue,
+        market_value_dollars=_cents_to_dollars(raw.get("value"), "value"),
+        fee_dollars=_parse_settlement_fee(raw),
+        yes_count=_settlement_count(raw, "yes_count_fp"),
+        no_count=_settlement_count(raw, "no_count_fp"),
+        yes_cost_dollars=_settlement_dollars(raw, "yes_total_cost_dollars"),
+        no_cost_dollars=_settlement_dollars(raw, "no_total_cost_dollars"),
+    )
+
+
+def _parse_settlement_fee(raw: dict[str, Any]) -> Decimal | None:
+    """``fee_cost`` on a settlement, in dollars -- never reconstructed."""
+    parsed = parse_fixed_point(raw.get("fee_cost"), "fee_cost")
+    return None if parsed is None else parsed.value
+
+
+def _settlement_count(raw: dict[str, Any], key: str) -> Decimal | None:
+    parsed = parse_fixed_point(raw.get(key), key)
+    return None if parsed is None else parsed.value
+
+
+def _settlement_dollars(raw: dict[str, Any], key: str) -> Decimal | None:
+    parsed = parse_fixed_point(raw.get(key), key)
+    return None if parsed is None else parsed.value

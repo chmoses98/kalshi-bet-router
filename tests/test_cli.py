@@ -272,3 +272,13 @@ def test_reconciliation_output_leaks_nothing(monkeypatch, local_env):
         assert token not in out
     assert "KX" not in out
     assert "$" not in out
+
+
+def test_settlement_replay_output_leaks_nothing(monkeypatch, local_env):
+    install_fake_api(monkeypatch, SAMPLE)
+    _, out, _ = run(["audit", "--reconcile"])
+    for token in SENSITIVE_TOKENS:
+        assert token not in out
+    assert "KX" not in out
+    assert "$" not in out
+    assert "settled by the exchange" in out
