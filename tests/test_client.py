@@ -248,3 +248,66 @@ def test_every_request_is_signed_with_the_three_auth_headers(signer):
         assert "KALSHI-ACCESS-KEY" in names
         assert "KALSHI-ACCESS-SIGNATURE" in names
         assert "KALSHI-ACCESS-TIMESTAMP" in names
+
+
+# ------------------------------------------------- Phase 0.1 read-only routes
+
+def test_event_metadata_is_returned_from_the_top_level(signer):
+    body = {"competition": "Pro Baseball", "competition_scope": "Game"}
+    client, transport = build_client(lambda m, p, q: (200, body), signer)
+    metadata = client.get_event_metadata("KXMLBGAME-SYNTH01")
+    assert metadata["competition"] == "Pro Baseball"
+    assert transport.paths[0].endswith("/events/KXMLBGAME-SYNTH01/metadata")
+
+
+def test_event_metadata_accepts_a_wrapped_envelope(signer):
+    body = {"metadata": {"competition": "Pro Football", "competition_scope": "Game"}}
+    client, _ = build_client(lambda m, p, q: (200, body), signer)
+    assert client.get_event_metadata("KXNFLGAME-SYNTH01")["competition"] == "Pro Football"
+
+
+@pytest.mark.parametrize("body", [b"not json", b"[1,2]", None])
+def test_malformed_event_metadata_fails_closed(signer, body):
+    client, _ = build_client(lambda m, p, q: (200, body), signer)
+    with pytest.raises(SchemaError):
+        client.get_event_metadata("KXMLBGAME-SYNTH01")
+
+
+def test_event_metadata_http_error_propagates_for_the_resolver_to_absorb(signer):
+    client, _ = build_client(lambda m, p, q: (404, {"error": "nope"}), signer)
+    with pytest.raises(HttpStatusError):
+        client.get_event_metadata("KXMLBGAME-SYNTH01")
+
+
+def test_taxonomy_and_milestone_routes_are_allowlisted(signer):
+    client, transport = build_client(lambda m, p, q: (200, {"filters_by_sports": {}}), signer)
+    assert client.get_filters_by_sport() == {"filters_by_sports": {}}
+    client.get_milestones({"category": "Sports", "competition": "Pro Football"})
+    assert transport.paths[0].endswith("/search/filters_by_sport")
+    assert "category=Sports" in transport.paths[1]
+
+
+def test_new_routes_are_still_signed_and_still_get_only(signer):
+    methods = []
+
+    class Recording(FakeTransport):
+        def __call__(self, method, url, headers, timeout):
+            methods.append(method)
+            return super().__call__(method, url, headers, timeout)
+
+    transport = Recording(lambda m, p, q: (200, {"filters_by_sports": {}}))
+    client = KalshiReadOnlyClient(signer=signer, config=AuditConfig(), transport=transport)
+    client.get_filters_by_sport()
+    assert methods == ["GET"]
+    assert "KALSHI-ACCESS-SIGNATURE" in transport.header_names[0]
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/portfolio/orders", "/portfolio/positions", "/portfolio/balance",
+     "/search/anything_else", "/milestone_admin"],
+)
+def test_mutating_and_unlisted_routes_remain_refused(signer, path):
+    client, _ = build_client(lambda m, p, q: (200, {}), signer)
+    with pytest.raises(SchemaError, match="read-only"):
+        client._get(path, "forbidden")

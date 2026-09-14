@@ -10,12 +10,19 @@ Phase 0 is read-only by construction, not by convention:
 
 Endpoints used (all documented Kalshi ``/trade-api/v2`` routes):
 
-==================================  ====================================
-``GET /portfolio/fills``            member fills, cursor-paginated
-``GET /markets/{ticker}``           market -> event_ticker, category
-``GET /events/{event_ticker}``      event  -> series_ticker, title
-``GET /series/{series_ticker}``     series -> category/categories/tags
-==================================  ====================================
+=========================================  ===============================================
+``GET /portfolio/fills``                   member fills, cursor-paginated
+``GET /markets/{ticker}``                  market -> event_ticker, category
+``GET /events/{event_ticker}``             event  -> series_ticker, title
+``GET /events/{event_ticker}/metadata``    event  -> competition, competition_scope
+``GET /series/{series_ticker}``            series -> category/categories/tags
+``GET /search/filters_by_sport``           public sport/competition/scope taxonomy
+``GET /milestones``                        public competition -> event ticker links
+=========================================  ===============================================
+
+The last three carry no account information: the taxonomy and milestone routes
+are public catalogue data, queried by competition rather than by anything the
+account traded.
 """
 
 from __future__ import annotations
@@ -26,6 +33,8 @@ from typing import Any, Callable, Iterator
 from .auth import KalshiSigner
 from .config import API_PATH_PREFIX, AuditConfig
 from .errors import SchemaError
+from .milestones import MILESTONES_PATH
+from .taxonomy import FILTERS_BY_SPORT_PATH
 from .http import (
     Transport,
     build_url,
@@ -41,6 +50,8 @@ READ_ONLY_PATH_PREFIXES = (
     "/markets/",
     "/events/",
     "/series/",
+    "/search/filters_by_sport",
+    "/milestones",
 )
 
 FILLS_PATH = "/portfolio/fills"
@@ -160,6 +171,29 @@ class KalshiReadOnlyClient:
     def get_series(self, series_ticker: str) -> dict[str, Any]:
         payload = self._get(f"/series/{series_ticker}", "get_series")
         return _require_object(payload, "series", "get_series")
+
+    def get_event_metadata(self, event_ticker: str) -> dict[str, Any]:
+        """Fetch ``competition`` / ``competition_scope`` for one event.
+
+        The documented response carries the metadata fields at the top level.
+        A wrapped form is also accepted, since the surrounding envelope is the
+        one part of this route we could not confirm against a live response
+        before writing it; either way a non-object fails closed.
+        """
+        payload = self._get(f"/events/{event_ticker}/metadata", "get_event_metadata")
+        for key in ("metadata", "event_metadata"):
+            wrapped = payload.get(key)
+            if isinstance(wrapped, dict):
+                return wrapped
+        return payload
+
+    def get_filters_by_sport(self) -> dict[str, Any]:
+        """Fetch the public sport/competition/scope taxonomy (once per audit)."""
+        return self._get(FILTERS_BY_SPORT_PATH, "get_filters_by_sport")
+
+    def get_milestones(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Fetch one page of public milestones, filtered by category/competition."""
+        return self._get(MILESTONES_PATH, "get_milestones", params)
 
 
 def _require_object(payload: dict[str, Any], key: str, operation: str) -> dict[str, Any]:

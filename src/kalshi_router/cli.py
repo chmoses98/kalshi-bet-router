@@ -89,12 +89,18 @@ def render_sensitive(result: AuditResult) -> str:
         lines.append("(no markets to detail)")
         return "\n".join(lines)
     lines.append(
-        f"{'SPORT':<11} {'FILLS':>5}  {'MARKET':<38} {'SERIES':<18} REASON"
+        f"{'SPORT':<11} {'FILLS':>5}  {'MARKET':<38} {'COMPETITION':<24} REASON"
     )
     for detail in result.details:
         lines.append(
             f"{detail.sport.value:<11} {detail.fill_count:>5}  "
-            f"{detail.market_ticker:<38} {(detail.series_ticker or '-'):<18} {detail.reason}"
+            f"{detail.market_ticker:<38} {(detail.competition or '-'):<24} {detail.reason}"
+        )
+        lines.append(
+            f"{'':<11} {'':>5}    series={detail.series_ticker or '-'} "
+            f"event={detail.event_ticker or '-'} "
+            f"scope={detail.competition_scope or '-'} "
+            f"resolved_by={detail.resolved_by.value if detail.resolved_by else '-'}"
         )
         for item in detail.evidence:
             lines.append(f"{'':<11} {'':>5}    evidence: {item}")

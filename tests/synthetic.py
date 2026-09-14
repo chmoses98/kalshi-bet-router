@@ -57,14 +57,57 @@ def make_fill(
         "action": action,
         "side": side,
         "is_taker": True,
-        "yes_price": 57,
-        "no_price": 43,
+        # Current (post Q1-2026 fixed-point migration) field shapes.
+        "yes_price_dollars": "0.5700",
+        "no_price_dollars": "0.4300",
         "created_time": "2026-09-01T12:00:00Z",
     }
     if count is not None:
-        fill["count"] = count
+        fill["count_fp"] = f"{count}.00"
     fill.update(extra)
     return fill
+
+
+def make_event_metadata(
+    competition: str | None = None, competition_scope: str | None = None, **extra: Any
+) -> dict[str, Any]:
+    """A synthetic ``GET /events/{ticker}/metadata`` body."""
+    metadata: dict[str, Any] = {
+        "image_url": "https://example.invalid/synthetic.png",
+        "settlement_sources": [],
+        "competition": competition,
+        "competition_scope": competition_scope,
+    }
+    metadata.update(extra)
+    return metadata
+
+
+def make_taxonomy(sports: dict[str, list[str]], scopes: list[str] | None = None) -> dict[str, Any]:
+    """A synthetic ``GET /search/filters_by_sport`` body."""
+    return {
+        "filters_by_sports": {
+            sport: {
+                "competitions": list(competitions),
+                "scopes": list(scopes or ["Games", "Futures"]),
+            }
+            for sport, competitions in sports.items()
+        },
+        "sport_ordering": list(sports),
+    }
+
+
+def make_milestone(milestone_id: str, event_tickers: list[str], **extra: Any) -> dict[str, Any]:
+    """A synthetic milestone linking a fixture to Kalshi event tickers."""
+    milestone = {
+        "id": milestone_id,
+        "category": "Sports",
+        "type": "football_game",
+        "title": "Synthetic fixture",
+        "primary_event_tickers": list(event_tickers),
+        "related_event_tickers": [],
+    }
+    milestone.update(extra)
+    return milestone
 
 
 def make_market(ticker: str, event_ticker: str, **extra: Any) -> dict[str, Any]:
@@ -143,12 +186,16 @@ class FailingTransport:
 def paged_fills_handler(
     pages: list[list[dict[str, Any]]],
     metadata: dict[str, Any] | None = None,
+    taxonomy: dict[str, Any] | None = None,
+    milestones: list[dict[str, Any]] | None = None,
 ) -> Handler:
-    """Serve ``/portfolio/fills`` as cursor-paginated pages plus metadata routes.
+    """Serve the full read-only surface used by an audit.
 
-    Cursors are synthetic opaque strings; the final page returns ``""``.
+    ``metadata`` maps a ticker to its market / event / series object, and an
+    ``"<event>/metadata"`` key to that event's metadata body.  Cursors are
+    synthetic opaque strings; the final page returns ``""``.
     """
-    metadata = metadata or {}
+    metadata = metadata if metadata is not None else {}
     cursors = {f"cursor-{i}": i for i in range(len(pages))}
 
     def handler(method: str, path: str, query: dict[str, list[str]]) -> tuple[int, Any]:
@@ -158,6 +205,30 @@ def paged_fills_handler(
             body: dict[str, Any] = {"fills": pages[index]}
             body["cursor"] = f"cursor-{index + 1}" if index + 1 < len(pages) else ""
             return 200, body
+
+        if path.endswith("/search/filters_by_sport"):
+            if taxonomy is None:
+                return 404, {"error": "not found"}
+            return 200, taxonomy
+
+        if path.endswith("/milestones"):
+            if milestones is None:
+                return 404, {"error": "not found"}
+            competition = query.get("competition", [None])[0]
+            matching = [
+                m for m in milestones
+                if competition is None or m.get("competition") in (None, competition)
+            ]
+            return 200, {"milestones": matching, "cursor": ""}
+
+        # Event metadata must be matched before the plain event route.
+        if "/events/" in path and path.endswith("/metadata"):
+            event_ticker = path.rsplit("/", 2)[-2]
+            obj = metadata.get(f"{event_ticker}/metadata")
+            if obj is None:
+                return 404, {"error": "not found"}
+            return 200, obj
+
         for prefix, key in (("/markets/", "market"), ("/events/", "event"), ("/series/", "series")):
             if prefix in path:
                 ticker = path.rsplit("/", 1)[-1]
