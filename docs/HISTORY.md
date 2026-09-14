@@ -514,6 +514,81 @@ either way. An absent route is a finding, not an error; the probe degrades the
 measurement instead of failing the audit. The day that route appears, the audit
 will say so.
 
+### What the live run proved
+
+Run 19, on a complete history (883 live + 1,050 archived fills, both walks
+exhausted, none rejected):
+
+```
+settlement rows walked: 755    all with a readable settled_time
+walk exhausted: True           truncated: False
+evidence spans (days): 67      evidence floor usable: True
+
+asked for settlements older than the walk's earliest:  status 200, 0 rows
+DEFAULT WALK APPEARS WINDOWED: False
+
+archival settlements route: 404, not available
+```
+
+Both probes came back decisive, and in opposite directions:
+
+* **The walk is not windowed.** The route accepted `max_ts` and returned
+  **nothing** older than the floor. Had it ignored the parameter it would have
+  answered with its newest row — one row, not zero. So the exhausted cursor
+  really did mean the route had nothing more.
+* **There is no archival settlements route.** `GET /historical/settlements` is
+  a 404. Fills have an archive; settlements do not.
+
+Together those turn an assumption into a measurement: **the settlements route is
+retention-limited, and the limit is roughly 67 days of evidence.** The 943
+markets below the floor demonstrably *did* settle — the exchange reports zero
+open positions anywhere — the route serves nothing before the floor, and no
+archive exists. Their outcomes are not merely unretrieved; they are
+unretrievable.
+
+The episode accounting partitions exactly:
+
+```
+position episodes observed: 1698
+  still open in the replay: 951
+    open, inside settlement evidence:        0
+    OUTCOME UNPROVABLE:                    951
+      of which bounded by settlement coverage: 943
+  closed within window: 747
+
+absent from positions, replay also flat (agreement):  747
+absent from positions, EXPLAINED by a settlement:       8
+absent from positions, outside settlement evidence:   943
+absent from positions, UNEXPLAINED:                     0
+```
+
+**Zero genuine contradictions.** Every market C.14 flagged is accounted for by
+the coverage boundary or by a refused settlement. And `open, inside settlement
+evidence: 0` agrees exactly with the exchange's `position rows: 0` — two
+independent sources saying the account holds nothing. That agreement is what
+C.14 correctly refused to claim on fills alone.
+
+Authority is still withheld, and correctly: 951 episodes have outcomes the
+evidence cannot establish. A portfolio of unknown outcomes is not a portfolio.
+But the reason is now a measured, bounded limit rather than an open question.
+
+### The last discrepancy: which way did the 8 refusals run?
+
+Eight settlements were refused because their stated size disagreed with the
+replay — the only thing left in the whole accounting that coverage does not
+explain. A count says how often reconciliation failed. It does not say what
+failed, and the diagnoses point in opposite directions:
+
+* a settlement **larger** than the replayed position suggests fills the replay
+  never saw, or a gross rather than net count;
+* a **smaller** one suggests the opposite;
+* an **opposite direction** is not a size disagreement at all.
+
+Guessing between them is exactly the move this codebase keeps having to unlearn,
+so the shape is recorded per refusal and left for a live run to decide. The
+shapes partition the refusals — a test pins that, so the diagnostic cannot
+quietly lose a case and read as though less went wrong.
+
 ### Also fixed here
 
 A settled episode used to record `closed_at = opened_at`. An episode opened in
@@ -537,20 +612,17 @@ One walk now serves both.
   strictly between 0 and 1. A router that assumed binary would be correct on
   every row it has ever seen and wrong the first time tennis is enabled, so the
   scalar path must be handled before tennis routes, not after.
-* **Whether the settlements route is windowed by default.** The probe ships and
-  has not yet been answered against live data. If it comes back windowed, the
-  943-market gap is not a retention boundary at all — it is a missing `min_ts`,
-  and the fix is a re-walk rather than a bound.
-* **How far back the settlements route actually retains.** The floor measures
-  the earliest settlement *this account has*, which is a lower bound on the
-  route's reach, not the reach itself. If the member simply did not trade before
-  that date, the floor understates what the route would serve — and every
-  episode below it is still, correctly, unprovable from the available evidence.
-  Kalshi documentation could turn this lower bound into the real boundary.
-* **Whether a market below the floor settled at all.** The honest answer is
-  that this data cannot say. `GET /markets/{ticker}` reports a market status and
-  would resolve it per market, at one request each — affordable for a bounded
-  sample, not for 943 markets, and not yet attempted.
+* **The exact retention rule.** Run 19 proves the route serves nothing older
+  than the floor and that the floor sits ~67 days back for this account. Whether
+  that is a fixed retention window, a row cap, or something else is not
+  established — only that it exists and that `max_ts` will not reach past it.
+* **Whether a market below the floor settled at all.** The evidence says
+  collectively yes (the exchange reports no open positions) but cannot say it
+  per market. `GET /markets/{ticker}` reports a market status and would resolve
+  it one request at a time — affordable for a bounded sample, not for 943
+  markets, and not yet attempted.
+* **Which way the 8 refusals run.** The shape diagnostic ships; a live run has
+  not yet reported it.
 * **Classification is the expensive half, not the fill walk.** 155 markets cost
   486 requests, almost all of it metadata resolution at several requests per
   market; the fill pagination itself is a handful. This account has settled 755

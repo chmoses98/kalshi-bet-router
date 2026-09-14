@@ -326,8 +326,17 @@ it is a market the evidence cannot follow to its end, and it may never be
 written downstream as live inventory. The audit reports the boundary as a day
 span, fails closed by withholding it whenever it cannot be trusted, and probes
 `GET /historical/settlements` in case an archive route exists that would close
-the gap instead of bounding it. See
-[`docs/HISTORY.md`](docs/HISTORY.md).
+the gap instead of bounding it.
+
+Both questions are now answered on live data: the settlements walk is **not**
+windowed (the route honours `max_ts` and has nothing older), and
+`GET /historical/settlements` **does not exist** (404). So the route is
+retention-limited and the gap can only be bounded. On a complete history the
+result partitions exactly, with **zero** genuine contradictions, and the
+replay's "no genuinely open position" agrees with the exchange's own empty
+position list. Authority is still withheld — 951 episodes have outcomes the
+evidence cannot establish — but for a measured reason rather than an open one.
+See [`docs/HISTORY.md`](docs/HISTORY.md).
 
 ## Documentation index
 

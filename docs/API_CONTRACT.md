@@ -237,22 +237,33 @@ and checks the returned row's own `settled_time` against the floor — a route
 that ignores an unknown parameter answers with its newest rows, and counting
 those as older data would invent a windowing that is not there.
 
-**Status: unverified.** If the live answer is "windowed", the 943-market gap is
-a missing `min_ts` rather than a retention boundary, and the fix is a re-walk.
-The floor is withheld in that case, so nothing is reclassified on a wrong
-premise.
+**Status: VERIFIED — not windowed.** The route answered `200` with **0 rows**.
+A route ignoring an unknown parameter would have returned its newest row, so
+zero rows is the parameter being honoured and the data genuinely ending. The
+exhausted cursor meant what it appeared to mean.
 
-## `GET /historical/settlements` — PROBED, not confirmed
+### The route is retention-limited
+
+Proven rather than assumed, by three facts together: the route serves nothing
+before its earliest row (above), the account's 943 unexplained markets
+demonstrably settled (`GET /portfolio/positions` reports **0** rows anywhere),
+and there is no archival settlements route (below). Observed reach for this
+account: **67 days** of settlement evidence against a fill history spanning far
+longer. Whether the rule is a time window, a row cap, or something else is not
+established.
+
+## `GET /historical/settlements` — VERIFIED ABSENT
 
 `/portfolio/fills` has an archive counterpart at `/historical/fills`. Whether
 settlements have the same pair decides whether the 943-market gap can be closed
 or only bounded, so the audit asks — one request, one page, never walked — and
 records the HTTP status either way.
 
-**Status: unverified.** The route is on the read-only allowlist and the probe
-ships; no live answer has been read yet. An absent route is recorded as a
-finding rather than raised as an error, so the audit degrades its measurement
-instead of failing.
+**Status: VERIFIED — the route returns 404.** Fills have an archive; settlements
+do not. The gap can therefore only be bounded, never closed, from the API as it
+stands. An absent route is recorded as a finding rather than raised as an error,
+so the audit degrades its measurement instead of failing — and will say so the
+day the route appears.
 
 ## Classification metadata endpoints
 
