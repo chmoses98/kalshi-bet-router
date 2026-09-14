@@ -278,6 +278,8 @@ def apply_settlement(
         # clock is left unread rather than filled in with a nearby one.
         episode.closed_at = settlement.settled_at
         episode.last_activity_at = settlement.settled_at or episode.last_activity_at
+        episode.settlement_revenue_dollars = settlement.revenue_dollars
+        episode.settlement_result = settlement.market_result
         episode.closing_fill_id = transition.fill_id
         episode.remaining_quantity = ZERO
         episode.total_closed_quantity += closed
@@ -382,6 +384,13 @@ class PositionEpisode:
     #: True when :attr:`outcome_provable` was cleared by settlement coverage
     #: rather than by anything about the fills themselves.
     outcome_bounded_by_settlement_coverage: bool = False
+    #: The exchange's own settlement economics, kept verbatim when a settlement
+    #: closed this episode. Retained rather than recomputed: a payout the
+    #: exchange stated is evidence, and re-deriving it from realized P&L and a
+    #: cost basis would turn evidence back into arithmetic.
+    settlement_revenue_dollars: Decimal | None = None
+    settlement_result: str | None = None
+
     #: Whether this episode's POSITION STORY is proven, and by what.  Defaults to
     #: the unearned state: authority is granted by evidence, never assumed while
     #: waiting for it.
