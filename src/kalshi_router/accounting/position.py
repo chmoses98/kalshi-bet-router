@@ -130,7 +130,7 @@ class PositionTransition:
     signed_quantity: Decimal
     position_before: Decimal
     position_after: Decimal
-    yes_equivalent_price: Decimal | None
+    execution_price: Decimal | None
     quantity_opened: Decimal = ZERO
     quantity_closed: Decimal = ZERO
     realized_pnl: Decimal | None = None
@@ -270,7 +270,7 @@ def apply_fill(
     price the economics are marked incomplete for the affected episode rather
     than estimated -- a guessed basis would propagate silently into realized P&L.
     """
-    signed, yes_price = project_fill(fill)
+    signed, price = project_fill(fill)
     before = ledger.position
     after = before + signed
     kind = _classify(before, after)
@@ -288,8 +288,8 @@ def apply_fill(
         opened = abs(after)
 
     if kind is TransitionKind.OPEN:
-        ledger.average_entry_price = yes_price
-        ledger.cost_basis_complete = yes_price is not None
+        ledger.average_entry_price = price
+        ledger.cost_basis_complete = price is not None
         ledger.position = after
         episode = _new_episode(ledger, fill, after, provable)
         ledger.current_episode = episode
@@ -297,18 +297,18 @@ def apply_fill(
                 position_after=after, ledger=ledger, charge_fee=True)
 
     elif kind is TransitionKind.INCREASE:
-        if yes_price is None or ledger.average_entry_price is None:
+        if price is None or ledger.average_entry_price is None:
             ledger.cost_basis_complete = False
             ledger.average_entry_price = None
         else:
-            notional = ledger.average_entry_price * abs(before) + yes_price * abs(signed)
+            notional = ledger.average_entry_price * abs(before) + price * abs(signed)
             ledger.average_entry_price = notional / abs(after)
         ledger.position = after
         _record(ledger.current_episode, fill, opened=opened, closed=ZERO, realized=None,
                 position_after=after, ledger=ledger, charge_fee=True)
 
     elif kind in (TransitionKind.REDUCE, TransitionKind.CLOSE):
-        realized = _realized(ledger, yes_price, closed, _sign(before))
+        realized = _realized(ledger, price, closed, _sign(before))
         ledger.position = after
         episode = ledger.current_episode
         _record(episode, fill, opened=ZERO, closed=closed, realized=realized,
@@ -319,7 +319,7 @@ def apply_fill(
             ledger.cost_basis_complete = True
 
     else:  # REVERSE
-        realized = _realized(ledger, yes_price, closed, _sign(before))
+        realized = _realized(ledger, price, closed, _sign(before))
         outgoing = ledger.current_episode
         ledger.position = ZERO
         # This one execution spans two episodes.  Kalshi documents no rule for
@@ -334,8 +334,8 @@ def apply_fill(
             _close_episode(ledger, outgoing, fill)
         # The remainder opens a fresh episode on the opposite side, at the price
         # the position crossed through zero at.
-        ledger.average_entry_price = yes_price
-        ledger.cost_basis_complete = yes_price is not None
+        ledger.average_entry_price = price
+        ledger.cost_basis_complete = price is not None
         ledger.position = after
         incoming = _new_episode(ledger, fill, after, provable)
         ledger.current_episode = incoming
@@ -352,7 +352,7 @@ def apply_fill(
         signed_quantity=signed,
         position_before=before,
         position_after=after,
-        yes_equivalent_price=yes_price,
+        execution_price=price,
         quantity_opened=opened,
         quantity_closed=closed,
         realized_pnl=realized,
@@ -376,7 +376,7 @@ def _new_episode(
 
 
 def _realized(
-    ledger: MarketLedger, yes_price: Decimal | None, closed: Decimal, position_sign: int
+    ledger: MarketLedger, price: Decimal | None, closed: Decimal, position_sign: int
 ) -> Decimal | None:
     """Realized P&L on a reduction, in unified execution-price dollars.
 
@@ -384,10 +384,10 @@ def _realized(
     position the sign flips, which the ``position_sign`` factor handles.  That
     factor is exactly why the price itself must not be complemented.
     """
-    if yes_price is None or ledger.average_entry_price is None or not ledger.cost_basis_complete:
+    if price is None or ledger.average_entry_price is None or not ledger.cost_basis_complete:
         ledger.cost_basis_complete = False
         return None
-    return (yes_price - ledger.average_entry_price) * closed * Decimal(position_sign)
+    return (price - ledger.average_entry_price) * closed * Decimal(position_sign)
 
 
 def _record(

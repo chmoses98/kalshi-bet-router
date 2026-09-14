@@ -28,14 +28,14 @@ def kinds(result):
 
 # ------------------------------------------------- projection onto the axis
 
-def test_buy_yes_is_positive_at_the_yes_price():
+def test_buy_yes_is_positive_at_the_execution_price():
     signed, price = project_fill(normalize_fill(
         make_accounting_fill(index=1, quantity="10.00", action="buy", side="yes",
                              yes_price="0.6000")))
     assert signed == Decimal("10.00") and price == Decimal("0.6000")
 
 
-def test_sell_yes_is_negative_at_the_yes_price():
+def test_sell_yes_is_negative_at_the_execution_price():
     signed, price = project_fill(normalize_fill(
         make_accounting_fill(index=1, quantity="10.00", action="sell", side="yes",
                              yes_price="0.6000")))
@@ -338,3 +338,11 @@ def test_ambiguous_allocation_is_reported_as_an_aggregate_count():
     assert "with ambiguous fee allocation (reversal): 2" in rendered
     assert "account-level fee total is exact: True" in rendered
     assert "0.3000" not in rendered
+
+
+def test_transition_records_the_unified_execution_price_field():
+    """Naming regression: the field is the execution price, not a YES-equivalent."""
+    result = replay({"index": 1, "quantity": "10.00", "side": "no", "no_price": "0.4300"})
+    transition = result.transitions[0]
+    assert transition.execution_price == Decimal("0.4300")
+    assert not hasattr(transition, "yes_equivalent_price")
