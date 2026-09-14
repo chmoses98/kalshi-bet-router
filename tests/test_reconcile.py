@@ -245,3 +245,105 @@ def test_settlement_economics_values_never_reach_the_output():
     assert "1234.56" not in rendered
     assert "98.76" not in rendered
     assert "KXMLBGAME" not in rendered
+
+
+# ================ settlement economics semantics (Phase C.4) =================
+#
+# Replaying a settlement needs the payout. Taking it from the wrong field or the
+# wrong unit would corrupt realized P&L on every settled wager, so the meaning of
+# `revenue` and `value` is measured rather than assumed. A binary contract pays
+# $1 per winning contract, which makes "binary par" a testable prediction.
+
+def settlement(**kw):
+    return {"ticker": "A", **kw}
+
+
+def test_revenue_matching_the_winning_leg_count_is_binary_par():
+    report = probe(settlements=[settlement(
+        market_result="yes", yes_count_fp="10.00", no_count_fp="0.00",
+        revenue="10.00",
+    )])
+    assert report.settlements_revenue_at_binary_par == 1
+    assert report.settlements_revenue_off_binary_par == 0
+
+
+def test_a_no_result_pays_the_no_leg_count():
+    report = probe(settlements=[settlement(
+        market_result="no", yes_count_fp="0.00", no_count_fp="7.00",
+        revenue="7.00",
+    )])
+    assert report.settlements_revenue_at_binary_par == 1
+
+
+def test_revenue_in_cents_would_show_as_off_par_not_silently_accepted():
+    """If revenue were integer cents, 10 contracts would report 1000, not 10."""
+    report = probe(settlements=[settlement(
+        market_result="yes", yes_count_fp="10.00", no_count_fp="0.00",
+        revenue="1000.00",
+    )])
+    assert report.settlements_revenue_at_binary_par == 0
+    assert report.settlements_revenue_off_binary_par == 1
+
+
+def test_a_losing_settlement_pays_zero_and_is_counted_separately():
+    report = probe(settlements=[settlement(
+        market_result="no", yes_count_fp="10.00", no_count_fp="0.00", revenue="0.00",
+    )])
+    assert report.settlements_revenue_zero == 1
+    assert report.settlements_revenue_off_binary_par == 0
+
+
+def test_an_unparseable_revenue_is_flagged_not_ignored():
+    report = probe(settlements=[settlement(market_result="yes", revenue="???")])
+    assert report.settlements_revenue_unparseable == 1
+
+
+def test_an_absent_revenue_is_not_flagged_as_unparseable():
+    report = probe(settlements=[settlement(market_result="yes")])
+    assert report.settlements_revenue_unparseable == 0
+
+
+def test_a_scalar_settlement_value_is_detected():
+    """Tennis verified 1,836 settlements strictly between 0 and 1.
+
+    A binary-only router would be correct on every yes/no row and wrong on these,
+    so the scalar case is counted on its own rather than folded into "other".
+    """
+    report = probe(settlements=[settlement(market_result="scalar", value="0.4200")])
+    assert report.settlements_value_strictly_between == 1
+    assert report.settlements_value_at_one == 0
+    assert report.settlements_value_at_zero == 0
+
+
+def test_binary_settlement_values_are_split_from_scalar_ones():
+    report = probe(settlements=[
+        settlement(market_result="yes", value="1.0000"),
+        settlement(market_result="no", value="0.0000"),
+        settlement(market_result="scalar", value="0.5000"),
+    ])
+    assert report.settlements_value_at_one == 1
+    assert report.settlements_value_at_zero == 1
+    assert report.settlements_value_strictly_between == 1
+
+
+def test_a_value_above_one_is_counted_rather_than_assumed_impossible():
+    """If `value` were a total payout rather than per contract, it would land here."""
+    report = probe(settlements=[settlement(market_result="yes", value="10.00")])
+    assert report.settlements_value_above_one == 1
+
+
+def test_cost_and_count_co_presence_is_recorded():
+    report = probe(settlements=[settlement(
+        yes_count_fp="10.00", yes_total_cost_dollars="5.60",
+    )])
+    assert report.settlements_cost_and_counts_both_present == 1
+
+
+def test_economics_semantics_emit_no_amounts():
+    report = probe(settlements=[settlement(
+        market_result="yes", yes_count_fp="13.00", no_count_fp="0.00",
+        revenue="13.00", value="1.0000", yes_total_cost_dollars="7.28",
+    )])
+    rendered = report.render()
+    for amount in ("13.00", "7.28", "1.0000"):
+        assert amount not in rendered
