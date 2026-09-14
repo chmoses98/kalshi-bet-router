@@ -160,6 +160,58 @@ Pagination guards: a repeated cursor raises; an empty page with a live cursor
 raises; a missing or non-list `fills` raises; a non-JSON or empty body raises —
 a proxy error page must never look like "this account has no fills".
 
+## `GET /portfolio/settlements`
+
+Verified against 755 live rows. Fields observed on **every** row:
+
+| field | meaning | unit |
+|---|---|---|
+| `ticker`, `event_ticker` | the settled market | — |
+| `market_result` | `yes` \| `no` (scalar exists exchange-wide; unobserved here) | — |
+| `value` | **the market's** settlement price for a YES contract | **integer cents** (`100` or `0`) |
+| `revenue` | **the member's** payout | **integer cents** |
+| `yes_count_fp`, `no_count_fp` | contracts settled on each leg | fixed-point |
+| `yes_total_cost_dollars`, `no_total_cost_dollars` | cost basis per leg | **dollars** |
+| `fee_cost` | settlement fee | dollars |
+| `settled_time` | for ordering | timestamp |
+| `exchange_index` | — | — |
+
+### Units are mixed within one row
+
+`yes_total_cost_dollars` is dollars, and `revenue` and `value` are **cents**, in
+the same object. Kalshi's naming is the tell — dollar-valued fields carry a
+`_dollars` suffix and these two do not — and the data confirms it: of 755 rows,
+355 paying settlements sit at cents par and **none** at dollar par, while every
+one of the 359 non-trivial `value` readings is exactly `100`.
+
+Reading cents as dollars would misstate every settled payout by 100x, silently,
+because the wrong numbers are still well-formed decimals.
+
+### `value` is about the market; `revenue` is about the member
+
+These are not two views of one number, and treating them as one makes ordinary
+rows look broken. A member holding NO in a market that settled YES is unpaid
+while `value` is `100`; a member holding NO in a market that settled NO is paid
+while `value` is `0`. The live arithmetic closes exactly on that reading:
+
+```
+YES markets 359 + NO markets 396        = 755
+member wins (359 - 62) + 58 = 297 + 58  = 355   (= rows with non-zero revenue)
+```
+
+### A settlement is a complete accounting event
+
+It carries quantity, per-leg cost basis, fee, payout and timestamp. So replaying
+one never requires inventing a closing price — the same rule this system already
+applies to fees.
+
+### A settled market leaves `GET /portfolio/positions`
+
+It does **not** appear there with a zero quantity. The account returned **0**
+position rows against 155 replayed markets and 755 settlements. A replayed
+ticker missing from positions is therefore only evidence of missing history when
+no settlement explains it.
+
 ## Classification metadata endpoints
 
 ### `GET /events/{event_ticker}/metadata` — the primary signal
