@@ -61,7 +61,11 @@ def test_rendered_aggregate_contains_no_monetary_values(signer):
 
 #: The only string-valued fields on the report, and the exact reason each is
 #: allowed.  Anything else must still be a count.
-SCHEMA_NAME_FIELDS = ("taxonomy_observed_keys", "taxonomy_observed_entry_keys")
+SCHEMA_NAME_FIELDS = (
+    "taxonomy_observed_keys",
+    "taxonomy_observed_entry_keys",
+    "milestone_entry_keys",
+)
 
 
 def assert_schema_names_only(value):
