@@ -329,6 +329,27 @@ class KalshiReadOnlyClient:
             SETTLEMENTS_PATH, "get_settlements", "settlements", page_limit, stats
         )
 
+    def probe_settlements_before(
+        self, max_ts: int, limit: int = 1
+    ) -> dict[str, Any]:
+        """One request: does the route serve anything older than ``max_ts``?
+
+        This exists to test an assumption rather than to collect data.  The
+        settlements walk ends when its cursor runs out, and it is tempting to
+        read that as "the route gave everything".  It only means the route gave
+        everything *for the query that was asked*.  If the default query carries
+        an implicit window, an exhausted walk and a complete one look identical.
+
+        Asking for one row strictly older than the walk's earliest settles it:
+        a row that comes back is proof the default walk was windowed, and the
+        answer is then to re-walk with ``min_ts``, not to bound anything.
+        """
+        return self._get(
+            SETTLEMENTS_PATH,
+            "probe_settlements_before",
+            {"limit": limit, "max_ts": max_ts},
+        )
+
     def probe_historical_settlements(self, limit: int = 1) -> dict[str, Any]:
         """One request, one page: does an archival settlements route exist?
 

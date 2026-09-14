@@ -43,6 +43,7 @@ from .safety import safe_schema_name
 from .schema_probe import SchemaCoverage, probe_fills
 from .sports import REPORT_ORDER, Sport
 from .taxonomy import SportTaxonomy, parse_filters_by_sport
+from .timeaxis import parse_rfc3339_seconds
 
 #: Fail-closed reasons a public milestone sweep could plausibly repair.
 MILESTONE_REPAIRABLE = frozenset({
@@ -227,6 +228,7 @@ def run_audit(
         settlement_rows, settlements, settlement_coverage = _fetch_settlements(
             client, report
         )
+        _probe_below_the_floor(client, settlement_coverage)
         _probe_settlement_archive(client, settlement_coverage)
     else:
         settlement_rows, settlements = [], []
@@ -527,6 +529,50 @@ def _fetch_settlements(
     coverage.rows += report.settlements_rejected
     coverage.rows_with_an_unreadable_time += report.settlements_rejected
     return raw_rows, settlements, coverage
+
+
+def _probe_below_the_floor(
+    client: KalshiReadOnlyClient, coverage: SettlementCoverage
+) -> None:
+    """Ask the route for one settlement older than the walk's earliest row.
+
+    This checks an assumption of this module's own making.  The settlements walk
+    ends when its cursor runs out, which is easy to read as "the route gave
+    everything".  It only means the route gave everything for the query asked --
+    and if the default query carries an implicit window, an exhausted walk and a
+    complete one are indistinguishable.
+
+    A row that really is older proves the walk was windowed.  The floor is then
+    withheld and nothing is reclassified, because the right response is to
+    re-walk with ``min_ts``, not to state a limit that is really a missing
+    parameter.
+
+    A route that ignores an unknown parameter answers with its newest rows, so
+    every returned row's own timestamp is checked against the floor rather than
+    trusted because it arrived.
+    """
+    floor = coverage.observed_floor
+    if floor is None:
+        return
+    coverage.below_floor_probed = True
+    try:
+        payload = client.probe_settlements_before(max_ts=int(floor) - 1)
+    except HttpStatusError as exc:
+        coverage.below_floor_probe_status = exc.status
+        return
+    except KalshiRouterError:
+        return
+    coverage.below_floor_probe_status = 200
+    rows = payload.get("settlements")
+    if not isinstance(rows, list):
+        return
+    coverage.below_floor_rows_returned = len(rows)
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        at = parse_rfc3339_seconds(row.get("settled_time"))
+        if at is not None and at < floor:
+            coverage.below_floor_rows_older_than_the_floor += 1
 
 
 def _probe_settlement_archive(

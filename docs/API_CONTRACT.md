@@ -226,8 +226,21 @@ evidence of absence; below it, silence is no evidence at all. See
 `docs/HISTORY.md`, "Settlement coverage is a second completeness dimension".
 
 The floor is a **lower bound on the route's reach**, not the reach itself — it
-is the oldest row *this account* has. Whether the route accepts a `min_ts` that
-would reach further is not yet established.
+is the oldest row *this account* has.
+
+### Is the default walk windowed? — PROBED, not confirmed
+
+An exhausted cursor proves the route gave everything **for the query asked**,
+which is not the same as everything. The audit therefore asks for one settlement
+strictly older than the walk's earliest row (`max_ts = floor - 1`, `limit = 1`)
+and checks the returned row's own `settled_time` against the floor — a route
+that ignores an unknown parameter answers with its newest rows, and counting
+those as older data would invent a windowing that is not there.
+
+**Status: unverified.** If the live answer is "windowed", the 943-market gap is
+a missing `min_ts` rather than a retention boundary, and the fix is a re-walk.
+The floor is withheld in that case, so nothing is reclassified on a wrong
+premise.
 
 ## `GET /historical/settlements` — PROBED, not confirmed
 

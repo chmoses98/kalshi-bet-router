@@ -216,6 +216,12 @@ class FailingTransport:
         return self._inner(method, url, headers, timeout)
 
 
+def _settled_seconds(row: dict[str, Any]):
+    from kalshi_router.timeaxis import parse_rfc3339_seconds
+
+    return parse_rfc3339_seconds(row.get("settled_time"))
+
+
 def paged_fills_handler(
     pages: list[list[dict[str, Any]]],
     metadata: dict[str, Any] | None = None,
@@ -253,7 +259,19 @@ def paged_fills_handler(
             return 200, {"market_positions": positions or [], "cursor": ""}
 
         if path.endswith("/portfolio/settlements"):
-            return 200, {"settlements": settlements or [], "cursor": ""}
+            rows = settlements or []
+            # A route that honours max_ts. The opposite case -- a route that
+            # ignores an unknown parameter and answers with its newest rows --
+            # is exercised by its own handler, because the guard against it is
+            # the point of the probe.
+            raw_max = query.get("max_ts", [None])[0]
+            if raw_max is not None:
+                limit = int(raw_max)
+                rows = [
+                    r for r in rows
+                    if (at := _settled_seconds(r)) is not None and at <= limit
+                ]
+            return 200, {"settlements": rows, "cursor": ""}
 
         if path.endswith("/portfolio/fills"):
             cursor = query.get("cursor", [None])[0]

@@ -83,6 +83,17 @@ class SettlementCoverage:
     earliest_settled_at: Decimal | None = None
     latest_settled_at: Decimal | None = None
 
+    #: Whether the route was asked for anything strictly older than the walk's
+    #: earliest row.  An exhausted cursor proves the route gave everything for
+    #: THE QUERY ASKED, not that the query asked for everything.
+    below_floor_probed: bool = False
+    below_floor_probe_status: int | None = None
+    below_floor_rows_returned: int = 0
+    #: Of those rows, how many really are older than the observed floor.  A
+    #: route that ignores an unknown parameter answers with its newest rows, and
+    #: counting those as older data would invent a windowing that is not there.
+    below_floor_rows_older_than_the_floor: int = 0
+
     #: Whether an archival settlements route was probed, and what came back.
     #: A route that exists would close this gap outright rather than bound it.
     archive_route_probed: bool = False
@@ -91,17 +102,40 @@ class SettlementCoverage:
     archive_first_page_rows: int = 0
 
     @property
-    def floor(self) -> Decimal | None:
-        """The earliest settlement time that may be relied on, or ``None``.
+    def observed_floor(self) -> Decimal | None:
+        """The earliest settlement time the walk itself supports, or ``None``.
 
-        ``None`` means no episode may be reclassified -- see the module docstring
-        for each condition and why it fails closed.
+        This is what the walk saw, under the conditions that make its earliest
+        row meaningful.  It is NOT yet the route's reach -- see :attr:`floor`.
         """
         if not self.exhausted or self.truncated:
             return None
         if self.rows_with_an_unreadable_time:
             return None
         return self.earliest_settled_at
+
+    @property
+    def default_walk_appears_windowed(self) -> bool:
+        """The route served a settlement older than the walk's earliest row.
+
+        Then the exhausted cursor described the query, not the data, and the
+        answer is to re-walk with ``min_ts`` rather than to bound anything.
+        """
+        return self.below_floor_rows_older_than_the_floor > 0
+
+    @property
+    def floor(self) -> Decimal | None:
+        """The earliest settlement time that may be relied on, or ``None``.
+
+        ``None`` means no episode may be reclassified -- see the module docstring
+        for each condition and why it fails closed.  A walk shown to be windowed
+        withholds the floor too: its earliest row bounds the query, not the
+        route, and reclassifying against it would state a limit that is really a
+        missing parameter.
+        """
+        if self.default_walk_appears_windowed:
+            return None
+        return self.observed_floor
 
     @property
     def floor_is_usable(self) -> bool:
@@ -135,6 +169,13 @@ class SettlementCoverage:
             "exhausted": self.exhausted,
             "truncated": self.truncated,
             "floor_is_usable": self.floor_is_usable,
+            "below_floor_probed": self.below_floor_probed,
+            "below_floor_probe_status": self.below_floor_probe_status or 0,
+            "below_floor_rows_returned": self.below_floor_rows_returned,
+            "below_floor_rows_older_than_the_floor": (
+                self.below_floor_rows_older_than_the_floor
+            ),
+            "default_walk_appears_windowed": self.default_walk_appears_windowed,
             # Counts and booleans only -- a test enforces that structurally, so
             # "not measured" is carried by a companion flag rather than by a
             # null. 0 is a real day span; unknown is not.
@@ -160,7 +201,25 @@ class SettlementCoverage:
             f"  evidence spans (days): "
             f"{'unknown' if self.span_days is None else self.span_days}",
             f"  evidence floor usable: {self.floor_is_usable}",
+            "",
+            f"  asked for settlements older than the walk's earliest: "
+            f"{self.below_floor_probed}",
+            f"    probe status: "
+            f"{'n/a' if self.below_floor_probe_status is None else self.below_floor_probe_status}",
+            f"    rows returned: {self.below_floor_rows_returned}",
+            f"    rows genuinely older than the floor: "
+            f"{self.below_floor_rows_older_than_the_floor}",
+            f"    DEFAULT WALK APPEARS WINDOWED: "
+            f"{self.default_walk_appears_windowed}",
         ]
+        if self.default_walk_appears_windowed:
+            lines += [
+                "",
+                "  NOTE: the route served a settlement older than the walk's earliest",
+                "        row, so the exhausted cursor described the QUERY, not the data.",
+                "        The floor is withheld and nothing is reclassified: the answer",
+                "        here is to re-walk with min_ts, not to bound anything.",
+            ]
         if not self.floor_is_usable:
             lines += [
                 "",

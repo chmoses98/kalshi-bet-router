@@ -483,6 +483,28 @@ defect. (3) is a stated limit — *a portfolio containing markets of unknown
 outcome is not a portfolio*, however well-understood the reason. The report
 prints each in its own words.
 
+### Testing this module's own assumption: is the walk windowed?
+
+The settlements walk ends when its cursor runs out, and it would be easy to read
+that as *the route gave everything*. It only means the route gave everything
+**for the query that was asked**. If the default query carries an implicit
+window, an exhausted walk and a complete one are indistinguishable — and every
+conclusion above would be measuring a query rather than the data.
+
+So the audit asks the route for **one settlement strictly older than the walk's
+earliest row** (`max_ts = floor - 1`, `limit = 1`). A row that really is older
+proves the walk was windowed. The floor is then **withheld and nothing is
+reclassified**, because the right response is to re-walk with `min_ts` — not to
+state a limit that is really a missing parameter.
+
+A route that ignores an unknown parameter answers with its *newest* rows, so
+every returned row's own `settled_time` is checked against the floor rather than
+trusted because it arrived. Otherwise the guard would invent a windowing that is
+not there and throw away a perfectly good floor.
+
+Both outcomes are tested: a route that hides older settlements until asked, and
+a route that ignores `max_ts` entirely.
+
 ### An archival settlements route would close this instead of bounding it
 
 If settlements have the same live/archive pair the fills have, the gap does not
@@ -515,13 +537,16 @@ One walk now serves both.
   strictly between 0 and 1. A router that assumed binary would be correct on
   every row it has ever seen and wrong the first time tennis is enabled, so the
   scalar path must be handled before tennis routes, not after.
+* **Whether the settlements route is windowed by default.** The probe ships and
+  has not yet been answered against live data. If it comes back windowed, the
+  943-market gap is not a retention boundary at all — it is a missing `min_ts`,
+  and the fix is a re-walk rather than a bound.
 * **How far back the settlements route actually retains.** The floor measures
   the earliest settlement *this account has*, which is a lower bound on the
   route's reach, not the reach itself. If the member simply did not trade before
   that date, the floor understates what the route would serve — and every
   episode below it is still, correctly, unprovable from the available evidence.
-  Kalshi documentation or a `min_ts` probe could turn this lower bound into the
-  real boundary.
+  Kalshi documentation could turn this lower bound into the real boundary.
 * **Whether a market below the floor settled at all.** The honest answer is
   that this data cannot say. `GET /markets/{ticker}` reports a market status and
   would resolve it per market, at one request each — affordable for a bounded
