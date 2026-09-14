@@ -140,8 +140,31 @@ def test_rejected_fills_never_reach_the_accepted_list():
 # ------------------------------------------------------------------ privacy
 
 def test_coverage_can_only_hold_counts():
+    """Every leaf is an int, and matrix keys are bounded enum labels.
+
+    The direction matrix is the only non-scalar field, so it carries the whole
+    risk of a value reaching a public log.  Pinning its key alphabet here is
+    what keeps "counts only" true of the nested field as well.
+    """
     _, coverage = probe(official_fill())
+    allowed_components = {"yes", "no", "bid", "ask", "buy", "sell", "?", "-"}
     for name, value in vars(coverage).items():
+        if name == "direction_matrix":
+            assert isinstance(value, dict)
+            for key, count in value.items():
+                assert isinstance(count, int), f"{name}[{key}] is not a count"
+                components = key.split("|")
+                assert len(components) == 4, f"unexpected matrix key shape: {key}"
+                assert set(components) <= allowed_components, (
+                    f"matrix key {key} carries a non-label component"
+                )
+            continue
+        assert isinstance(value, int), f"{name} is not a count"
+
+
+def test_flattened_coverage_is_entirely_scalar():
+    _, coverage = probe(official_fill())
+    for name, value in coverage.as_dict().items():
         assert isinstance(value, int), f"{name} is not a count"
 
 
@@ -167,3 +190,68 @@ def test_an_undated_fill_is_rejected_so_replay_stays_orderable():
     assert [f.fill_id for f in accepted] == ["GOOD"]
     assert coverage.rejected_timestamp == 1
     assert coverage.without_any_timestamp == 1
+
+
+def test_price_model_counters_separate_complementary_from_unified():
+    """The counters must tell the two candidate price models apart.
+
+    This is the instrument the price-semantics decision rests on, so each
+    signature is exercised explicitly rather than inferred from the live run.
+    """
+    complementary = official_fill(yes_price_dollars="0.5600",
+                                  no_price_dollars="0.4400")
+    even_odds = official_fill(fill_id="F2", yes_price_dollars="0.5000",
+                              no_price_dollars="0.5000")
+    unified_only = official_fill(fill_id="F3", yes_price_dollars="0.6000",
+                                 no_price_dollars="0.6000")
+    neither = official_fill(fill_id="F4", yes_price_dollars="0.6000",
+                            no_price_dollars="0.3000")
+
+    _, coverage = probe(complementary, even_odds, unified_only, neither)
+    assert coverage.price_pairs_complementary == 2  # 0.56/0.44 and 0.50/0.50
+    assert coverage.price_pairs_equal_at_half == 1
+    assert coverage.price_pairs_equal_off_half == 1
+    assert coverage.price_pairs_unexplained == 1
+
+
+def test_even_odds_pair_is_counted_under_both_models():
+    """An equal-at-even-odds pair proves nothing on its own; it must not be
+    read as evidence for the unified model alone."""
+    _, coverage = probe(official_fill(yes_price_dollars="0.5000",
+                                      no_price_dollars="0.5000"))
+    assert coverage.price_pairs_complementary == 1
+    assert coverage.price_pairs_equal_at_half == 1
+    assert coverage.price_pairs_equal_off_half == 0
+
+
+def test_direction_matrix_counts_vocabulary_co_occurrence():
+    a = official_fill(outcome_side="yes", book_side="bid", action="buy", side="yes")
+    b = official_fill(fill_id="F2", outcome_side="yes", book_side="bid",
+                      action="buy", side="yes")
+    c = official_fill(fill_id="F3", outcome_side="no", book_side="ask",
+                      action="sell", side="yes")
+
+    _, coverage = probe(a, b, c)
+    assert coverage.direction_matrix["yes|bid|buy|yes"] == 2
+    assert coverage.direction_matrix["no|ask|sell|yes"] == 1
+
+
+def test_direction_matrix_never_echoes_an_unexpected_value():
+    """An unrecognised label is bucketed, so a hostile or novel payload cannot
+    print its own text into a public log."""
+    weird = official_fill(outcome_side="MAYBE", book_side="", action="buy",
+                          side="yes")
+    _, coverage = probe(weird)
+    assert "?|-|buy|yes" in coverage.direction_matrix
+    assert "MAYBE" not in coverage.render()
+
+
+def test_rejected_fills_still_contribute_price_model_evidence():
+    """Evidence must survive rejection -- otherwise a schema we got wrong would
+    hide the very data proving it wrong."""
+    disagreeing = official_fill(yes_price_dollars="0.5600",
+                                no_price_dollars="0.4400")
+    accepted, coverage = probe(disagreeing)
+    assert accepted == []
+    assert coverage.rejected_price == 1
+    assert coverage.price_pairs_complementary == 1
