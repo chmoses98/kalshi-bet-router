@@ -269,10 +269,18 @@ the first live run issued 331 requests for 200 fills across 154 markets.
 
 1. **`competition_scope` value set.** No published enum. Observed: `"Game"`.
    Treated as supporting evidence only, and its presence is reported as a count.
-2. **`filters_by_sport` inner object shape.** **Answered, negatively.** Two live
-   runs reported `sports in taxonomy: 22` with `competitions in taxonomy: 0` — the
-   exact signature predicted for "the shape differs". The L2 layer is therefore
-   non-functional and is tracked as a defect to repair, not as working evidence.
+2. **`filters_by_sport` inner object shape.** **Answered, and repaired.** Three
+   live runs reported `sports in taxonomy: 22` with `competitions in taxonomy: 0`
+   and `taxonomy entries skipped: 0`. The shape probe then named the cause:
+
+   ```
+   inner keys observed: competitions:object, scopes:list[str]
+   ```
+
+   `competitions` was present all along, as an **object** rather than a list, so a
+   reader that only walked lists found nothing — while `scopes`, a list of
+   strings, parsed correctly. Both shapes are now read. Note that L2 was therefore
+   contributing **zero** classifications from Phase 0.1 until this repair.
 3. **Event metadata envelope.** Top-level vs wrapped; both are accepted.
 4. **Coverage of `competition` on older events.** The `events with non-null
    competition` counter measures this directly on the next run.

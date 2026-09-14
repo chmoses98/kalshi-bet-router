@@ -20,12 +20,26 @@ positional: any list found under a competitions-like or scopes-like key is read,
 and entries are accepted as bare strings or as objects carrying a name field.
 Unrecognized shapes are skipped and counted, never guessed at.
 
-**The guessed key list is wrong.** Two live runs reported 22 sports, 0
-competitions and 0 skipped sports -- so every sport's object parsed as a dict
-and none of the competition-like keys matched.  Rather than guess again, the
-parser now records the inner KEY NAMES it actually saw, so the next run reports
-the real shape.  These are exchange schema names from a public endpoint, not
-account data, so naming them discloses nothing about the owner.
+**The shape, established by the live run rather than guessed.** Three runs
+reported 22 sports, 0 competitions and 0 skipped sports, and the shape probe
+then named the cause:
+
+    inner keys observed: competitions:object, scopes:list[str]
+
+``competitions`` was there the whole time -- as an **object**, not a list, so a
+reader that only walked lists found nothing.  ``scopes`` is a list of strings,
+which is why scopes parsed and competitions did not.
+
+Both shapes are now read.  For an object, the **keys** are taken as competition
+names and each value is still searched for a name field, so the parser does not
+depend on which of the two the payload happens to use.  The shape diagnostic is
+kept and extended one level, so a future change is visible rather than silent.
+
+Reading a wrong name here cannot cause a wrong classification.  L2 only speaks
+when L1 produced no competition, an unrecognized competition resolves to
+``None`` and fails closed to UNRESOLVED, and a name claimed by two sports is
+marked ambiguous.  So the failure mode of over-reading is "no answer", never
+"wrong answer".
 
 Ownership collisions fail closed
 --------------------------------
@@ -149,6 +163,31 @@ def _bump(counter: dict[str, int], key: str) -> None:
         counter[key] = counter.get(key, 0) + 1
 
 
+def _competition_names(value: Any) -> list[str]:
+    """Read competition names from either shape the endpoint may use.
+
+    A **list** yields its entries (strings, or objects carrying a name field).
+    An **object** yields its keys -- which is the shape the live endpoint
+    actually sends -- and each value is still searched, so a payload that nests
+    the name inside the value is read too.
+    """
+    if isinstance(value, dict):
+        names: list[str] = []
+        for key, nested in value.items():
+            if isinstance(key, str) and key.strip():
+                names.append(key)
+            if isinstance(nested, dict):
+                for name_key in _NAME_KEYS:
+                    candidate = nested.get(name_key)
+                    if isinstance(candidate, str) and candidate.strip():
+                        names.append(candidate)
+                        break
+            else:
+                names.extend(_entry_names(nested))
+        return names
+    return _entry_names(value)
+
+
 def _observe_shape(details: dict[str, Any], taxonomy: SportTaxonomy) -> None:
     """Record the inner schema of one sport's filter object.
 
@@ -167,6 +206,11 @@ def _observe_shape(details: dict[str, Any], taxonomy: SportTaxonomy) -> None:
                     for sub in item:
                         if isinstance(sub, str):
                             _bump(taxonomy.observed_entry_keys, sub)
+        elif isinstance(value, dict):
+            # One level deeper, as KINDS only: this is what distinguishes
+            # "keys are competition names" from "keys are something else".
+            for nested in value.values():
+                _bump(taxonomy.observed_entry_keys, f"{key}_value_{_kind_of(nested)}")
 
 
 def parse_filters_by_sport(payload: dict[str, Any]) -> SportTaxonomy:
@@ -204,7 +248,7 @@ def parse_filters_by_sport(payload: dict[str, Any]) -> SportTaxonomy:
         _observe_shape(details, taxonomy)
 
         for key in _COMPETITION_KEYS:
-            for competition in _entry_names(details.get(key)):
+            for competition in _competition_names(details.get(key)):
                 claimants.setdefault(normalize(competition), set()).add(normalized_sport)
         for key in _SCOPE_KEYS:
             for scope in _entry_names(details.get(key)):
