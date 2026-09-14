@@ -365,6 +365,40 @@ unexplained historical market leaves every reconciled market its identity.
 > A complete walk of fills proves the fill history. It does not, by itself,
 > prove the position story.
 
+## Phase G — shadow wagers: the rows a router would send, sent nowhere
+
+`src/kalshi_router/wager.py` turns a position episode into the exact row
+`scripts/edgelab/import_bet_batch.py` accepts, and then does nothing with it.
+No write, no request, no file — a test asserts the run leaves the working
+directory empty.
+
+It targets the **importer's input contract**, not the stored record: `betId`,
+`validationStatus`, `provenance` and `createdAt` are produced by the importer,
+and a router emitting them would be inventing fields the destination owns.
+
+**The refusals are the output worth having.** A wager is built only when every
+fact it needs is evidenced; anything missing produces a named `WagerRefusal`
+rather than a row with a plausible value in the gap — no importable identity,
+still open, sport unresolved, no destination importer, game date not
+established, cost basis or fees incomplete, no settlement economics, settlement
+not binary.
+
+Two refusals worth calling out:
+
+* **`gameDate`** comes from an explicit event field, or from the event ticker's
+  own date segment (`KXMLBGAME-26AUG03SFLAD` → `2026-08-03`), or it is refused.
+  There is deliberately no fallback to `close_time`: a night game ending at
+  03:00 UTC belongs to the previous local date, so that fallback would be wrong
+  for most evening games, and wrong silently.
+* **A non-binary settlement** is refused because MLB's ledger has
+  WIN/LOSS/PUSH/VOID and no partial. Tennis is known to settle scalar, so this
+  is a live hazard rather than a hypothetical one.
+
+Only MLB has an importer to route into (Phase F read all four repositories), so
+every other sport is refused by construction until its wager contract is
+designed — which is the owner's decision, not something to infer from whatever
+JSON file happens to exist.
+
 ## Documentation index
 
 * [`docs/API_CONTRACT.md`](docs/API_CONTRACT.md) — the exact Kalshi API contract used, and its verification status.

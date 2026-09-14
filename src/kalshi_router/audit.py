@@ -47,6 +47,7 @@ from .safety import safe_schema_name
 from .schema_probe import SchemaCoverage, probe_fills
 from .sports import REPORT_ORDER, Sport
 from .taxonomy import SportTaxonomy, parse_filters_by_sport
+from .wager import WagerDiagnostics, build_shadow_wagers
 from .timeaxis import parse_rfc3339_seconds
 
 #: Fail-closed reasons a public milestone sweep could plausibly repair.
@@ -94,6 +95,8 @@ class AuditResult:
     settlement_coverage: SettlementCoverage = field(
         default_factory=SettlementCoverage
     )
+    #: What a router WOULD emit. Built in memory, sent nowhere.
+    wagers: WagerDiagnostics = field(default_factory=WagerDiagnostics)
     details: tuple[SensitiveDetail, ...] = ()
     _classifications: dict[str, Classification] = field(default_factory=dict, repr=False)
 
@@ -164,6 +167,7 @@ def run_audit(
     reconcile: bool = False,
     full_history: bool = False,
     max_classify_markets: int | None = None,
+    shadow_wagers: bool = False,
 ) -> AuditResult:
     """Run one complete Phase 0.1 audit.
 
@@ -409,8 +413,18 @@ def run_audit(
     # the episodes themselves. Nothing is set here after the fact: a claim this
     # load-bearing must not depend on an orchestrator remembering to revoke it.
 
+    # Phase G: build the rows a router would send, and send none of them. The
+    # refusals are the output worth having -- they say what routing would cost
+    # in accuracy today, before it can cost it.
+    wager_diagnostics = WagerDiagnostics()
+    if shadow_wagers and replay is not None:
+        _, wager_diagnostics = build_shadow_wagers(
+            replay.episodes, classifications, contexts
+        )
+
     return AuditResult(
         report=report,
+        wagers=wager_diagnostics,
         accounting=accounting,
         coverage=coverage,
         history=history_evidence,

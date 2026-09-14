@@ -646,3 +646,35 @@ def client_for_transport(signer, transport):
         transport=transport,
         sleep=lambda _: None,
     )
+
+
+# ===================== Phase G: shadow wagers, built and never sent ==========
+
+def test_shadow_wagers_are_off_unless_asked_for(signer):
+    pages = [[make_fill(1, ticker=market_for("MLB"))]]
+    result = run_audit(build_client(pages, signer))
+    assert result.wagers.episodes_considered == 0
+    assert result.wagers.wagers_built == 0
+
+
+def test_shadow_wagers_consider_every_episode_and_refuse_with_a_reason(signer):
+    pages = [[make_fill(1, ticker=market_for("MLB")),
+              make_fill(2, ticker=market_for("NFL"))]]
+    result = run_audit(build_client(pages, signer), shadow_wagers=True)
+    wagers = result.wagers
+    assert wagers.episodes_considered == 2
+    # No exchange view and no settlements here, so the position story is
+    # unearned for both -- and that is the first thing to fix.
+    assert wagers.refused_identity_not_importable == 2
+    assert wagers.wagers_built == 0
+    assert wagers.episodes_considered == wagers.wagers_built + wagers.refusals_total
+
+
+def test_a_shadow_run_writes_nothing_to_disk(signer, tmp_path, monkeypatch):
+    # Phase G builds rows in memory. A test asserts it, because "we did not mean
+    # to write anything" is not the same as "nothing was written".
+    monkeypatch.chdir(tmp_path)
+    pages = [[make_fill(1, ticker=market_for("MLB"))]]
+    run_audit(build_client(pages, signer), shadow_wagers=True, reconcile=True,
+              full_history=True)
+    assert list(tmp_path.iterdir()) == []

@@ -83,6 +83,15 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     audit.add_argument(
+        "--shadow-wagers",
+        action="store_true",
+        help=(
+            "Build the canonical wager rows a router WOULD send and report the "
+            "counts. Nothing is sent, written or persisted; the refusals are "
+            "the point."
+        ),
+    )
+    audit.add_argument(
         "--full-history",
         action="store_true",
         help=(
@@ -169,6 +178,7 @@ def main(argv: list[str] | None = None, stdout=None, stderr=None) -> int:
             collect_details=args.show_sensitive_details,
             reconcile=args.reconcile,
             full_history=args.full_history,
+            shadow_wagers=args.shadow_wagers,
             max_classify_markets=args.max_classify_markets,
         )
     except KalshiRouterError as exc:
@@ -183,6 +193,7 @@ def main(argv: list[str] | None = None, stdout=None, stderr=None) -> int:
         )
         payload.update({f"schema_{k}": v for k, v in result.coverage.as_dict().items()})
         payload.update({f"history_{k}": v for k, v in result.history.as_dict().items()})
+        payload.update({f"wager_{k}": v for k, v in result.wagers.as_dict().items()})
         payload.update(
             {
                 f"settlement_coverage_{k}": v
@@ -202,6 +213,9 @@ def main(argv: list[str] | None = None, stdout=None, stderr=None) -> int:
         print(result.accounting.render(), file=out)
         print("", file=out)
         print(result.history.render(), file=out)
+        if args.shadow_wagers:
+            print("", file=out)
+            print(result.wagers.render(), file=out)
         if result.reconciliation is not None:
             print("", file=out)
             print(result.settlement_coverage.render(), file=out)

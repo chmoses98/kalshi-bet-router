@@ -34,6 +34,11 @@ on:
         description: "Cap the metadata sweep (accounting still replays every fill). Blank = no cap"
         required: false
         default: ""
+      shadow_wagers:
+        description: "Build the canonical wager rows a router WOULD send, and send none of them"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -74,6 +79,7 @@ jobs:
           RECONCILE: ${{ inputs.reconcile }}
           FULL_HISTORY: ${{ inputs.full_history }}
           MAX_CLASSIFY: ${{ inputs.max_classify_markets }}
+          SHADOW_WAGERS: ${{ inputs.shadow_wagers }}
         run: |
           set -euo pipefail
           FLAGS=""
@@ -82,6 +88,9 @@ jobs:
           fi
           if [ "${FULL_HISTORY}" = "true" ]; then
             FLAGS="${FLAGS} --full-history"
+          fi
+          if [ "${SHADOW_WAGERS}" = "true" ]; then
+            FLAGS="${FLAGS} --shadow-wagers"
           fi
           if [ -n "${MAX_CLASSIFY}" ]; then
             FLAGS="${FLAGS} --max-classify-markets ${MAX_CLASSIFY}"
