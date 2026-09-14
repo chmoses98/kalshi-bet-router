@@ -448,3 +448,57 @@ def test_a_member_on_the_winning_yes_side_is_neither_case():
     ])
     assert report.settlements_market_yes_member_unpaid == 0
     assert report.settlements_market_no_member_paid == 0
+
+
+# ============ absence is only a gap when the replay still holds something ====
+#
+# The first full-history run reported 423 markets "absent and UNEXPLAINED",
+# which was over-reporting: the counter flagged every replayed market missing
+# from positions, including ones the replay itself had closed to zero. A market
+# both sides agree is flat is agreement, not a gap.
+
+def test_a_market_the_replay_closed_to_zero_is_agreement_not_a_gap():
+    report = probe(positions=[], settlements=[], replayed={"A": Decimal(0)})
+    assert report.markets_absent_and_flat_in_replay == 1
+    assert report.markets_absent_and_unexplained == 0
+    assert report.markets_absent_but_settled == 0
+
+
+def test_an_open_market_with_no_settlement_is_still_the_real_gap():
+    report = probe(positions=[], settlements=[], replayed={"A": Decimal("10.00")})
+    assert report.markets_absent_and_unexplained == 1
+    assert report.markets_absent_and_flat_in_replay == 0
+
+
+def test_an_open_market_a_settlement_explains_is_still_explained():
+    report = probe(
+        positions=[],
+        settlements=[settlement(market_result="yes")],
+        replayed={"A": Decimal("10.00")},
+    )
+    assert report.markets_absent_but_settled == 1
+    assert report.markets_absent_and_unexplained == 0
+
+
+def test_a_flat_market_is_agreement_even_when_a_settlement_also_exists():
+    """Flat is checked first: there is nothing left for a settlement to explain."""
+    report = probe(
+        positions=[],
+        settlements=[settlement(market_result="yes")],
+        replayed={"A": Decimal(0)},
+    )
+    assert report.markets_absent_and_flat_in_replay == 1
+    assert report.markets_absent_but_settled == 0
+
+
+def test_the_three_absence_buckets_partition_the_absent_markets():
+    report = probe(
+        positions=[],
+        settlements=[{"ticker": "SETTLED", "market_result": "yes"}],
+        replayed={"FLAT": Decimal(0), "SETTLED": Decimal("5.00"),
+                  "OPEN": Decimal("7.00")},
+    )
+    total = (report.markets_absent_and_flat_in_replay
+             + report.markets_absent_but_settled
+             + report.markets_absent_and_unexplained)
+    assert total == report.markets_only_in_replay == 3

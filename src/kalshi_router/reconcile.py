@@ -135,9 +135,13 @@ class ReconciliationReport:
     #: Replayed non-zero, exchange says flat.  Observed to be ZERO on live data:
     #: settled markets leave the positions response rather than going to zero.
     markets_replay_open_exchange_flat: int = 0
-    #: The real settlement signature: replayed, absent from positions, and
+    #: The real settlement signature: replayed OPEN, absent from positions, and
     #: accounted for by a settlement row.
     markets_absent_but_settled: int = 0
+    #: Replayed to flat and absent from positions: both sides agree the member
+    #: holds nothing.  Counting this as a gap was over-reporting by 423 markets
+    #: on the first full-history run.
+    markets_absent_and_flat_in_replay: int = 0
     #: Replayed, absent from positions, and NOT explained by a settlement. This
     #: is the one that would mean missing history.
     markets_absent_and_unexplained: int = 0
@@ -204,6 +208,8 @@ class ReconciliationReport:
             f"    DISAGREEING on net quantity: {self.markets_disagreeing_on_quantity}",
             f"    replay says open, exchange says flat: "
             f"{self.markets_replay_open_exchange_flat}",
+            f"    absent from positions, replay also flat (agreement): "
+            f"{self.markets_absent_and_flat_in_replay}",
             f"    absent from positions, EXPLAINED by a settlement: "
             f"{self.markets_absent_but_settled}",
             f"    absent from positions, UNEXPLAINED: "
@@ -420,10 +426,20 @@ def probe_reconciliation(
     for ticker, net in replayed.items():
         if ticker not in exchange:
             report.markets_only_in_replay += 1
-            # Absent is not automatically "missing history": a settled market
-            # leaves the positions response. Only an absence that NO settlement
-            # explains is evidence of a gap.
-            if ticker in settled_tickers:
+            # Absence is only a gap when the replay still holds something.
+            #
+            # Three ways a market is legitimately absent from positions, and
+            # only the fourth is evidence of missing history:
+            #   * the replay closed it to zero by trading -- both sides agree
+            #     the member holds nothing, which is agreement, not a gap;
+            #   * a settlement closed it -- the exchange drops settled markets
+            #     from the response entirely;
+            #   * both of the above.
+            # A market the replay still shows OPEN, with no settlement to
+            # explain it, is the one that means the history is incomplete.
+            if net == 0:
+                report.markets_absent_and_flat_in_replay += 1
+            elif ticker in settled_tickers:
                 report.markets_absent_but_settled += 1
             else:
                 report.markets_absent_and_unexplained += 1
