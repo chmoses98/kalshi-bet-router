@@ -346,6 +346,18 @@ began. Closing is not importability.
 * **Whether 755 settlements cover the whole account.** The settlement walk is
   unbounded, but the fill sample is bounded at 200, so "every replayed market is
   explained" is a statement about the window, not the account.
+* **Classification is the expensive half, not the fill walk.** 155 markets cost
+  486 requests, almost all of it metadata resolution at several requests per
+  market; the fill pagination itself is a handful. This account has settled 755
+  markets, so a full-history audit that also classified every market it touched
+  would be several thousand requests. `--max-classify-markets` therefore bounds
+  the metadata sweep alone, leaving the ledger to replay every fill.
+
+  A market left unclassified by that bound is **not** unresolved. Counting work
+  never attempted as work that failed would understate classification quality,
+  and in the direction that looks like a defect in the classifier rather than a
+  budget the caller chose — so it would invite the wrong repair.
+
 * **Cost of a full replay.** The bounded 200-fill window already issued 486 API
   requests once metadata resolution ran for 155 markets. A full-history replay
   needs a request budget and a rate-limit strategy before it is run.
