@@ -808,6 +808,55 @@ unknown, insufficient — because "unresolved" is a count, not a diagnosis, and
 absent, malformed and unrecognised metadata are three different repairs. The
 next run says which.
 
+## The terminal refusal is correct, and the measurement says so
+
+Run 24 refuted the hypothesis. Run 25 refuted the fix.
+
+The 671 routable markets the classifier cannot resolve break down as 27
+`COMPETITION_ABSENT` and **644 `COMPETITION_AMBIGUOUS`** — the competition
+string is present, readable and well-formed, and it is claimed by more than one
+sport in Kalshi's *own* taxonomy. Nothing is missing. The exchange's catalogue
+is genuinely ambiguous about that name.
+
+The classifier treats that as terminal and returns before L3/L4/L5 are
+consulted. The obvious objection is that **L4 is Kalshi's own series metadata**
+rather than this project's registry, so falling through to it would be asking
+the exchange a second question, not overruling it. That is a good argument. It
+is also wrong, and only a measurement could say so:
+
+```
+what a fall-through WOULD have decided (measurement only):
+  Kalshi's own series metadata (L4):     0
+  this project's series registry (L5): 100
+  nothing would have decided it:       571
+```
+
+0 + 100 + 571 = 671.
+
+**Kalshi's own metadata would decide none of them.** Relaxing the rule would
+rescue 100 markets out of 671 — 14.9% — and every one of those would be decided
+by *our own ticker-prefix registry overruling Kalshi's stated ambiguity*. That
+is exactly the failure the terminal rule exists to prevent, and the reason L4
+decides nothing is itself instructive: a series tagged `Football` is an
+ambiguous family (pro or college), so Kalshi's series metadata is ambiguous in
+precisely the cases where its competition names are.
+
+So the rule stays. The 644 are not a classifier defect; they are Kalshi's
+catalogue declining to say which sport a competition name belongs to, and this
+router declining to guess on its behalf.
+
+Two hypotheses died here, both mine, and both were stated as hypotheses before
+the data arrived:
+
+1. *Settled markets return degraded metadata.* No — lookup succeeded on all 671.
+2. *Kalshi's L4 would rescue the collisions.* No — it rescues zero.
+
+What would actually resolve these is a **tiebreaker Kalshi itself provides**:
+the `tags` field on `GET /series?include_product_metadata=true`, already
+recorded as an unadopted lead for Tennis in `docs/DOWNSTREAM_REPOS.md`. That is
+exchange evidence rather than ours, and it is the only avenue that would not
+mean overruling the catalogue. It remains unverified and unadopted.
+
 ## Still open
 
 * **`/historical/cutoff` response shape** is unverified against a live response.
