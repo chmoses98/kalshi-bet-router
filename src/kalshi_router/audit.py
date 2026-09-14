@@ -29,7 +29,7 @@ from .milestones import MilestoneIndex, build_milestone_index
 from .models import (
     Action,
     NormalizedFill,
-    Side,
+    OutcomeSide,
     count_partial_order_groups,
     dedupe_fills,
     group_by_order,
@@ -143,14 +143,19 @@ def run_audit(
     fills = deduped.fills
 
     for fill in fills:
-        if fill.action is Action.BUY:
-            report.buy_fills += 1
-        else:
-            report.sell_fills += 1
-        if fill.side is Side.YES:
+        # Canonical direction: which outcome the fill left the account
+        # positioned for. buy-yes and sell-no both count as YES.
+        if fill.outcome_side is OutcomeSide.YES:
             report.yes_side_fills += 1
         else:
             report.no_side_fills += 1
+        # The deprecated action verb, reported only while Kalshi still sends it.
+        if fill.legacy_action is Action.BUY:
+            report.buy_fills += 1
+        elif fill.legacy_action is Action.SELL:
+            report.sell_fills += 1
+        else:
+            report.fills_without_legacy_action += 1
         if not fill.order_id:
             report.fills_without_an_order_id += 1
         if fill.count_source == "count_fp":

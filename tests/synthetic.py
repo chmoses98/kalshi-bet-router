@@ -38,6 +38,17 @@ def generate_fake_private_key_pem() -> str:
     ).decode("ascii")
 
 
+def canonical_outcome(action: str, side: str) -> str:
+    """Documented equivalence: buy-yes and sell-no both position you for YES."""
+    positioned_for_yes = (action == "buy") == (side == "yes")
+    return "yes" if positioned_for_yes else "no"
+
+
+def canonical_book_side(action: str, side: str) -> str:
+    """``bid`` pairs with ``outcome_side=yes``; ``ask`` with ``no``."""
+    return "bid" if canonical_outcome(action, side) == "yes" else "ask"
+
+
 def make_fill(
     index: int,
     ticker: str = "KXMLBGAME-SYNTH01-NYY",
@@ -54,8 +65,13 @@ def make_fill(
         "order_id": order_id if order_id is not None else f"SYNTHORDER-{index:04d}",
         "trade_id": f"SYNTHTRADE-{index:04d}",
         "ticker": ticker,
+        # Current canonical direction fields, plus the deprecated pair, exactly
+        # as the published Get Fills example carries both.
+        "outcome_side": canonical_outcome(action, side),
+        "book_side": canonical_book_side(action, side),
         "action": action,
         "side": side,
+        "subaccount_number": 0,
         "is_taker": True,
         # Current (post Q1-2026 fixed-point migration) field shapes.
         "yes_price_dollars": "0.5700",
@@ -257,6 +273,7 @@ def make_accounting_fill(
     created_time: str | None = None,
     fee: str | None = None,
     fill_id: str | None = None,
+    subaccount: int | None = 0,
     **extra: Any,
 ) -> dict[str, Any]:
     """A synthetic fill shaped for accounting tests.
@@ -270,8 +287,11 @@ def make_accounting_fill(
         "fill_id": fill_id or f"SYNTHFILL-{index:04d}",
         "order_id": order_id if order_id is not None else f"SYNTHORDER-{index:04d}",
         "ticker": ticker,
+        "outcome_side": canonical_outcome(action, side),
+        "book_side": canonical_book_side(action, side),
         "action": action,
         "side": side,
+        "subaccount_number": subaccount,
         "count_fp": quantity,
         "created_time": stamp,
         "is_taker": True,
@@ -281,6 +301,7 @@ def make_accounting_fill(
     if side == "no":
         raw["no_price_dollars"] = no_price if no_price is not None else "0.4300"
     if fee is not None:
-        raw["fee_cost_dollars"] = fee
+        # Current published field name and representation: a dollar string.
+        raw["fee_cost"] = fee
     raw.update(extra)
     return raw

@@ -30,6 +30,9 @@ class AccountingDiagnostics:
     orders_without_a_price: int = 0
 
     markets_with_activity: int = 0
+    #: Distinct subaccounts seen. Positions are never netted across them.
+    subaccounts_observed: int = 0
+    fills_without_a_subaccount_number: int = 0
     position_transitions: int = 0
     positions_opened: int = 0
     positions_increased: int = 0
@@ -42,12 +45,21 @@ class AccountingDiagnostics:
     episodes_closed: int = 0
     episodes_with_complete_cost_basis: int = 0
     episodes_with_complete_fees: int = 0
+    #: Episodes touched by a cross-zero reversal, where the execution's fee spans
+    #: two episodes and Kalshi documents no allocation rule.
+    episodes_with_ambiguous_fee_allocation: int = 0
     episodes_provable: int = 0
+    #: Episodes whose opening boundary is provable, so their identity is safe for
+    #: a future idempotent import.
+    episodes_with_importable_identity: int = 0
 
     fills_with_fee_field: int = 0
     fills_missing_fee_field: int = 0
     orders_with_complete_fees: int = 0
     orders_missing_fees: int = 0
+    #: True when every replayed fill reported a fee, so the account-level total
+    #: is exact. Per-episode allocation can still be ambiguous (see above).
+    account_fee_total_complete: bool = False
 
     #: False whenever the replay ran on a bounded window rather than a complete
     #: history.  The audit must not describe positions as the account's real
@@ -74,6 +86,8 @@ class AccountingDiagnostics:
             f"  orders with no interpretable price: {self.orders_without_a_price}",
             "",
             f"  markets with position activity: {self.markets_with_activity}",
+            f"  distinct subaccounts observed: {self.subaccounts_observed}",
+            f"  fills without a subaccount number: {self.fills_without_a_subaccount_number}",
             f"  position transitions: {self.position_transitions}",
             f"    opened: {self.positions_opened}",
             f"    increased: {self.positions_increased}",
@@ -87,12 +101,16 @@ class AccountingDiagnostics:
             f"    with complete cost basis: {self.episodes_with_complete_cost_basis}",
             f"    with complete exchange fees: {self.episodes_with_complete_fees}",
             f"    provable from supplied history: {self.episodes_provable}",
+            f"    with an importable identity: {self.episodes_with_importable_identity}",
+            f"    with ambiguous fee allocation (reversal): "
+            f"{self.episodes_with_ambiguous_fee_allocation}",
             "",
             f"  fills reporting a fee field: {self.fills_with_fee_field}",
             f"  fills missing a fee field: {self.fills_missing_fee_field}",
             f"  accounting schema failures: {self.accounting_schema_failures}",
             f"  orders with complete fee data: {self.orders_with_complete_fees}",
             f"  orders with incomplete fee data: {self.orders_missing_fees}",
+            f"  account-level fee total is exact: {self.account_fee_total_complete}",
             "",
             f"  history supplied is complete: {self.history_is_complete}",
             f"  position state claimed as authoritative: "
@@ -121,6 +139,8 @@ def build_diagnostics(result: AccountingResult) -> AccountingDiagnostics:
         orders_with_complete_fees=result.order_stats.orders_with_complete_fees,
         orders_missing_fees=result.order_stats.orders_missing_fees,
         markets_with_activity=len(result.ledgers),
+        subaccounts_observed=len(result.subaccounts_observed),
+        account_fee_total_complete=result.total_fees is not None,
         position_transitions=len(result.transitions),
         claims_complete_position_state=result.claims_complete_position_state,
         history_is_complete=result.completeness is HistoryCompleteness.COMPLETE,
@@ -140,6 +160,9 @@ def build_diagnostics(result: AccountingResult) -> AccountingDiagnostics:
             diagnostics.fills_missing_fee_field += 1
         else:
             diagnostics.fills_with_fee_field += 1
+    diagnostics.fills_without_a_subaccount_number = sum(
+        1 for ledger in result.ledgers.values() if ledger.subaccount_number is None
+    )
 
     episodes = result.episodes
     diagnostics.episodes_observed = len(episodes)
@@ -150,4 +173,10 @@ def build_diagnostics(result: AccountingResult) -> AccountingDiagnostics:
     )
     diagnostics.episodes_with_complete_fees = sum(1 for e in episodes if e.fee_complete)
     diagnostics.episodes_provable = sum(1 for e in episodes if e.provable)
+    diagnostics.episodes_with_importable_identity = sum(
+        1 for e in episodes if e.is_importable
+    )
+    diagnostics.episodes_with_ambiguous_fee_allocation = sum(
+        1 for e in episodes if e.fee_allocation_ambiguous
+    )
     return diagnostics

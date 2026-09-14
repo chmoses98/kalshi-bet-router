@@ -26,7 +26,7 @@ from decimal import Decimal
 from typing import Iterable
 
 from ..errors import SchemaError
-from ..models import Action, NormalizedFill, Side
+from ..models import BookSide, NormalizedFill, OutcomeSide
 from .identity import digest_for, order_source_key
 from .ordering import parse_execution_time, sort_fills
 
@@ -40,8 +40,10 @@ class OrderExecution:
 
     order_id: str
     ticker: str
-    action: Action
-    side: Side
+    #: Canonical direction of the submission.
+    outcome_side: OutcomeSide
+    book_side: BookSide | None
+    subaccount_number: int | None
     total_quantity: Decimal
     fill_count: int
     fill_ids: tuple[str, ...]
@@ -136,14 +138,19 @@ def aggregate_orders(
         ordered = sort_fills(group)
 
         tickers = {f.ticker for f in ordered}
-        actions = {f.action for f in ordered}
-        sides = {f.side for f in ordered}
+        outcomes = {f.outcome_side for f in ordered}
+        subaccounts = {f.subaccount_number for f in ordered}
+        book_sides = {f.book_side for f in ordered if f.book_side is not None}
         if len(tickers) > 1:
             raise SchemaError("one order_id spanned more than one market ticker")
-        if len(actions) > 1:
-            raise SchemaError("one order_id spanned more than one action")
-        if len(sides) > 1:
-            raise SchemaError("one order_id spanned more than one contract side")
+        if len(outcomes) > 1:
+            raise SchemaError("one order_id spanned more than one outcome_side")
+        if len(book_sides) > 1:
+            raise SchemaError("one order_id spanned more than one book_side")
+        if len(subaccounts) > 1:
+            # Two subaccounts sharing an order id would mean order_id is not a
+            # per-account identity, and every position keyed on it is unsound.
+            raise SchemaError("one order_id spanned more than one subaccount")
 
         quantities = [f.count for f in ordered]
         if any(q is None for q in quantities):
@@ -162,8 +169,9 @@ def aggregate_orders(
         execution = OrderExecution(
             order_id=order_id,
             ticker=next(iter(tickers)),
-            action=next(iter(actions)),
-            side=next(iter(sides)),
+            outcome_side=next(iter(outcomes)),
+            book_side=next(iter(book_sides)) if book_sides else None,
+            subaccount_number=next(iter(subaccounts)),
             total_quantity=total_quantity,
             fill_count=len(ordered),
             fill_ids=tuple(f.fill_id for f in ordered),

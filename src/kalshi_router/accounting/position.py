@@ -48,8 +48,13 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import Enum
 
-from ..models import Action, NormalizedFill, Side
-from .identity import digest_for, episode_source_key
+from ..models import NormalizedFill, OutcomeSide
+from .identity import (
+    Identity,
+    ProvisionalIdentity,
+    StableIdentity,
+    episode_source_key,
+)
 
 ONE = Decimal(1)
 ZERO = Decimal(0)
@@ -71,24 +76,26 @@ class Direction(str, Enum):
 
 
 def project_fill(fill: NormalizedFill) -> tuple[Decimal, Decimal | None]:
-    """Project one fill onto the signed axis.
+    """Project one fill onto the signed axis using **canonical** direction.
+
+    ``outcome_side`` alone fixes the sign -- it has already absorbed the
+    buy/sell distinction, which is why *buy yes* and *sell no* both report
+    ``yes``.  The deprecated ``action`` field is not consulted and need not be
+    present.
 
     Returns ``(signed_quantity, yes_equivalent_price)``.  The price is ``None``
-    when the fill carried none; quantity is always present (normalization
-    already fails closed without it).
+    when the fill carried none.
     """
     quantity = fill.count
     if quantity is None:  # pragma: no cover - normalization guarantees this
         raise ValueError("fill has no quantity")
 
     price = fill.price_dollars
-    if fill.side is Side.YES:
-        signed = quantity if fill.action is Action.BUY else -quantity
-        yes_price = price
-    else:
-        signed = -quantity if fill.action is Action.BUY else quantity
-        yes_price = (ONE - price) if price is not None else None
-    return signed, yes_price
+    if fill.outcome_side is OutcomeSide.YES:
+        return quantity, price
+    # Positioned for NO: negative on the axis, and the YES-equivalent price is
+    # the complement of the NO price actually paid.
+    return -quantity, (ONE - price) if price is not None else None
 
 
 def _sign(value: Decimal) -> int:
@@ -132,6 +139,8 @@ class PositionEpisode:
     direction: Direction
     opening_fill_id: str
     opened_at: Decimal
+    #: Positions never net across subaccounts, so it is part of the identity.
+    subaccount_number: int | None = None
     closing_fill_id: str | None = None
     closed_at: Decimal | None = None
 
@@ -148,6 +157,9 @@ class PositionEpisode:
 
     cost_basis_complete: bool = True
     fee_complete: bool = True
+    #: True when an execution's fee spans two episodes (a cross-zero reversal)
+    #: and Kalshi documents no allocation rule, so no split is invented.
+    fee_allocation_ambiguous: bool = False
     #: False when bounded history means the opening was never observed.
     provable: bool = True
 
@@ -155,12 +167,38 @@ class PositionEpisode:
     order_ids: list[str] = field(default_factory=list)
 
     @property
-    def source_key(self) -> str:
-        return episode_source_key(self.ticker, self.opening_fill_id)
+    def identity(self) -> Identity:
+        """Stable only when the opening boundary is provable from the history.
+
+        A bounded window cannot prove where flat was, so back-filling older
+        fills can merge this episode into an older one and change or remove its
+        opening fill.  Such an episode therefore gets a
+        :class:`~kalshi_router.accounting.identity.ProvisionalIdentity`, which
+        carries no source key at all.
+        """
+        if not self.provable:
+            return ProvisionalIdentity(
+                debug_label=f"provisional:{self.ticker}:{self.opening_fill_id}"
+            )
+        return StableIdentity(
+            episode_source_key(self.subaccount_number, self.ticker, self.opening_fill_id)
+        )
 
     @property
-    def source_id(self) -> str:
-        return digest_for(self.source_key)
+    def source_key(self) -> str | None:
+        """``None`` unless the identity is importable."""
+        identity = self.identity
+        return identity.source_key if isinstance(identity, StableIdentity) else None
+
+    @property
+    def source_id(self) -> str | None:
+        """``None`` unless the identity is importable."""
+        identity = self.identity
+        return identity.source_id if isinstance(identity, StableIdentity) else None
+
+    @property
+    def is_importable(self) -> bool:
+        return self.identity.is_importable
 
     @property
     def is_open(self) -> bool:
@@ -177,9 +215,14 @@ class PositionEpisode:
 
 @dataclass
 class MarketLedger:
-    """Running signed inventory for one market ticker."""
+    """Running signed inventory for one market, within one subaccount.
+
+    Keyed by ``(subaccount_number, ticker)``: two subaccounts holding the same
+    ticker are two independent positions and must never net together.
+    """
 
     ticker: str
+    subaccount_number: int | None = None
     position: Decimal = ZERO
     average_entry_price: Decimal | None = None
     cost_basis_complete: bool = True
@@ -265,9 +308,15 @@ def apply_fill(
         realized = _realized(ledger, yes_price, closed, _sign(before))
         outgoing = ledger.current_episode
         ledger.position = ZERO
+        # This one execution spans two episodes.  Kalshi documents no rule for
+        # splitting its fee between them, so none is invented: the fee is not
+        # attributed to either episode, and both are marked ambiguous.  The
+        # exact amount is still counted once at the account level.
         _record(outgoing, fill, opened=ZERO, closed=closed, realized=realized,
-                position_after=ZERO, ledger=ledger, charge_fee=True)
+                position_after=ZERO, ledger=ledger, charge_fee=False)
         if outgoing is not None:
+            outgoing.fee_allocation_ambiguous = True
+            outgoing.fee_complete = False
             _close_episode(ledger, outgoing, fill)
         # The remainder opens a fresh episode on the opposite side, at the price
         # the position crossed through zero at.
@@ -276,10 +325,10 @@ def apply_fill(
         ledger.position = after
         incoming = _new_episode(ledger, fill, after, provable)
         ledger.current_episode = incoming
-        # The fee was already charged to the outgoing episode; charging it again
-        # would double-count one execution.
         _record(incoming, fill, opened=opened, closed=ZERO, realized=None,
                 position_after=after, ledger=ledger, charge_fee=False)
+        incoming.fee_allocation_ambiguous = True
+        incoming.fee_complete = False
 
     return PositionTransition(
         fill_id=fill.fill_id,
@@ -304,6 +353,7 @@ def _new_episode(
 
     return PositionEpisode(
         ticker=ledger.ticker,
+        subaccount_number=ledger.subaccount_number,
         direction=Direction.LONG_YES if position_after > 0 else Direction.LONG_NO,
         opening_fill_id=fill.fill_id,
         opened_at=parse_execution_time(fill),

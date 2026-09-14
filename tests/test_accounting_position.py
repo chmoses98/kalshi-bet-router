@@ -19,7 +19,7 @@ def replay(*specs):
 
 
 def ledger(result):
-    return result.ledgers[SYNTH_TICKER]
+    return result.ledger_for(SYNTH_TICKER, 0)
 
 
 def kinds(result):
@@ -245,15 +245,23 @@ def test_a_single_missing_fee_marks_the_episode_incomplete():
     assert ledger(result).episodes[0].fee_complete is False
 
 
-def test_reversal_charges_the_execution_fee_once():
+def test_reversal_fee_is_not_split_between_episodes():
+    """Kalshi documents no allocation rule for a fee spanning two episodes."""
     result = replay(
         {"index": 1, "quantity": "100.00", "yes_price": "0.6000", "fee": "0.1000"},
         {"index": 2, "quantity": "150.00", "yes_price": "0.7000", "action": "sell",
          "fee": "0.2000"},
     )
     outgoing, incoming = ledger(result).episodes
-    assert outgoing.fees_paid == Decimal("0.3000")
+    # Only the unambiguously attributable fee lands on the outgoing episode.
+    assert outgoing.fees_paid == Decimal("0.1000")
     assert incoming.fees_paid == Decimal("0")
+    # Neither may claim a complete fee total.
+    assert outgoing.fee_allocation_ambiguous is True
+    assert incoming.fee_allocation_ambiguous is True
+    assert outgoing.fee_complete is False and incoming.fee_complete is False
+    # The exchange total is still exact and counted once.
+    assert result.total_fees == Decimal("0.3000")
 
 
 def test_positions_on_different_markets_are_independent():
@@ -261,5 +269,57 @@ def test_positions_on_different_markets_are_independent():
         {"index": 1, "quantity": "10.00", "ticker": "KXSYNTH-A-1"},
         {"index": 2, "quantity": "20.00", "ticker": "KXSYNTH-B-1"},
     )
-    assert result.ledgers["KXSYNTH-A-1"].position == Decimal("10.00")
-    assert result.ledgers["KXSYNTH-B-1"].position == Decimal("20.00")
+    assert result.ledger_for("KXSYNTH-A-1", 0).position == Decimal("10.00")
+    assert result.ledger_for("KXSYNTH-B-1", 0).position == Decimal("20.00")
+
+
+# ==================== reversal fee allocation (Blocker 5) ====================
+
+def test_reversal_fee_is_exact_globally_without_false_episode_completeness():
+    result = replay(
+        {"index": 1, "quantity": "100.00", "yes_price": "0.6000", "fee": "0.1000"},
+        {"index": 2, "quantity": "150.00", "yes_price": "0.7000", "action": "sell",
+         "fee": "0.2000"},
+    )
+    assert result.total_fees == Decimal("0.3000")
+    assert sum(e.fees_paid for e in ledger(result).episodes) == Decimal("0.1000")
+    assert all(e.fee_complete is False for e in ledger(result).episodes)
+
+
+def test_a_non_reversal_episode_still_reports_complete_fees():
+    result = replay(
+        {"index": 1, "quantity": "100.00", "yes_price": "0.6000", "fee": "0.1000"},
+        {"index": 2, "quantity": "100.00", "yes_price": "0.7000", "action": "sell",
+         "fee": "0.2000"},
+    )
+    episode = ledger(result).episodes[0]
+    assert episode.fee_allocation_ambiguous is False
+    assert episode.fee_complete is True
+    assert episode.fees_paid == Decimal("0.3000")
+    assert result.total_fees == Decimal("0.3000")
+
+
+def test_reversal_without_any_fee_data_is_still_flagged_ambiguous():
+    result = replay(
+        {"index": 1, "quantity": "100.00", "yes_price": "0.6000"},
+        {"index": 2, "quantity": "150.00", "yes_price": "0.7000", "action": "sell"},
+    )
+    assert all(e.fee_allocation_ambiguous for e in ledger(result).episodes)
+    assert result.total_fees is None
+
+
+def test_ambiguous_allocation_is_reported_as_an_aggregate_count():
+    from kalshi_router.accounting.diagnostics import build_diagnostics
+
+    result = replay(
+        {"index": 1, "quantity": "100.00", "yes_price": "0.6000", "fee": "0.1000"},
+        {"index": 2, "quantity": "150.00", "yes_price": "0.7000", "action": "sell",
+         "fee": "0.2000"},
+    )
+    diagnostics = build_diagnostics(result)
+    assert diagnostics.episodes_with_ambiguous_fee_allocation == 2
+    assert diagnostics.account_fee_total_complete is True
+    rendered = diagnostics.render()
+    assert "with ambiguous fee allocation (reversal): 2" in rendered
+    assert "account-level fee total is exact: True" in rendered
+    assert "0.3000" not in rendered

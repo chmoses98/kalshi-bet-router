@@ -97,6 +97,8 @@ class AuditReport:
     # --- fill shape
     buy_fills: int = 0
     sell_fills: int = 0
+    #: Fills carrying no deprecated ``action`` verb (canonical-only payloads).
+    fills_without_legacy_action: int = 0
     yes_side_fills: int = 0
     no_side_fills: int = 0
     orders_observed: int = 0
@@ -220,10 +222,11 @@ class AuditReport:
             f"  milestone fetch failed: {self.milestone_fetch_failed}",
             f"  milestone budget exhausted: {self.milestone_budget_exhausted}",
             "",
-            f"buy fills: {self.buy_fills}",
-            f"sell fills: {self.sell_fills}",
-            f"YES-side fills: {self.yes_side_fills}",
-            f"NO-side fills: {self.no_side_fills}",
+            f"buy fills (deprecated action verb): {self.buy_fills}",
+            f"sell fills (deprecated action verb): {self.sell_fills}",
+            f"fills with no deprecated action verb: {self.fills_without_legacy_action}",
+            f"positioned-for-YES fills (canonical outcome_side): {self.yes_side_fills}",
+            f"positioned-for-NO fills (canonical outcome_side): {self.no_side_fills}",
             "",
             f"orders observed: {self.orders_observed}",
             f"partial-order groups (orders with >1 fill): {self.partial_order_groups}",

@@ -62,12 +62,22 @@ class AccountingResult:
     """
 
     completeness: HistoryCompleteness
-    ledgers: dict[str, MarketLedger] = field(default_factory=dict)
+    #: Keyed by ``(subaccount_number, ticker)`` -- positions never net across
+    #: subaccounts.
+    ledgers: dict[tuple[int | None, str], MarketLedger] = field(default_factory=dict)
     orders: dict[str, OrderExecution] = field(default_factory=dict)
     transitions: list[PositionTransition] = field(default_factory=list)
     order_stats: OrderAggregationStats = field(default_factory=OrderAggregationStats)
     fills_replayed: int = 0
     duplicate_fills_ignored: int = 0
+    #: Exact sum of exchange-reported fees across every replayed fill, counted
+    #: once each.  ``None`` if any fill lacked a fee field.
+    total_fees: Decimal | None = None
+    fills_with_fee: int = 0
+    subaccounts_observed: set[int | None] = field(default_factory=set)
+
+    def ledger_for(self, ticker: str, subaccount: int | None = None) -> MarketLedger | None:
+        return self.ledgers.get((subaccount, ticker))
 
     @property
     def claims_complete_position_state(self) -> bool:
@@ -118,18 +128,35 @@ class AccountingEngine:
         result.fills_replayed = len(ordered)
 
         provable = completeness is HistoryCompleteness.COMPLETE
+        fee_total = Decimal(0)
+        fees_complete = True
         for fill in ordered:
-            ledger = result.ledgers.get(fill.ticker)
+            key = fill.position_key
+            result.subaccounts_observed.add(fill.subaccount_number)
+            ledger = result.ledgers.get(key)
             if ledger is None:
-                ledger = MarketLedger(ticker=fill.ticker)
-                result.ledgers[fill.ticker] = ledger
+                ledger = MarketLedger(
+                    ticker=fill.ticker, subaccount_number=fill.subaccount_number
+                )
+                result.ledgers[key] = ledger
             result.transitions.append(apply_fill(ledger, fill, provable=provable))
+            if fill.fee_dollars is None:
+                fees_complete = False
+            else:
+                fee_total += fill.fee_dollars
+                result.fills_with_fee += 1
+
+        # The account-level total counts every execution's fee exactly once,
+        # including a cross-zero reversal whose per-episode split is undefined.
+        result.total_fees = fee_total if fees_complete else None
 
         result.orders = aggregate_orders(ordered, result.order_stats)
         return result
 
 
-def net_position(result: AccountingResult, ticker: str) -> Decimal:
-    """Signed net inventory for one market, positive for long YES."""
-    ledger = result.ledgers.get(ticker)
+def net_position(
+    result: AccountingResult, ticker: str, subaccount: int | None = None
+) -> Decimal:
+    """Signed net inventory for one market in one subaccount, positive for YES."""
+    ledger = result.ledger_for(ticker, subaccount)
     return ledger.position if ledger is not None else Decimal(0)

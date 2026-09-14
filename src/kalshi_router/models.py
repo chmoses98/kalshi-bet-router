@@ -79,12 +79,50 @@ def _require_price_in_range(value: Decimal, field: str) -> Decimal:
     return value
 
 
-class Action(str, Enum):
-    """Direction of the member's execution.
+class OutcomeSide(str, Enum):
+    """**Canonical** direction: which outcome the member ended up positioned for.
 
-    ``buy`` opens or increases exposure to the contract named by ``side``;
-    ``sell`` reduces or closes it.  A member can therefore exit a position, so
-    Phase 1 must treat fills as a signed stream, not an append-only bet list.
+    Kalshi's ``order_direction`` documentation states that ``outcome_side`` and
+    ``book_side`` "carry the same bit in two vocabularies", and that new
+    integrations should read only those two fields.  ``outcome_side`` has already
+    absorbed the buy/sell distinction, so it alone fixes the sign:
+
+    * ``yes`` -> long YES exposure  (positive on the signed axis)
+    * ``no``  -> long NO exposure   (negative on the signed axis)
+
+    Hence the documented equivalences: *buy yes* and *sell no* both report
+    ``yes``; *buy no* and *sell yes* both report ``no``.
+    """
+
+    YES = "yes"
+    NO = "no"
+
+
+class BookSide(str, Enum):
+    """The same direction bit in order-book vocabulary.
+
+    ``bid`` pairs with ``outcome_side=yes`` and ``ask`` with ``outcome_side=no``.
+    It corroborates the canonical direction and never independently overrides it.
+    """
+
+    BID = "bid"
+    ASK = "ask"
+
+
+#: The documented pairing between the two canonical vocabularies.
+BOOK_SIDE_TO_OUTCOME: dict[BookSide, OutcomeSide] = {
+    BookSide.BID: OutcomeSide.YES,
+    BookSide.ASK: OutcomeSide.NO,
+}
+
+
+class Action(str, Enum):
+    """DEPRECATED legacy execution verb.
+
+    Kalshi deprecated ``action`` and ``side`` on the Fill schema (2026-05-14),
+    with removal not before 2026-05-28.  Retained only so historical payloads
+    still parse and so a legacy representation can be cross-checked against the
+    canonical fields; never used to derive signed inventory.
     """
 
     BUY = "buy"
@@ -92,52 +130,67 @@ class Action(str, Enum):
 
 
 class Side(str, Enum):
-    """Which leg of the binary contract was transacted."""
+    """DEPRECATED legacy leg of the binary contract.  See :class:`Action`."""
 
     YES = "yes"
     NO = "no"
+
+
+def outcome_from_legacy(action: Action, side: Side) -> OutcomeSide:
+    """Project the deprecated ``(action, side)`` pair onto canonical direction.
+
+    Documented equivalences: buying YES and selling NO both leave the member
+    positioned for YES; buying NO and selling YES both leave them positioned
+    for NO.
+    """
+    positioned_for_yes = (action is Action.BUY) == (side is Side.YES)
+    return OutcomeSide.YES if positioned_for_yes else OutcomeSide.NO
 
 
 @dataclass(frozen=True)
 class NormalizedFill:
     """One execution, normalized and kept in memory only.
 
-    Quantities and prices are :class:`~decimal.Decimal`, parsed exactly from
-    Kalshi's fixed-point decimal strings. Binary floating point is never used for
-    a financial quantity.
+    Direction comes from :class:`OutcomeSide`, Kalshi's canonical field.  The
+    deprecated ``action``/``side`` pair is retained as metadata for historical
+    analysis but never drives signed inventory.
 
-    Instances are never serialized to disk, never logged, and never emitted in
-    aggregate output.
+    Quantities, prices and fees are :class:`~decimal.Decimal`, parsed exactly
+    from Kalshi's fixed-point decimal strings.  Binary floating point is never
+    used for a financial quantity.
     """
 
     fill_id: str
     ticker: str
-    action: Action
-    side: Side
+    #: Canonical direction. Positive exposure when ``YES``, negative when ``NO``.
+    outcome_side: OutcomeSide
+    #: Corroborating book vocabulary, when the payload carried it.
+    book_side: BookSide | None = None
+    #: DEPRECATED legacy fields, preserved only as evidence of the original
+    #: execution representation.
+    legacy_action: Action | None = None
+    legacy_side: Side | None = None
+    #: Which fields the direction was proven from, for schema diagnostics.
+    direction_sources: tuple[str, ...] = ()
+
     order_id: str | None = None
     trade_id: str | None = None
-    #: Contract quantity. ``count_fp`` of ``"10.00"`` parses to ``Decimal("10.00")``,
-    #: which is ten contracts; fractional contracts are representable.
+    #: Subaccount this execution belongs to. ``None`` when the payload omitted it;
+    #: a ``None`` subaccount is never merged with a numbered one.
+    subaccount_number: int | None = None
+
     count: Decimal | None = None
-    #: Which field the quantity came from: ``"count_fp"`` or legacy ``"count"``.
     count_source: str | None = None
-    #: Execution price of the transacted leg, in dollars (e.g. ``Decimal("0.6500")``).
+    #: Price of the leg named by ``outcome_side``, in dollars.
     price_dollars: Decimal | None = None
-    #: ``"price_dollars"`` or legacy ``"price_cents"``.
     price_source: str | None = None
-    #: True when a fixed-point field arrived as a JSON number rather than the
-    #: documented decimal string, so schema drift is observable in aggregate.
     fixed_point_number_typed: bool = False
     #: Exchange-reported fee for this execution, in dollars.  ``None`` when the
-    #: fill carried no fee field -- never reconstructed from the fee schedule,
-    #: because an estimate would silently contaminate realized economics.
+    #: fill carried no fee field -- never reconstructed from the fee schedule.
     fee_dollars: Decimal | None = None
-    #: Which field the fee came from, for schema diagnostics.
     fee_source: str | None = None
     is_taker: bool | None = None
-    #: RFC3339 execution time as reported by Kalshi.
     created_time: str | None = None
-    #: Unix-seconds execution time, when present.
     ts: int | None = None
 
     @property
@@ -145,8 +198,9 @@ class NormalizedFill:
         return self.fee_dollars is not None
 
     @property
-    def has_quantity(self) -> bool:
-        return self.count is not None
+    def position_key(self) -> tuple[int | None, str]:
+        """Accounting identity: positions never net across subaccounts."""
+        return (self.subaccount_number, self.ticker)
 
 
 def _first_present(raw: dict[str, Any], *keys: str) -> Any:
@@ -175,20 +229,25 @@ def _parse_quantity(raw: dict[str, Any]) -> tuple[Decimal | None, str | None, bo
     return None, None, False
 
 
-def _parse_price(raw: dict[str, Any], side: Side) -> tuple[Decimal | None, str | None, bool]:
-    """Resolve the execution price of the transacted leg, in dollars.
+def _parse_price(
+    raw: dict[str, Any], outcome: OutcomeSide
+) -> tuple[Decimal | None, str | None, bool]:
+    """Resolve the price of the leg named by ``outcome_side``, in dollars.
 
-    Sub-penny markets use tick sizes as small as $0.001, so the ``*_dollars``
+    Sub-penny markets use tick sizes as fine as $0.0001, so the ``*_dollars``
     decimal string is the only field that can represent every price; the legacy
     integer-cent field is a fallback and is converted exactly.
     """
-    dollars_key = "yes_price_dollars" if side is Side.YES else "no_price_dollars"
+    if outcome is OutcomeSide.YES:
+        dollars_key, cents_key = "yes_price_dollars", "yes_price"
+    else:
+        dollars_key, cents_key = "no_price_dollars", "no_price"
+
     parsed = parse_fixed_point(raw.get(dollars_key), dollars_key)
     if parsed is not None:
         value = _require_price_in_range(parsed.value, dollars_key)
         return value, "price_dollars", parsed.source_type == "number"
 
-    cents_key = "yes_price" if side is Side.YES else "no_price"
     cents = raw.get(cents_key)
     if isinstance(cents, int) and not isinstance(cents, bool):
         if not (MIN_PRICE_CENTS < cents < MAX_PRICE_CENTS):
@@ -196,37 +255,164 @@ def _parse_price(raw: dict[str, Any], side: Side) -> tuple[Decimal | None, str |
                 f"field {cents_key!r} was outside the valid contract price range "
                 f"(must be greater than 0 and less than 100 cents)"
             )
-        # Exact: Decimal / Decimal, never float division.
         return Decimal(cents) / Decimal(100), "price_cents", False
+
+    # Fall back to the complementary leg: the two prices sum to $1, so either
+    # determines the other exactly.
+    other_dollars = "no_price_dollars" if outcome is OutcomeSide.YES else "yes_price_dollars"
+    other = parse_fixed_point(raw.get(other_dollars), other_dollars)
+    if other is not None:
+        complement = _require_price_in_range(Decimal(1) - other.value, other_dollars)
+        return complement, "complement_price_dollars", other.source_type == "number"
     return None, None, False
 
 
 def _parse_fee(raw: dict[str, Any]) -> tuple[Decimal | None, str | None]:
-    """Resolve the exchange-reported fee, preferring the fixed-point dollar field.
+    """Resolve the exchange-reported fee, in dollars.
 
-    Never falls back to computing the fee from Kalshi's published schedule: the
-    authoritative value is what the exchange charged, and a reconstruction would
-    be an estimate wearing the costume of a fact.
+    ``fee_cost`` is the field Kalshi currently publishes on Get Fills, Get
+    Settlements and the user-fills websocket, as a **fixed-point decimal dollar
+    string** (``"0.5600"``, ``"0.010000"``).  It carries sub-cent precision
+    because Kalshi's fee rounding math runs to six decimal places.
+
+    Unit disambiguation is by JSON type, not by guesswork:
+
+    * ``fee_cost`` as a **string** -> current schema -> **dollars**.
+    * ``fee_cost`` as an **integer** -> pre-fixed-point legacy schema ->
+      **integer cents**, converted exactly.
+
+    The same field name is never read as both units for the same value shape.
+    The ``*_dollars`` aliases are accepted only as defensive spellings.
+
+    Kalshi's published schedule (``ceil(0.07 * P * (1-P) * contracts)`` for
+    takers, about a quarter for makers) is deliberately **not** implemented: a
+    reconstruction is an estimate wearing the costume of a fact, and the
+    multiplier varies by market category.
     """
+    raw_fee = raw.get("fee_cost")
+    if isinstance(raw_fee, str) and raw_fee.strip():
+        parsed = parse_fixed_point(raw_fee, "fee_cost")
+        if parsed is not None:
+            return _require_non_negative_fee(parsed.value, "fee_cost"), "fee_cost"
+    elif isinstance(raw_fee, int) and not isinstance(raw_fee, bool):
+        return (
+            _require_non_negative_fee(Decimal(raw_fee), "fee_cost") / Decimal(100),
+            "fee_cost_legacy_cents",
+        )
+
     for key in ("fee_cost_dollars", "fee_dollars", "fees_paid_dollars"):
         parsed = parse_fixed_point(raw.get(key), key)
         if parsed is not None:
             return _require_non_negative_fee(parsed.value, key), key
-
-    legacy = raw.get("fee_cost")
-    if isinstance(legacy, int) and not isinstance(legacy, bool):
-        # Pre-migration ``fee_cost`` was integer cents.
-        return _require_non_negative_fee(Decimal(legacy), "fee_cost") / Decimal(100), "fee_cost"
     return None, None
+
+
+def _resolve_direction(
+    raw: dict[str, Any]
+) -> tuple[OutcomeSide, BookSide | None, Action | None, Side | None, tuple[str, ...]]:
+    """Determine canonical direction, failing closed on any disagreement.
+
+    Precedence is ``outcome_side`` first, because Kalshi documents it as
+    canonical.  ``book_side`` carries the same bit in book vocabulary and
+    corroborates it.  The deprecated ``action``/``side`` pair is validated
+    against the canonical answer and kept only as metadata.
+
+    Legacy-only payloads are still accepted: the deprecated fields are not
+    removed before 2026-05-28, and historical fills fetched from
+    ``GET /historical/fills`` may predate the canonical fields entirely.  Losing
+    the ability to replay history would be a worse failure than reading a
+    documented deprecated field.
+    """
+    sources: list[str] = []
+    candidates: dict[str, OutcomeSide] = {}
+
+    raw_outcome = raw.get("outcome_side")
+    if isinstance(raw_outcome, str) and raw_outcome.strip():
+        try:
+            candidates["outcome_side"] = OutcomeSide(raw_outcome.strip().lower())
+        except ValueError:
+            raise SchemaError(
+                f"fill carried an unrecognized outcome_side; expected one of "
+                f"{[o.value for o in OutcomeSide]}"
+            ) from None
+
+    book_side: BookSide | None = None
+    raw_book = raw.get("book_side")
+    if isinstance(raw_book, str) and raw_book.strip():
+        try:
+            book_side = BookSide(raw_book.strip().lower())
+        except ValueError:
+            raise SchemaError(
+                f"fill carried an unrecognized book_side; expected one of "
+                f"{[b.value for b in BookSide]}"
+            ) from None
+        candidates["book_side"] = BOOK_SIDE_TO_OUTCOME[book_side]
+
+    action: Action | None = None
+    side: Side | None = None
+    raw_action = _first_present(raw, "action")
+    raw_side = _first_present(raw, "side")
+    if isinstance(raw_action, str) and isinstance(raw_side, str):
+        try:
+            action = Action(raw_action.strip().lower())
+        except ValueError:
+            raise SchemaError(
+                f"fill carried an unrecognized action; expected one of "
+                f"{[a.value for a in Action]}"
+            ) from None
+        try:
+            side = Side(raw_side.strip().lower())
+        except ValueError:
+            raise SchemaError(
+                f"fill carried an unrecognized side; expected one of "
+                f"{[s.value for s in Side]}"
+            ) from None
+        candidates["legacy_action_side"] = outcome_from_legacy(action, side)
+
+    if not candidates:
+        raise SchemaError(
+            "fill carried no direction evidence; expected 'outcome_side' "
+            "(canonical), 'book_side', or the deprecated 'action'/'side' pair"
+        )
+
+    distinct = set(candidates.values())
+    if len(distinct) > 1:
+        disagreeing = ", ".join(sorted(candidates))
+        raise SchemaError(
+            f"fill direction fields disagree ({disagreeing}); refusing to guess "
+            f"which representation is correct"
+        )
+
+    for name in ("outcome_side", "book_side", "legacy_action_side"):
+        if name in candidates:
+            sources.append(name)
+    return next(iter(distinct)), book_side, action, side, tuple(sources)
+
+
+def _parse_subaccount(raw: dict[str, Any]) -> int | None:
+    """Read ``subaccount_number``.
+
+    Kalshi numbers the primary account 0 and named subaccounts upward.  An
+    **absent** field is kept as ``None`` rather than being assumed to mean the
+    primary account: positions from different subaccounts must never net
+    together, and silently mapping "absent" onto 0 would do exactly that if the
+    account ever uses subaccounts.
+    """
+    value = raw.get("subaccount_number")
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    if value < 0:
+        raise SchemaError("field 'subaccount_number' was negative")
+    return value
 
 
 def normalize_fill(raw: dict[str, Any]) -> NormalizedFill:
     """Convert one raw fill object into a :class:`NormalizedFill`.
 
-    Fails closed on any required field that is absent or not interpretable:
-    fill id, market ticker, action and side.  A fill whose action or side is an
-    unrecognized token is rejected rather than defaulted, because defaulting
-    would silently corrupt future position accounting.
+    Fails closed on any required field that is absent or uninterpretable: fill
+    id, market ticker, direction and quantity.  Direction comes from Kalshi's
+    canonical ``outcome_side``/``book_side``; the deprecated ``action``/``side``
+    pair is validated against it and kept only as metadata.
     """
     if not isinstance(raw, dict):
         raise SchemaError(f"fill was {type(raw).__name__}, expected object")
@@ -239,32 +425,18 @@ def normalize_fill(raw: dict[str, Any]) -> NormalizedFill:
     if not isinstance(ticker, str) or not ticker:
         raise SchemaError("fill is missing a usable market ticker")
 
-    raw_action = _first_present(raw, "action")
-    if not isinstance(raw_action, str):
-        raise SchemaError("fill is missing a usable 'action'")
-    try:
-        action = Action(raw_action.strip().lower())
-    except ValueError:
-        raise SchemaError(f"fill carried an unrecognized action token; expected one of {[a.value for a in Action]}") from None
-
-    raw_side = _first_present(raw, "side", "outcome_side")
-    if not isinstance(raw_side, str):
-        raise SchemaError("fill is missing a usable 'side'")
-    try:
-        side = Side(raw_side.strip().lower())
-    except ValueError:
-        raise SchemaError(f"fill carried an unrecognized side token; expected one of {[s.value for s in Side]}") from None
+    outcome, book_side, action, side, sources = _resolve_direction(raw)
 
     count, count_source, count_was_number = _parse_quantity(raw)
     if count is None:
         raise SchemaError("fill carried neither 'count_fp' nor a legacy 'count'")
 
-    price, price_source, price_was_number = _parse_price(raw, side)
+    price, price_source, price_was_number = _parse_price(raw, outcome)
+    fee, fee_source = _parse_fee(raw)
 
     order_id = _first_present(raw, "order_id")
     trade_id = _first_present(raw, "trade_id")
     is_taker = raw.get("is_taker")
-    fee, fee_source = _parse_fee(raw)
     ts = raw.get("ts")
     if isinstance(ts, bool) or not isinstance(ts, int):
         ts = None
@@ -272,10 +444,14 @@ def normalize_fill(raw: dict[str, Any]) -> NormalizedFill:
     return NormalizedFill(
         fill_id=fill_id,
         ticker=ticker,
-        action=action,
-        side=side,
+        outcome_side=outcome,
+        book_side=book_side,
+        legacy_action=action,
+        legacy_side=side,
+        direction_sources=sources,
         order_id=order_id if isinstance(order_id, str) else None,
         trade_id=trade_id if isinstance(trade_id, str) else None,
+        subaccount_number=_parse_subaccount(raw),
         count=count,
         count_source=count_source,
         price_dollars=price,

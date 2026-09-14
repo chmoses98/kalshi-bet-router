@@ -5,6 +5,8 @@ from __future__ import annotations
 import random
 from decimal import Decimal
 
+import pytest
+
 from kalshi_router.accounting import AccountingEngine, HistoryCompleteness
 from kalshi_router.accounting.identity import (
     digest_for,
@@ -39,7 +41,7 @@ def fingerprint(result):
     return (
         result.fills_replayed,
         result.duplicate_fills_ignored,
-        tuple(sorted((t, l.position) for t, l in result.ledgers.items())),
+        tuple(sorted((k, l.position) for k, l in result.ledgers.items())),
         tuple(t.kind.value for t in result.transitions),
         tuple(t.fill_id for t in result.transitions),
         tuple(sorted(
@@ -82,7 +84,7 @@ def test_duplicate_fills_do_not_change_state():
     doubled = AccountingEngine().replay(build() + build(), COMPLETE)
     assert doubled.duplicate_fills_ignored == len(SCENARIO)
     assert fingerprint(doubled)[2:] == fingerprint(plain)[2:]
-    assert doubled.ledgers[SYNTH_TICKER].position == plain.ledgers[SYNTH_TICKER].position
+    assert doubled.ledger_for(SYNTH_TICKER, 0).position == plain.ledger_for(SYNTH_TICKER, 0).position
 
 
 def test_incremental_replay_matches_full_replay():
@@ -105,7 +107,7 @@ def test_replaying_a_superset_extends_rather_than_restarts_identities():
 def test_identities_derive_only_from_immutable_exchange_evidence():
     assert fill_source_key("F1") == "kalshi:fill:F1"
     assert order_source_key("O1") == "kalshi:order:O1"
-    assert episode_source_key("KXA-1", "F1") == "kalshi:episode:KXA-1:F1"
+    assert episode_source_key(0, "KXA-1", "F1") == "kalshi:episode:0:KXA-1:F1"
 
 
 def test_identity_digests_are_stable_across_runs():
@@ -116,7 +118,9 @@ def test_identity_digests_are_stable_across_runs():
 def test_episode_identity_is_keyed_on_the_opening_fill():
     result = AccountingEngine().replay(build(), COMPLETE)
     episode = result.episodes[0]
-    assert episode.source_key == episode_source_key(SYNTH_TICKER, episode.opening_fill_id)
+    assert episode.source_key == episode_source_key(
+        0, SYNTH_TICKER, episode.opening_fill_id
+    )
     assert episode.source_id == digest_for(episode.source_key)
 
 
@@ -157,7 +161,7 @@ def test_completeness_does_not_change_the_computed_arithmetic():
     """Only the claim changes, never the numbers."""
     bounded = AccountingEngine().replay(build(), BOUNDED)
     complete = AccountingEngine().replay(build(), COMPLETE)
-    assert bounded.ledgers[SYNTH_TICKER].position == complete.ledgers[SYNTH_TICKER].position
+    assert bounded.ledger_for(SYNTH_TICKER, 0).position == complete.ledger_for(SYNTH_TICKER, 0).position
 
 
 # ----------------------------------------------------------- invariants
@@ -187,7 +191,7 @@ def test_invariant_remaining_equals_opened_minus_closed():
 def test_invariant_net_position_equals_sum_of_signed_transitions():
     result = AccountingEngine().replay(build(), COMPLETE)
     expected = sum((t.signed_quantity for t in result.transitions), Decimal(0))
-    assert result.ledgers[SYNTH_TICKER].position == expected
+    assert result.ledger_for(SYNTH_TICKER, 0).position == expected
 
 
 def test_invariant_decimal_arithmetic_stays_exact():
@@ -196,5 +200,98 @@ def test_invariant_decimal_arithmetic_stays_exact():
         {"index": 2, "quantity": "0.20", "yes_price": "0.1000"},
     ])
     result = AccountingEngine().replay(fills, COMPLETE)
-    assert result.ledgers[SYNTH_TICKER].position == Decimal("0.30")
-    assert result.ledgers[SYNTH_TICKER].position == Decimal("0.1") + Decimal("0.2")
+    assert result.ledger_for(SYNTH_TICKER, 0).position == Decimal("0.30")
+    assert result.ledger_for(SYNTH_TICKER, 0).position == Decimal("0.1") + Decimal("0.2")
+
+
+# ============ bounded-history episode identity is NOT importable =============
+#
+# A window beginning mid-position makes its first fill look like an OPEN.
+# Back-filling older fills can reveal the position was already open, which
+# changes or removes the episode's opening fill -- and therefore its identity.
+
+from kalshi_router.accounting.identity import (  # noqa: E402
+    IdentityNotImportable,
+    ProvisionalIdentity,
+    StableIdentity,
+    require_importable_identity,
+)
+
+EARLY = {"index": 1, "quantity": "50.00", "yes_price": "0.4000", "order_id": "OEARLY",
+         "minute": 1}
+LATER = {"index": 10, "quantity": "50.00", "yes_price": "0.6000", "order_id": "OLATER",
+         "minute": 10}
+
+
+def test_backfilling_older_fills_changes_the_apparent_episode_boundary():
+    bounded = AccountingEngine().replay(build([LATER]), BOUNDED)
+    backfilled = AccountingEngine().replay(build([EARLY, LATER]), COMPLETE)
+
+    bounded_episode = bounded.episodes[0]
+    backfilled_episode = backfilled.episodes[0]
+
+    # The window alone makes the later fill look like the opening.
+    assert bounded_episode.opening_fill_id == "SYNTHFILL-0010"
+    assert [t.kind.value for t in bounded.transitions] == ["open"]
+
+    # With the earlier history it is an increase on an older episode.
+    assert backfilled_episode.opening_fill_id == "SYNTHFILL-0001"
+    assert [t.kind.value for t in backfilled.transitions] == ["open", "increase"]
+    assert len(backfilled.episodes) == 1
+
+    # So the boundary genuinely moved.
+    assert bounded_episode.opening_fill_id != backfilled_episode.opening_fill_id
+
+
+def test_a_bounded_episode_exposes_no_importable_identity():
+    episode = AccountingEngine().replay(build([LATER]), BOUNDED).episodes[0]
+    assert episode.provable is False
+    assert isinstance(episode.identity, ProvisionalIdentity)
+    assert episode.is_importable is False
+    assert episode.source_key is None
+    assert episode.source_id is None
+
+
+def test_provisional_identity_has_no_source_key_attribute_at_all():
+    """Type-safe: there is nothing for downstream code to mistakenly read."""
+    identity = AccountingEngine().replay(build([LATER]), BOUNDED).episodes[0].identity
+    assert not hasattr(identity, "source_key")
+    assert not hasattr(identity, "source_id")
+
+
+def test_requiring_an_importable_identity_refuses_a_bounded_episode():
+    episode = AccountingEngine().replay(build([LATER]), BOUNDED).episodes[0]
+    with pytest.raises(IdentityNotImportable):
+        require_importable_identity(episode.identity)
+
+
+def test_a_provable_episode_yields_a_stable_importable_identity():
+    episode = AccountingEngine().replay(build([EARLY, LATER]), COMPLETE).episodes[0]
+    assert episode.provable is True
+    assert isinstance(episode.identity, StableIdentity)
+    assert episode.is_importable is True
+    assert require_importable_identity(episode.identity) == episode.source_key
+
+
+def test_no_bounded_identity_survives_into_the_backfilled_stable_set():
+    """The key a bounded window would have minted does not exist afterwards."""
+    bounded_episode = AccountingEngine().replay(build([LATER]), BOUNDED).episodes[0]
+    backfilled = AccountingEngine().replay(build([EARLY, LATER]), COMPLETE)
+
+    would_have_been = episode_source_key(
+        0, SYNTH_TICKER, bounded_episode.opening_fill_id
+    )
+    stable_keys = {e.source_key for e in backfilled.episodes}
+    assert would_have_been not in stable_keys
+    # And the bounded episode never offered that key in the first place.
+    assert bounded_episode.source_key is None
+
+
+def test_bounded_and_complete_replays_still_agree_on_the_arithmetic():
+    """Only the identity claim differs, never the position numbers."""
+    bounded = AccountingEngine().replay(build([EARLY, LATER]), BOUNDED)
+    complete = AccountingEngine().replay(build([EARLY, LATER]), COMPLETE)
+    assert (
+        bounded.ledger_for(SYNTH_TICKER, 0).position
+        == complete.ledger_for(SYNTH_TICKER, 0).position
+    )

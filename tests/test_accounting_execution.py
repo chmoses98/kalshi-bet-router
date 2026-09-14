@@ -143,12 +143,12 @@ def test_order_spanning_two_markets_fails_closed():
         aggregate_orders(group)
 
 
-def test_order_spanning_two_actions_fails_closed():
+def test_order_spanning_two_outcome_sides_fails_closed():
     group = fills(
         {"index": 1, "quantity": "1.00", "order_id": "O1", "action": "buy"},
         {"index": 2, "quantity": "1.00", "order_id": "O1", "action": "sell"},
     )
-    with pytest.raises(SchemaError, match="action"):
+    with pytest.raises(SchemaError, match="outcome_side"):
         aggregate_orders(group)
 
 
@@ -158,6 +158,16 @@ def test_order_spanning_two_sides_fails_closed():
         {"index": 2, "quantity": "1.00", "order_id": "O1", "side": "no"},
     )
     with pytest.raises(SchemaError, match="side"):
+        aggregate_orders(group)
+
+
+def test_order_spanning_two_subaccounts_fails_closed():
+    """order_id must be a per-account identity or every position keyed on it is unsound."""
+    group = fills(
+        {"index": 1, "quantity": "1.00", "order_id": "O1", "subaccount": 0},
+        {"index": 2, "quantity": "1.00", "order_id": "O1", "subaccount": 1},
+    )
+    with pytest.raises(SchemaError, match="subaccount"):
         aggregate_orders(group)
 
 

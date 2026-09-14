@@ -16,10 +16,13 @@ it. `NormalizedFill` retains, in memory only:
 | `order_id` | the submission this execution belongs to |
 | `trade_id` | the match event (shared with the counterparty — *not* a grouping key for your order) |
 | `ticker` | market |
-| `action` / `side` | `buy`/`sell` × `yes`/`no`, rejected rather than defaulted if unrecognized |
+| **`outcome_side`** | **canonical direction** (`yes`/`no`) — see §3a |
+| `book_side` | the same bit in book vocabulary (`bid`/`ask`), corroborating |
+| `legacy_action` / `legacy_side` | DEPRECATED, metadata only, never drives inventory |
+| `subaccount_number` | part of position identity — see §3b |
 | `count` | `Decimal`, from `count_fp` |
-| `price_dollars` | `Decimal`, from `yes_price_dollars`/`no_price_dollars` |
-| `fee_dollars` | `Decimal`, exchange-reported; `None` if absent |
+| `price_dollars` | `Decimal`, price of the leg named by `outcome_side` |
+| `fee_dollars` | `Decimal`, from `fee_cost` — see §9 |
 | `created_time` / `ts` | execution time |
 | `is_taker` | liquidity role |
 
@@ -70,6 +73,57 @@ Each fill is projected onto that axis:
 Buying NO at \$0.43 *is* selling YES at \$0.57. The projection is exact, not an
 approximation.
 
+### 3a. Canonical direction
+
+Kalshi's `order_direction` documentation states that `outcome_side` and
+`book_side` "carry the same bit in two vocabularies" and that **new integrations
+should read only those two fields**. `side` and `action` were deprecated on the
+Fill schema on 2026-05-14, with removal not before 2026-05-28.
+
+`outcome_side` has already absorbed the buy/sell distinction, so it alone fixes
+the sign:
+
+| Legacy pair | Canonical `outcome_side` | Axis |
+|---|---|---|
+| buy yes | `yes` | + |
+| sell no | `yes` | + |
+| buy no | `no` | − |
+| sell yes | `no` | − |
+
+`book_side` pairs `bid`↔`yes` and `ask`↔`no`.
+
+**Resolution and fail-closed rules.** `outcome_side` is preferred; `book_side`
+corroborates; the deprecated pair is validated against the result and kept only
+as metadata. **Any disagreement between any two of the three fails closed** — no
+precedence rule silently picks a winner. A payload with no direction evidence at
+all fails closed.
+
+Legacy-only payloads are still accepted, deliberately: the deprecated fields are
+not removed before 2026-05-28, and historical fills from `GET /historical/fills`
+may predate the canonical fields. Losing the ability to replay history would be a
+worse failure than reading a documented deprecated field.
+
+Position projection **does not require `action` to exist**.
+
+### 3b. Subaccounts are part of accounting identity
+
+Kalshi numbers the primary account 0 and named subaccounts upward, and
+`GET /portfolio/fills` returns **all** subaccounts unless one is requested. Two
+subaccounts holding the same ticker are two independent positions.
+
+**Policy: preserve subaccount identity** (option A). Ledgers are keyed by
+`(subaccount_number, ticker)`, episode identities embed the subaccount, and order
+aggregation **fails closed** if one `order_id` somehow spans two subaccounts —
+that would mean `order_id` is not a per-account identity and every position keyed
+on it is unsound.
+
+**Absent `subaccount_number`** is kept as a distinct `None` bucket rather than
+assumed to be the primary account. Mapping "absent" onto 0 would silently merge
+genuinely separate subaccounts if the account ever uses them; keeping it distinct
+can only over-segment, which is visible (the audit reports both the distinct
+subaccount count and how many ledgers lacked a number) and never invents netting
+that did not happen.
+
 ## 4. Logical-wager terminology
 
 Deliberately **not** decided here. The layers are kept separate so the downstream
@@ -90,23 +144,42 @@ different orders → two.
 **No time-window grouping is invented.** If order boundaries are the only
 authoritative grouping, that is what is preserved.
 
-## 5. Deterministic identity scheme
+## 5. Deterministic identity scheme — and where it stops being valid
 
-Identity must be stable so a future import can be retried safely.
-
-| Object | Source key | Basis |
+| Object | Source key | Stable? |
 |---|---|---|
-| Fill | `kalshi:fill:{fill_id}` | exchange id |
-| Order group | `kalshi:order:{order_id}` | exchange id |
-| Position episode | `kalshi:episode:{ticker}:{opening_fill_id}` | immutable exchange evidence |
+| Fill | `kalshi:fill:{fill_id}` | **immediately** — exchange-issued |
+| Order group | `kalshi:order:{order_id}` | **immediately**, given the single-subaccount guarantee in §3b |
+| Position episode | `kalshi:episode:{subaccount}:{ticker}:{opening_fill_id}` | **only when the opening boundary is provable** |
 
-Each also exposes a `sha256` digest for fixed-width use. **No identifier derives
-from wall-clock time, iteration order, or a fresh UUID.** Keying an episode on its
-opening fill rather than a sequence number means back-filling older history cannot
-renumber existing episodes.
+No identifier derives from wall-clock time, iteration order, or a fresh UUID.
 
-Source keys embed tickers and fill ids, so they are **private** and never
-rendered.
+### Episode identity is NOT stable under bounded-history backfill
+
+An earlier version of this document claimed that keying an episode on its opening
+fill meant back-filling older history could never renumber it. **That claim was
+wrong and is retracted.**
+
+An episode is a flat-to-flat span, so its identity depends on knowing where flat
+was. Over a bounded window that is unknowable:
+
+> A window beginning at `F10` makes `F10` look like an `OPEN`. Back-filling
+> `F1`–`F9` may reveal the position was already open, so `F10` was really an
+> `INCREASE`. The episode then merges into an older one, its opening fill
+> changes, and an identity keyed on `F10` ceases to exist.
+
+So identity is **type-separated**, not merely annotated:
+
+- A provable episode gets a `StableIdentity`, carrying `source_key` / `source_id`.
+- A bounded-window episode gets a `ProvisionalIdentity`, which **has no
+  `source_key` or `source_id` attribute at all**. There is nothing for downstream
+  code to read by mistake.
+- `require_importable_identity()` raises `IdentityNotImportable` on a provisional
+  one.
+- `PositionEpisode.source_key` / `.source_id` return `None` unless importable.
+
+An episode identity may only be used as an import key once history is complete or
+checkpointed (§10).
 
 ## 6. Fill ordering
 
@@ -152,18 +225,47 @@ episode*, which is what the tests assert — not across a reversal.
 
 ## 9. Fee treatment
 
-Fees are taken **only** from what the exchange reported (`fee_cost_dollars`,
-`fee_dollars`, `fees_paid_dollars`, or legacy integer-cent `fee_cost`).
+### Field and unit
 
-Kalshi's published schedule is `ceil(0.07 · P · (1−P) · contracts)` for takers and
-roughly a quarter of that for makers. **That formula is deliberately not
-implemented.** A reconstructed fee is an estimate wearing the costume of a fact,
-and the rate varies by market category.
+`fee_cost` is the field Kalshi currently publishes on Get Fills, Get Settlements
+and the user-fills websocket, as a **fixed-point decimal dollar string**
+(`"0.5600"`, `"0.010000"`). It carries sub-cent precision because Kalshi's fee
+rounding math runs to six decimal places.
+
+The unit is disambiguated **by JSON type**, with documented provenance — never by
+guessing:
+
+| Shape | Schema | Unit |
+|---|---|---|
+| `fee_cost: "0.5600"` (string) | current, post fixed-point migration | **dollars** |
+| `fee_cost: 56` (integer) | pre-migration legacy | **integer cents**, converted exactly |
+
+The same value shape is never read as both units. `fee_cost_dollars` /
+`fee_dollars` / `fees_paid_dollars` are accepted only as defensive spellings.
+
+Kalshi's published schedule — `ceil(0.07 · P · (1−P) · contracts)` for takers,
+about a quarter for makers — is deliberately **not implemented**. A reconstructed
+fee is an estimate wearing the costume of a fact, and the multiplier varies by
+market category.
+
+### Allocation across episodes
+
+A **cross-zero reversal** is one exchange execution that both closes one episode
+and opens another. Kalshi documents no rule for splitting its fee between them,
+so **no split is invented**:
+
+- The exact fee is preserved at fill level and counted **exactly once** in the
+  account-level total (`AccountingResult.total_fees`).
+- It is attributed to **neither** episode.
+- Both episodes are marked `fee_allocation_ambiguous = True` and
+  `fee_complete = False`, so neither can be mistaken for an authoritative total.
+
+A proportional split would be arithmetically convenient and evidentially
+baseless. If Kalshi ever documents an exact allocation, that evidence goes here
+before any implementation.
 
 If *any* fill in an order or episode lacks a fee, the total is `None` /
 `fee_complete = False` rather than a partial sum that could pass for complete.
-
-On a reversal the execution's fee is charged **once**, to the outgoing episode.
 
 ## 10. History requirements — what a complete replay actually needs
 
@@ -230,9 +332,9 @@ open:
    disagree.
 4. **Where does settlement come from?** Not from fills. The importer needs market
    resolution and `realized_pnl_dollars` separately.
-5. **Idempotency key.** The episode `source_id` is stable and safe to use, *but
-   only if the history feeding it is complete* — otherwise the opening fill, and
-   hence the identity, can change once older history arrives.
+5. **Idempotency key.** Only a `StableIdentity` may be used. A bounded-window
+   episode exposes no key at all, by type — see §5. Fill and order ids are safe
+   immediately.
 6. **Which classifications are routable?** Per the Phase 0.1 verdict: MLB, NFL and
    CFB **only when resolved at L1 event competition**. Tennis is not authorized.
    `OTHER` and `UNRESOLVED` are never routed.
