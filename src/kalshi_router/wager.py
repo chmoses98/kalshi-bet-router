@@ -43,7 +43,7 @@ from enum import Enum
 from typing import Any
 
 from .accounting.position import Direction, PositionEpisode
-from .classify import Classification, MarketContext
+from .classify import Classification, MarketContext, UnresolvedReason
 from .sports import Sport
 
 ONE = Decimal(1)
@@ -277,6 +277,23 @@ class WagerDiagnostics:
     routable_classified_unresolved: int = 0
     routable_not_classified: int = 0
 
+    #: WHY the routable-but-unresolved markets could not be classified. A count
+    #: of "unresolved" says the classifier could not tell; it does not say
+    #: whether the metadata was absent, malformed, or present-but-unrecognised,
+    #: and those are three different repairs. Named counters rather than a
+    #: mapping, so this stays structurally counts-only.
+    unresolved_metadata_lookup_failed: int = 0
+    unresolved_no_metadata: int = 0
+    unresolved_malformed_event_metadata: int = 0
+    unresolved_competition_absent: int = 0
+    unresolved_competition_unknown: int = 0
+    unresolved_competition_ambiguous: int = 0
+    unresolved_milestone_conflict: int = 0
+    unresolved_evidence_conflict: int = 0
+    unresolved_ambiguous_family: int = 0
+    unresolved_insufficient: int = 0
+    unresolved_reason_not_recorded: int = 0
+
     #: Where the game dates that WERE established came from. An explicit field
     #: is evidence; a ticker parse is a convention, and knowing the split is
     #: what tells us whether that convention is load-bearing.
@@ -328,6 +345,23 @@ class WagerDiagnostics:
             f"    OTHER (not a sport this router carries): "
             f"{self.routable_classified_other}",
             f"    UNRESOLVED: {self.routable_classified_unresolved}",
+            "      why the classifier could not tell:",
+            f"        metadata lookup failed: "
+            f"{self.unresolved_metadata_lookup_failed}",
+            f"        no metadata resolved: {self.unresolved_no_metadata}",
+            f"        malformed event metadata: "
+            f"{self.unresolved_malformed_event_metadata}",
+            f"        competition absent: {self.unresolved_competition_absent}",
+            f"        competition unknown: {self.unresolved_competition_unknown}",
+            f"        competition ambiguous in taxonomy: "
+            f"{self.unresolved_competition_ambiguous}",
+            f"        milestone conflict: {self.unresolved_milestone_conflict}",
+            f"        evidence conflict: {self.unresolved_evidence_conflict}",
+            f"        ambiguous family, no league: "
+            f"{self.unresolved_ambiguous_family}",
+            f"        insufficient authoritative metadata: "
+            f"{self.unresolved_insufficient}",
+            f"        reason not recorded: {self.unresolved_reason_not_recorded}",
             f"    never classified (outside the bound): "
             f"{self.routable_not_classified}",
             "",
@@ -480,6 +514,20 @@ def build_shadow_wagers(
     diagnostics = WagerDiagnostics()
     wagers: list[ShadowWager] = []
 
+    unresolved_counters = {
+        UnresolvedReason.METADATA_LOOKUP_FAILED: "unresolved_metadata_lookup_failed",
+        UnresolvedReason.NO_METADATA: "unresolved_no_metadata",
+        UnresolvedReason.MALFORMED_EVENT_METADATA:
+            "unresolved_malformed_event_metadata",
+        UnresolvedReason.COMPETITION_ABSENT: "unresolved_competition_absent",
+        UnresolvedReason.COMPETITION_UNKNOWN: "unresolved_competition_unknown",
+        UnresolvedReason.COMPETITION_AMBIGUOUS: "unresolved_competition_ambiguous",
+        UnresolvedReason.MILESTONE_CONFLICT: "unresolved_milestone_conflict",
+        UnresolvedReason.EVIDENCE_CONFLICT: "unresolved_evidence_conflict",
+        UnresolvedReason.AMBIGUOUS_FAMILY: "unresolved_ambiguous_family",
+        UnresolvedReason.INSUFFICIENT: "unresolved_insufficient",
+    }
+
     routable_counters = {
         Sport.MLB: "routable_classified_mlb",
         Sport.NFL: "routable_classified_nfl",
@@ -501,6 +549,20 @@ def build_shadow_wagers(
             else:
                 name = routable_counters[classification.sport]
                 setattr(diagnostics, name, getattr(diagnostics, name) + 1)
+                if classification.sport is Sport.UNRESOLVED:
+                    reason = classification.unresolved_reason
+                    counter = (
+                        unresolved_counters.get(reason)
+                        if reason is not None
+                        else None
+                    )
+                    if counter is None:
+                        diagnostics.unresolved_reason_not_recorded += 1
+                    else:
+                        setattr(
+                            diagnostics, counter,
+                            getattr(diagnostics, counter) + 1,
+                        )
         wager, refusal = build_shadow_wager(
             episode,
             classifications.get(episode.ticker),

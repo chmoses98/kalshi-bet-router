@@ -743,6 +743,71 @@ carry both answers depending on who was reading.
 > prove the position story.** Position authority must be earned through
 > reconciliation with exchange state or an authoritative closure event.
 
+## Routing is blocked by destinations, not by classification
+
+Run 23 classified the **entire** routable set — 747 episodes, none left outside
+the bound — and answered the question three bounded runs could not:
+
+```
+episodes considered: 1698        wagers built: 0
+
+routable episodes (importable identity) by classification:
+  MLB:        0
+  NFL:       23
+  CFB:       27
+  TENNIS:     3
+  OTHER:     23     (positively not a sport this router carries)
+  UNRESOLVED: 671
+  never classified: 0
+```
+
+0 + 23 + 27 + 3 + 23 + 671 = 747, and the refusals still partition the whole
+1,698 (951 unearned + 671 unresolved + 76 with no destination).
+
+Two findings, and the first matters more than the second.
+
+### MLB — the only sport with an importer — has ZERO routable markets
+
+Every downstream repository except MLB lacks an importer (Phase F), and MLB has
+nothing to route. So **routing throughput today is zero for reasons that have
+nothing to do with this router's correctness**, and building a production
+router, settlement reconciliation and reporting on top would be building
+machinery over an empty pipe.
+
+That is not a defect to fix here. It is a fact about the account's activity in
+the 67 days settlement evidence reaches, and it should be re-measured rather
+than assumed permanent — an MLB season inside the settlement window would change
+it. But no amount of classifier work changes it either: the 53 markets that DO
+classify to a sport (NFL 23, CFB 27, Tennis 3) have nowhere to go, and giving
+them somewhere means designing three ledger contracts, which is the owner's
+decision.
+
+### 671 of 747 cannot be classified at all, and that is now unambiguous
+
+The earlier bounded runs could not distinguish a classifier gap from a sampling
+artefact. This one can: nothing was outside the bound. 89.8% of routable markets
+come back `UNRESOLVED`, against only 23 positively identified as `OTHER`.
+
+That asymmetry is the tell. A market this router should refuse — weather,
+economics, crypto — ought to resolve as `OTHER`. `UNRESOLVED` means the
+classifier could not tell *anything*, and 671 of those against 23 `OTHER` is not
+the shape of an account trading non-sports markets. It is the shape of metadata
+that is not answering.
+
+A plausible cause worth testing rather than assuming: these are all **settled,
+expired** markets, and Kalshi's event-metadata and series routes may return less
+for a closed event than for a live one. The classifier was measured at 95.5%
+resolution on a *recent live-fills* sample — active markets. A classifier that
+works on active markets and fails on settled ones would be a serious problem for
+a router whose entire job is routing settled wagers, and it would have been
+invisible until exactly this run.
+
+So the shadow diagnostics now break `UNRESOLVED` down by reason — metadata
+lookup failed, no metadata resolved, malformed, competition absent, competition
+unknown, insufficient — because "unresolved" is a count, not a diagnosis, and
+absent, malformed and unrecognised metadata are three different repairs. The
+next run says which.
+
 ## Still open
 
 * **`/historical/cutoff` response shape** is unverified against a live response.

@@ -447,3 +447,85 @@ def test_the_routable_breakdown_accounts_for_every_routable_episode():
         + d.routable_not_classified
     )
     assert total == routable == 1
+
+
+# ------------------------------------ why the classifier could not tell ------
+
+def unresolved_with(reason):
+    from kalshi_router.classify import Classification
+
+    return Classification(
+        sport=Sport.UNRESOLVED,
+        reason="test",
+        market_ticker=TICKER,
+        unresolved_reason=reason,
+    )
+
+
+def routable_result():
+    from kalshi_router.accounting import AccountingEngine
+
+    return AccountingEngine().replay(
+        [fill(fee="0.0100")], COMPLETE, settlements=[settlement()]
+    )
+
+
+def test_each_unresolved_reason_is_counted_separately():
+    """"Unresolved" is not a diagnosis.
+
+    Absent metadata, malformed metadata and present-but-unrecognised metadata
+    are three different repairs, and one number cannot tell them apart.
+    """
+    from kalshi_router.classify import UnresolvedReason
+
+    cases = {
+        UnresolvedReason.METADATA_LOOKUP_FAILED: "unresolved_metadata_lookup_failed",
+        UnresolvedReason.COMPETITION_ABSENT: "unresolved_competition_absent",
+        UnresolvedReason.MALFORMED_EVENT_METADATA:
+            "unresolved_malformed_event_metadata",
+        UnresolvedReason.INSUFFICIENT: "unresolved_insufficient",
+    }
+    for reason, counter in cases.items():
+        _, d = build_shadow_wagers(
+            routable_result().episodes,
+            {TICKER: unresolved_with(reason)},
+            {TICKER: context()},
+        )
+        assert getattr(d, counter) == 1, reason
+        assert d.routable_classified_unresolved == 1
+
+
+def test_an_unresolved_market_with_no_recorded_reason_is_still_counted():
+    # Fail-closed on the diagnostic itself: a missing reason must not make the
+    # breakdown silently under-count and look tidier than the total.
+    _, d = build_shadow_wagers(
+        routable_result().episodes,
+        {TICKER: unresolved_with(None)},
+        {TICKER: context()},
+    )
+    assert d.unresolved_reason_not_recorded == 1
+    assert d.routable_classified_unresolved == 1
+
+
+def test_the_reason_breakdown_sums_to_the_unresolved_total():
+    from kalshi_router.classify import UnresolvedReason
+
+    _, d = build_shadow_wagers(
+        routable_result().episodes,
+        {TICKER: unresolved_with(UnresolvedReason.COMPETITION_ABSENT)},
+        {TICKER: context()},
+    )
+    total = sum(
+        value for name, value in vars(d).items() if name.startswith("unresolved_")
+    )
+    assert total == d.routable_classified_unresolved == 1
+
+
+def test_a_resolved_sport_contributes_no_unresolved_reason():
+    _, d = build_shadow_wagers(
+        routable_result().episodes, {TICKER: classified()}, {TICKER: context()}
+    )
+    assert d.routable_classified_mlb == 1
+    assert all(
+        value == 0 for name, value in vars(d).items() if name.startswith("unresolved_")
+    )
