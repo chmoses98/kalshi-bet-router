@@ -275,14 +275,19 @@ def test_a_no_result_pays_the_no_leg_count():
     assert report.settlements_revenue_at_binary_par == 1
 
 
-def test_revenue_in_cents_would_show_as_off_par_not_silently_accepted():
-    """If revenue were integer cents, 10 contracts would report 1000, not 10."""
+def test_revenue_in_cents_is_never_silently_read_as_dollars():
+    """10 contracts reporting 1000 is cents, and must not pass as dollar par.
+
+    Live data put ZERO rows at dollar par, so cents is now a recognised reading
+    rather than a fault -- but the two must stay distinguishable, because
+    confusing them misstates every payout by 100x.
+    """
     report = probe(settlements=[settlement(
         market_result="yes", yes_count_fp="10.00", no_count_fp="0.00",
         revenue="1000.00",
     )])
     assert report.settlements_revenue_at_binary_par == 0
-    assert report.settlements_revenue_off_binary_par == 1
+    assert report.settlements_revenue_at_cents_par == 1
 
 
 def test_a_losing_settlement_pays_zero_and_is_counted_separately():
@@ -369,11 +374,13 @@ def test_a_scalar_settlement_is_not_counted_as_a_binary_mismatch():
 
 
 def test_a_genuine_binary_mismatch_is_still_reported():
+    """Neither dollar par nor cents par: a real mismatch, not a unit question."""
     report = probe(settlements=[settlement(
         market_result="yes", yes_count_fp="10.00", no_count_fp="0.00",
-        revenue="1000.00",
+        revenue="777.77",
     )])
     assert report.settlements_revenue_off_binary_par == 1
+    assert report.settlements_revenue_at_cents_par == 0
     assert report.settlements_revenue_non_binary_result == 0
 
 
@@ -387,3 +394,52 @@ def test_a_negative_settlement_value_gets_its_own_bucket():
     report = probe(settlements=[settlement(market_result="yes", value="-1.0000")])
     assert report.settlements_value_negative == 1
     assert report.settlements_value_above_one == 0
+
+
+# ============ the cents hypothesis (live: ZERO rows at dollar par) ===========
+
+def test_revenue_in_cents_is_recognised_as_cents_par():
+    """10 winning contracts paying 1000 is $1 a contract, in cents."""
+    report = probe(settlements=[settlement(
+        market_result="yes", yes_count_fp="10.00", no_count_fp="0.00",
+        revenue="1000.00",
+    )])
+    assert report.settlements_revenue_at_cents_par == 1
+    assert report.settlements_revenue_off_binary_par == 0
+    assert report.settlements_revenue_at_binary_par == 0
+
+
+def test_dollar_par_and_cents_par_stay_distinguishable():
+    report = probe(settlements=[
+        settlement(market_result="yes", yes_count_fp="10.00", no_count_fp="0.00",
+                   revenue="10.00"),
+        settlement(market_result="yes", yes_count_fp="10.00", no_count_fp="0.00",
+                   revenue="1000.00"),
+    ])
+    assert report.settlements_revenue_at_binary_par == 1
+    assert report.settlements_revenue_at_cents_par == 1
+
+
+def test_a_value_of_one_hundred_is_one_contract_in_cents():
+    report = probe(settlements=[settlement(market_result="yes", value="100")])
+    assert report.settlements_value_at_one_hundred == 1
+    assert report.settlements_value_above_one == 1
+
+
+def test_revenue_and_value_disagreeing_about_a_payout_is_counted():
+    """Live data showed 400 zero-revenue rows against 396 zero-value rows."""
+    report = probe(settlements=[
+        settlement(market_result="no", revenue="0", value="100"),
+        settlement(market_result="yes", revenue="500", value="0"),
+    ])
+    assert report.settlements_revenue_zero_value_nonzero == 1
+    assert report.settlements_value_zero_revenue_nonzero == 1
+
+
+def test_agreeing_rows_are_not_counted_as_disagreements():
+    report = probe(settlements=[
+        settlement(market_result="yes", revenue="500", value="100"),
+        settlement(market_result="no", revenue="0", value="0"),
+    ])
+    assert report.settlements_revenue_zero_value_nonzero == 0
+    assert report.settlements_value_zero_revenue_nonzero == 0
