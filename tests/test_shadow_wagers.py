@@ -380,3 +380,70 @@ def test_reordering_never_changes_how_many_markets_are_classified():
 
     tickers = ["A", "B", "C", "D"]
     assert sorted(_classification_order(tickers, FakeReplay())) == sorted(tickers)
+
+
+# ------------------------- what ARE the markets this account could route? ----
+
+def test_routable_episodes_are_counted_by_what_they_classified_as():
+    """A refusal reason says why; it does not say what the market WAS.
+
+    "296 unresolved" reads as a classifier defect. It may instead be an account
+    that trades markets this router is right to refuse -- and the two call for
+    opposite responses, so the counts are kept apart.
+    """
+    from kalshi_router.accounting import AccountingEngine
+
+    result = AccountingEngine().replay(
+        [fill(fee="0.0100")], COMPLETE, settlements=[settlement()]
+    )
+    _, diagnostics = build_shadow_wagers(
+        result.episodes, {TICKER: classified(Sport.UNRESOLVED)}, {TICKER: context()}
+    )
+    assert diagnostics.routable_classified_unresolved == 1
+    assert diagnostics.routable_classified_mlb == 0
+    # And it is still refused -- classifying it does not route it.
+    assert diagnostics.refused_sport_unresolved == 1
+
+
+def test_an_unroutable_episode_is_not_counted_among_the_routable_ones():
+    from kalshi_router.accounting import AccountingEngine
+
+    # No settlement and no exchange view: the position story is unearned, so it
+    # is not routable and says nothing about what this account could route.
+    result = AccountingEngine().replay([fill()], COMPLETE)
+    _, diagnostics = build_shadow_wagers(
+        result.episodes, {TICKER: classified()}, {TICKER: context()}
+    )
+    assert diagnostics.routable_classified_mlb == 0
+    assert diagnostics.routable_not_classified == 0
+    assert diagnostics.refused_identity_not_importable == 1
+
+
+def test_a_routable_market_outside_the_classification_bound_is_counted_as_such():
+    from kalshi_router.accounting import AccountingEngine
+
+    result = AccountingEngine().replay(
+        [fill(fee="0.0100")], COMPLETE, settlements=[settlement()]
+    )
+    _, diagnostics = build_shadow_wagers(result.episodes, {}, {})
+    assert diagnostics.routable_not_classified == 1
+    assert diagnostics.refused_market_not_classified == 1
+
+
+def test_the_routable_breakdown_accounts_for_every_routable_episode():
+    from kalshi_router.accounting import AccountingEngine
+
+    result = AccountingEngine().replay(
+        [fill(fee="0.0100")], COMPLETE, settlements=[settlement()]
+    )
+    _, d = build_shadow_wagers(
+        result.episodes, {TICKER: classified()}, {TICKER: context()}
+    )
+    routable = sum(1 for e in result.episodes if e.is_importable)
+    total = (
+        d.routable_classified_mlb + d.routable_classified_nfl
+        + d.routable_classified_cfb + d.routable_classified_tennis
+        + d.routable_classified_other + d.routable_classified_unresolved
+        + d.routable_not_classified
+    )
+    assert total == routable == 1
