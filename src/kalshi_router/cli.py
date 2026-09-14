@@ -183,6 +183,12 @@ def main(argv: list[str] | None = None, stdout=None, stderr=None) -> int:
         )
         payload.update({f"schema_{k}": v for k, v in result.coverage.as_dict().items()})
         payload.update({f"history_{k}": v for k, v in result.history.as_dict().items()})
+        payload.update(
+            {
+                f"settlement_coverage_{k}": v
+                for k, v in result.settlement_coverage.as_dict().items()
+            }
+        )
         if result.reconciliation is not None:
             payload.update(
                 {f"reconcile_{k}": v for k, v in result.reconciliation.as_dict().items()}
@@ -197,6 +203,8 @@ def main(argv: list[str] | None = None, stdout=None, stderr=None) -> int:
         print("", file=out)
         print(result.history.render(), file=out)
         if result.reconciliation is not None:
+            print("", file=out)
+            print(result.settlement_coverage.render(), file=out)
             print("", file=out)
             print(result.reconciliation.render(), file=out)
 

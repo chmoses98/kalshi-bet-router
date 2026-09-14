@@ -402,6 +402,131 @@ that two numbers cannot both be true.
 This is the sharpest form of the rule the whole system is built on: *a walk that
 finished is not the same as a story that closes.*
 
+## Settlement coverage is a second completeness dimension
+
+Suppressing the authority claim (above) stated the problem honestly but left
+943 markets in one undifferentiated pile called UNEXPLAINED. That pile is not
+homogeneous, and treating it as though it were has a cost in both directions:
+it buries whatever genuine defects it contains, and it reports a permanent,
+structural limit as though it were a fault someone could go fix.
+
+So there are **two** completeness questions, not one:
+
+| Question | Answered by | What it proves |
+|---|---|---|
+| Where did this position open? | `/portfolio/fills` + `/historical/fills` | the cost basis and the episode's identity |
+| Did this position ever close? | `/portfolio/settlements` | the outcome |
+
+The fill routes come in a pair — a live one and an archive one serving
+everything older than `/historical/cutoff`. The settlements route, as far as
+this account can show, does not. A market bought, held and settled before the
+settlements route's reach leaves a **complete fill trail and no settlement
+row**: the replay holds it open, and nothing it can ever fetch will close it.
+
+### The floor, and the asymmetry that makes it honest
+
+The **floor** is the earliest `settled_time` in an exhausted settlements walk.
+It is *not* a documented retention boundary — it is simply the oldest row the
+route produced. That distinction is the whole argument:
+
+* **At or above the floor**, the route demonstrably had data. A market the
+  replay still holds open there, with no settlement row, is real evidence of
+  absence — a genuine contradiction, and a defect to chase.
+* **Below the floor**, the route returned nothing at all. That is not evidence
+  the market never settled; it is the absence of evidence either way. Such an
+  episode's outcome is **unprovable** — neither open nor closed.
+
+The comparison uses the episode's **last activity**, not its opening. A market
+cannot take a fill after it settles, so its settlement time is at or after its
+final fill; an episode whose last fill lands above the floor would have had its
+settlement inside the route's reach, had one existed.
+
+### Fail-closed rules
+
+The floor is withheld entirely — nothing is reclassified — whenever it cannot
+be trusted:
+
+* the settlements walk did not exhaust its cursor;
+* **any** settlement row carried an unreadable `settled_time` (the unreadable
+  one could be the oldest);
+* any settlement row failed normalization (same reason);
+* no settlement row came back at all.
+
+Withholding is the safe direction. Over-marking would convert genuine
+contradictions into an explained boundary, which is precisely the failure this
+work exists to prevent. A caller of `probe_reconciliation` that supplies no
+bounded set likewise gets the older, louder answer.
+
+Two cases are explicitly **not** coverage:
+
+* A market with a settlement row that was **refused** (size disagreed, or the
+  ticker is held in several subaccounts). The route spoke; the reconciliation
+  failed. Filing that under coverage would hide a real defect. Such episodes are
+  marked outcome-unprovable without being marked coverage-bounded — because a
+  refused settlement is not an open position either: the exchange settled the
+  market, and reporting it as live inventory would overstate the portfolio by
+  the whole episode.
+* A ticker holding one bounded open episode **and** one the route did cover.
+  "Every open episode below the floor", not "any" — otherwise the bounded
+  sibling would speak for the uncovered one.
+
+### Authority now has three conditions
+
+`position_state_is_authoritative` is one property with one definition:
+
+1. the fill history is complete;
+2. the exchange's own view does not contradict it;
+3. no episode's outcome is beyond what the available routes can establish.
+
+Conditions 2 and 3 both deny authority, and they mean different things. (2) is a
+defect. (3) is a stated limit — *a portfolio containing markets of unknown
+outcome is not a portfolio*, however well-understood the reason. The report
+prints each in its own words.
+
+### Testing this module's own assumption: is the walk windowed?
+
+The settlements walk ends when its cursor runs out, and it would be easy to read
+that as *the route gave everything*. It only means the route gave everything
+**for the query that was asked**. If the default query carries an implicit
+window, an exhausted walk and a complete one are indistinguishable — and every
+conclusion above would be measuring a query rather than the data.
+
+So the audit asks the route for **one settlement strictly older than the walk's
+earliest row** (`max_ts = floor - 1`, `limit = 1`). A row that really is older
+proves the walk was windowed. The floor is then **withheld and nothing is
+reclassified**, because the right response is to re-walk with `min_ts` — not to
+state a limit that is really a missing parameter.
+
+A route that ignores an unknown parameter answers with its *newest* rows, so
+every returned row's own `settled_time` is checked against the floor rather than
+trusted because it arrived. Otherwise the guard would invent a windowing that is
+not there and throw away a perfectly good floor.
+
+Both outcomes are tested: a route that hides older settlements until asked, and
+a route that ignores `max_ts` entirely.
+
+### An archival settlements route would close this instead of bounding it
+
+If settlements have the same live/archive pair the fills have, the gap does not
+need bounding — it disappears. That is worth one request, so the audit probes
+`GET /historical/settlements` (one page, never walked) and records the answer
+either way. An absent route is a finding, not an error; the probe degrades the
+measurement instead of failing the audit. The day that route appears, the audit
+will say so.
+
+### Also fixed here
+
+A settled episode used to record `closed_at = opened_at`. An episode opened in
+January and settled in June did not close in January, and any holding period
+derived from it would have been wrong by months. It now carries the exchange's
+own `settled_time`, or `None` when that timestamp will not parse — an unreadable
+clock is left unread rather than filled in with a nearby one.
+
+The settlements route was also being walked **twice** per audit — once to build
+the replay's settlements and once inside the reconciliation probe. Beyond the
+doubled cost, the two views could disagree if a settlement landed between them.
+One walk now serves both.
+
 ## Still open
 
 * **`/historical/cutoff` response shape** is unverified against a live response.
@@ -412,9 +537,20 @@ finished is not the same as a story that closes.*
   strictly between 0 and 1. A router that assumed binary would be correct on
   every row it has ever seen and wrong the first time tennis is enabled, so the
   scalar path must be handled before tennis routes, not after.
-* **Whether 755 settlements cover the whole account.** The settlement walk is
-  unbounded, but the fill sample is bounded at 200, so "every replayed market is
-  explained" is a statement about the window, not the account.
+* **Whether the settlements route is windowed by default.** The probe ships and
+  has not yet been answered against live data. If it comes back windowed, the
+  943-market gap is not a retention boundary at all — it is a missing `min_ts`,
+  and the fix is a re-walk rather than a bound.
+* **How far back the settlements route actually retains.** The floor measures
+  the earliest settlement *this account has*, which is a lower bound on the
+  route's reach, not the reach itself. If the member simply did not trade before
+  that date, the floor understates what the route would serve — and every
+  episode below it is still, correctly, unprovable from the available evidence.
+  Kalshi documentation could turn this lower bound into the real boundary.
+* **Whether a market below the floor settled at all.** The honest answer is
+  that this data cannot say. `GET /markets/{ticker}` reports a market status and
+  would resolve it per market, at one request each — affordable for a bounded
+  sample, not for 943 markets, and not yet attempted.
 * **Classification is the expensive half, not the fill walk.** 155 markets cost
   486 requests, almost all of it metadata resolution at several requests per
   market; the fill pagination itself is a handful. This account has settled 755

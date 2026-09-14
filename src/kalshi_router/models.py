@@ -17,6 +17,7 @@ from typing import Any, Iterable
 
 from .errors import SchemaError
 from .fixedpoint import parse_fixed_point
+from .timeaxis import parse_rfc3339_seconds
 
 # --------------------------------------------------------------- value domains
 #
@@ -676,6 +677,17 @@ class NormalizedSettlement:
     no_count: Decimal | None = None
     yes_cost_dollars: Decimal | None = None
     no_cost_dollars: Decimal | None = None
+
+    @property
+    def settled_at(self) -> Decimal | None:
+        """``settled_time`` as exact epoch seconds, or ``None`` if unreadable.
+
+        Shares :mod:`kalshi_router.timeaxis` with fill ordering, so a settlement
+        and a fill are always compared on one scale.  ``None`` is not treated as
+        a time: a settlement whose clock cannot be read contributes no evidence
+        about how far back settlement data reaches.
+        """
+        return parse_rfc3339_seconds(self.settled_time)
 
     @property
     def settled_quantity(self) -> Decimal | None:

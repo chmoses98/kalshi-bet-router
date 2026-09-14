@@ -12,6 +12,11 @@ Endpoints used (all documented Kalshi ``/trade-api/v2`` routes):
 
 =========================================  ===============================================
 ``GET /portfolio/fills``                   member fills, cursor-paginated
+``GET /portfolio/positions``               the exchange's own position view
+``GET /portfolio/settlements``             markets the exchange settled and paid
+``GET /historical/fills``                  fills older than the live route's cutoff
+``GET /historical/cutoff``                 where that boundary sits
+``GET /historical/settlements``            probed only; may not exist
 ``GET /markets/{ticker}``                  market -> event_ticker, category
 ``GET /events/{event_ticker}``             event  -> series_ticker, title
 ``GET /events/{event_ticker}/metadata``    event  -> competition, competition_scope
@@ -53,6 +58,7 @@ READ_ONLY_PATH_PREFIXES = (
     "/portfolio/settlements",
     "/historical/fills",
     "/historical/cutoff",
+    "/historical/settlements",
     "/markets/",
     "/events/",
     "/series/",
@@ -84,6 +90,7 @@ POSITIONS_PATH = "/portfolio/positions"
 SETTLEMENTS_PATH = "/portfolio/settlements"
 HISTORICAL_FILLS_PATH = "/historical/fills"
 HISTORICAL_CUTOFF_PATH = "/historical/cutoff"
+HISTORICAL_SETTLEMENTS_PATH = "/historical/settlements"
 
 
 def _assert_read_only(path: str) -> None:
@@ -220,7 +227,12 @@ class KalshiReadOnlyClient:
                 raise SchemaError("fills pagination returned an empty page with a live cursor")
 
     def _iter_cursor_pages(
-        self, path: str, operation: str, key: str, page_limit: int | None
+        self,
+        path: str,
+        operation: str,
+        key: str,
+        page_limit: int | None,
+        stats: WalkStats | None = None,
     ) -> Iterator[dict[str, Any]]:
         """Unbounded cursor walk over a portfolio collection.
 
@@ -240,6 +252,9 @@ class KalshiReadOnlyClient:
             payload = self._get(path, operation, params)
 
             rows = _require_list(payload, key, key)
+            if stats is not None:
+                stats.pages += 1
+                stats.rows += len(rows)
             for row in rows:
                 if not isinstance(row, dict):
                     raise SchemaError(
@@ -249,6 +264,11 @@ class KalshiReadOnlyClient:
 
             cursor = _next_cursor(payload, key, seen_cursors)
             if cursor is None:
+                # The route had nothing more. This walk takes no budget, so a
+                # cursor running out is the ONLY way it ends -- which is exactly
+                # what makes its earliest row a usable coverage floor.
+                if stats is not None:
+                    stats.exhausted = True
                 return
             if not rows:
                 raise SchemaError(f"{key} pagination returned an empty page with a live cursor")
@@ -291,15 +311,59 @@ class KalshiReadOnlyClient:
             POSITIONS_PATH, "get_positions", "market_positions", page_limit
         )
 
-    def iter_settlements(self, page_limit: int | None = None) -> Iterator[dict[str, Any]]:
+    def iter_settlements(
+        self, page_limit: int | None = None, stats: WalkStats | None = None
+    ) -> Iterator[dict[str, Any]]:
         """Yield settlement rows.
 
         A settlement closes a position **without a fill**, so a fills-only replay
         cannot see it and will report a market as still open long after the
         exchange has paid it out.
+
+        ``stats`` records how the walk ended.  That matters here for the same
+        reason it matters on the fill routes: the earliest row of an exhausted
+        walk bounds the route's reach, and the earliest row of a truncated walk
+        bounds nothing at all.
         """
         yield from self._iter_cursor_pages(
-            SETTLEMENTS_PATH, "get_settlements", "settlements", page_limit
+            SETTLEMENTS_PATH, "get_settlements", "settlements", page_limit, stats
+        )
+
+    def probe_settlements_before(
+        self, max_ts: int, limit: int = 1
+    ) -> dict[str, Any]:
+        """One request: does the route serve anything older than ``max_ts``?
+
+        This exists to test an assumption rather than to collect data.  The
+        settlements walk ends when its cursor runs out, and it is tempting to
+        read that as "the route gave everything".  It only means the route gave
+        everything *for the query that was asked*.  If the default query carries
+        an implicit window, an exhausted walk and a complete one look identical.
+
+        Asking for one row strictly older than the walk's earliest settles it:
+        a row that comes back is proof the default walk was windowed, and the
+        answer is then to re-walk with ``min_ts``, not to bound anything.
+        """
+        return self._get(
+            SETTLEMENTS_PATH,
+            "probe_settlements_before",
+            {"limit": limit, "max_ts": max_ts},
+        )
+
+    def probe_historical_settlements(self, limit: int = 1) -> dict[str, Any]:
+        """One request, one page: does an archival settlements route exist?
+
+        ``GET /historical/fills`` serves fills older than the live route's
+        cutoff.  If a settlements counterpart exists, the settlement gap closes
+        outright instead of merely being bounded, so the question is worth one
+        request.  This does not walk the route -- it only asks whether it
+        answers.  A non-success status raises, and the caller records the
+        absence rather than failing the audit.
+        """
+        return self._get(
+            HISTORICAL_SETTLEMENTS_PATH,
+            "probe_historical_settlements",
+            {"limit": limit},
         )
 
     # --------------------------------------------------------------- metadata

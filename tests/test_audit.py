@@ -407,3 +407,241 @@ def test_a_bound_larger_than_the_market_count_changes_nothing(signer):
     result = run_audit(build_client(pages, signer), max_classify_markets=99)
     assert result.report.markets_not_classified == 0
     assert result.report.markets_classified == 1
+
+
+# ================= Phase C.15: settlement coverage, end to end ===============
+
+def coverage_client(signer, pages, settlements, archived_settlements=None, positions=None):
+    handler = paged_fills_handler(
+        pages,
+        build_metadata(),
+        taxonomy=TAXONOMY,
+        positions=positions,
+        settlements=settlements,
+        archived_settlements=archived_settlements,
+    )
+    return KalshiReadOnlyClient(
+        signer=signer,
+        config=AuditConfig(max_fills=500, page_limit=100, max_retries=0),
+        transport=FakeTransport(handler),
+        sleep=lambda _: None,
+    )
+
+
+def settlement(ticker, settled_time):
+    return {
+        "ticker": ticker,
+        "settled_time": settled_time,
+        "market_result": "yes",
+        "revenue": "1000",
+        "value": "100",
+        "fee_cost": "0.0700",
+        "yes_count_fp": "1.00",
+        "no_count_fp": "0.00",
+    }
+
+
+def test_audit_measures_settlement_reach_and_bounds_what_it_cannot_prove(signer):
+    # One position opened well before any settlement the route will serve, one
+    # opened well after. The first is unprovable; the second is really open.
+    pages = [[
+        make_fill(1, ticker=market_for("MLB"), created_time="2026-01-01T00:00:00Z"),
+        make_fill(2, ticker=market_for("NFL"), created_time="2026-08-01T00:00:00Z"),
+    ]]
+    settlements = [settlement(market_for("CFB"), "2026-06-01T00:00:00Z")]
+    result = run_audit(
+        coverage_client(signer, pages, settlements), reconcile=True, full_history=True
+    )
+
+    assert result.settlement_coverage.rows == 1
+    assert result.settlement_coverage.floor_is_usable
+    assert result.accounting.settlement_floor_applied
+    assert result.accounting.episodes_with_an_unprovable_outcome == 1
+    assert result.accounting.episodes_bounded_by_settlement_coverage == 1
+    assert result.accounting.episodes_open_within_settlement_evidence == 1
+    # Bounded, not contradicted: a limit to state, not a defect to chase.
+    assert result.accounting.position_state_bounded_by_settlement_coverage
+    assert not result.accounting.position_state_is_authoritative
+    assert result.reconciliation.markets_absent_but_outside_settlement_evidence == 1
+    assert result.reconciliation.markets_absent_and_unexplained == 1
+
+
+def test_an_absent_archive_settlements_route_is_recorded_not_fatal(signer):
+    pages = [[make_fill(1, ticker=market_for("MLB"))]]
+    result = run_audit(
+        coverage_client(signer, pages, []), reconcile=True, full_history=True
+    )
+    coverage = result.settlement_coverage
+    assert coverage.archive_route_probed
+    assert not coverage.archive_route_available
+    assert coverage.archive_route_status == 404
+
+
+def test_an_available_archive_settlements_route_is_reported(signer):
+    # If the route ever appears, the gap closes outright rather than being
+    # bounded, so the audit must notice the day that changes.
+    pages = [[make_fill(1, ticker=market_for("MLB"))]]
+    result = run_audit(
+        coverage_client(
+            signer,
+            pages,
+            [],
+            archived_settlements=[settlement(market_for("CFB"), "2020-01-01T00:00:00Z")],
+        ),
+        reconcile=True,
+        full_history=True,
+    )
+    coverage = result.settlement_coverage
+    assert coverage.archive_route_available
+    assert coverage.archive_route_status == 200
+    assert coverage.archive_first_page_rows == 1
+
+
+def test_the_settlements_route_is_walked_once_per_audit(signer):
+    # It used to be walked twice -- once for the replay and once inside the
+    # reconciliation probe -- which doubled the cost and let the two views
+    # disagree if a settlement landed between them.
+    pages = [[make_fill(1, ticker=market_for("MLB"))]]
+    handler = paged_fills_handler(
+        pages, build_metadata(), taxonomy=TAXONOMY,
+        settlements=[settlement(market_for("MLB"), "2026-06-01T00:00:00Z")],
+    )
+    transport = FakeTransport(handler)
+    client = KalshiReadOnlyClient(
+        signer=signer,
+        config=AuditConfig(max_fills=500, page_limit=100, max_retries=0),
+        transport=transport,
+        sleep=lambda _: None,
+    )
+    run_audit(client, reconcile=True, full_history=True)
+    hits = [p for p in transport.paths if "/portfolio/settlements" in p]
+    walks = [p for p in hits if "max_ts" not in p]
+    probes = [p for p in hits if "max_ts" in p]
+    assert len(walks) == 1
+    # The one extra hit is the single-row windowing probe, not a second walk.
+    assert len(probes) == 1
+    assert "limit=1" in probes[0]
+
+
+def test_without_reconcile_no_settlement_route_is_touched_at_all(signer):
+    pages = [[make_fill(1, ticker=market_for("MLB"))]]
+    handler = paged_fills_handler(pages, build_metadata(), taxonomy=TAXONOMY)
+    transport = FakeTransport(handler)
+    client = KalshiReadOnlyClient(
+        signer=signer,
+        config=AuditConfig(max_fills=500, page_limit=100, max_retries=0),
+        transport=transport,
+        sleep=lambda _: None,
+    )
+    result = run_audit(client)
+    assert not any("settlements" in p for p in transport.paths)
+    assert not result.settlement_coverage.archive_route_probed
+    assert not result.accounting.settlement_floor_applied
+
+
+def windowed_settlements_handler(pages, visible, hidden):
+    """A route whose default query hides settlements it will serve on request.
+
+    ``visible`` is what the plain walk returns; ``hidden`` is older and comes
+    back only when ``max_ts`` asks for it. An exhausted cursor over ``visible``
+    looks exactly like a complete history, which is the trap.
+    """
+    inner = paged_fills_handler(pages, build_metadata(), taxonomy=TAXONOMY)
+
+    def handler(method, path, query):
+        if path.endswith("/portfolio/settlements"):
+            if query.get("max_ts"):
+                return 200, {"settlements": hidden, "cursor": ""}
+            return 200, {"settlements": visible, "cursor": ""}
+        return inner(method, path, query)
+
+    return handler
+
+
+def ignoring_settlements_handler(pages, visible):
+    """A route that ignores max_ts and answers with its newest rows anyway."""
+    inner = paged_fills_handler(pages, build_metadata(), taxonomy=TAXONOMY)
+
+    def handler(method, path, query):
+        if path.endswith("/portfolio/settlements"):
+            return 200, {"settlements": visible, "cursor": ""}
+        return inner(method, path, query)
+
+    return handler
+
+
+def client_for(signer, handler):
+    return KalshiReadOnlyClient(
+        signer=signer,
+        config=AuditConfig(max_fills=500, page_limit=100, max_retries=0),
+        transport=FakeTransport(handler),
+        sleep=lambda _: None,
+    )
+
+
+def test_a_windowed_default_walk_withholds_the_floor_entirely(signer):
+    # The cursor ran out, so the walk looks complete. It is not: the route will
+    # serve an older settlement when asked. Bounding against this walk's
+    # earliest row would state a limit that is really a missing parameter.
+    pages = [[make_fill(1, ticker=market_for("MLB"), created_time="2026-01-01T00:00:00Z")]]
+    result = run_audit(
+        client_for(
+            signer,
+            windowed_settlements_handler(
+                pages,
+                visible=[settlement(market_for("CFB"), "2026-06-01T00:00:00Z")],
+                hidden=[settlement(market_for("NBA"), "2025-01-01T00:00:00Z")],
+            ),
+        ),
+        reconcile=True,
+        full_history=True,
+    )
+    coverage = result.settlement_coverage
+    assert coverage.observed_floor is not None
+    assert coverage.below_floor_rows_older_than_the_floor == 1
+    assert coverage.default_walk_appears_windowed
+    assert coverage.floor is None
+    assert not coverage.floor_is_usable
+    # Nothing reclassified, so nothing is quietly excused.
+    assert not result.accounting.settlement_floor_applied
+    assert result.accounting.episodes_bounded_by_settlement_coverage == 0
+
+
+def test_a_route_that_ignores_max_ts_does_not_look_windowed(signer):
+    # It answers with its newest rows. Counting those as older data would
+    # invent a windowing that is not there and throw away a usable floor.
+    pages = [[make_fill(1, ticker=market_for("MLB"), created_time="2026-01-01T00:00:00Z")]]
+    result = run_audit(
+        client_for(
+            signer,
+            ignoring_settlements_handler(
+                pages, visible=[settlement(market_for("CFB"), "2026-06-01T00:00:00Z")]
+            ),
+        ),
+        reconcile=True,
+        full_history=True,
+    )
+    coverage = result.settlement_coverage
+    assert coverage.below_floor_rows_returned == 1
+    assert coverage.below_floor_rows_older_than_the_floor == 0
+    assert not coverage.default_walk_appears_windowed
+    assert coverage.floor is not None
+    assert result.accounting.settlement_floor_applied
+
+
+def test_no_floor_means_no_windowing_probe_is_issued(signer):
+    # Nothing to ask "older than" about, so the request is not made at all.
+    pages = [[make_fill(1, ticker=market_for("MLB"))]]
+    handler = paged_fills_handler(pages, build_metadata(), taxonomy=TAXONOMY)
+    transport = FakeTransport(handler)
+    run_audit(client_for_transport(signer, transport), reconcile=True, full_history=True)
+    assert not any("max_ts" in p for p in transport.paths)
+
+
+def client_for_transport(signer, transport):
+    return KalshiReadOnlyClient(
+        signer=signer,
+        config=AuditConfig(max_fills=500, page_limit=100, max_retries=0),
+        transport=transport,
+        sleep=lambda _: None,
+    )

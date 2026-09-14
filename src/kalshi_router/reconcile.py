@@ -142,8 +142,16 @@ class ReconciliationReport:
     #: holds nothing.  Counting this as a gap was over-reporting by 423 markets
     #: on the first full-history run.
     markets_absent_and_flat_in_replay: int = 0
-    #: Replayed, absent from positions, and NOT explained by a settlement. This
-    #: is the one that would mean missing history.
+    #: Replayed OPEN, absent from positions, no settlement row -- and the
+    #: episode's activity ends BELOW the settlements route's reach.  The route
+    #: returned nothing for that period, so its silence is not evidence: the
+    #: market may have settled years ago and simply left no retrievable record.
+    #: A bounded limit, not a defect.
+    markets_absent_but_outside_settlement_evidence: int = 0
+    #: Replayed OPEN, absent from positions, not explained by a settlement, and
+    #: sitting INSIDE the period the settlements route demonstrably covered.
+    #: Here silence really is evidence of absence, so this is the genuine
+    #: contradiction: something is wrong, and it is not coverage.
     markets_absent_and_unexplained: int = 0
 
     #: Observed schema, allowlisted.
@@ -212,6 +220,8 @@ class ReconciliationReport:
             f"{self.markets_absent_and_flat_in_replay}",
             f"    absent from positions, EXPLAINED by a settlement: "
             f"{self.markets_absent_but_settled}",
+            f"    absent from positions, outside settlement evidence: "
+            f"{self.markets_absent_but_outside_settlement_evidence}",
             f"    absent from positions, UNEXPLAINED: "
             f"{self.markets_absent_and_unexplained}",
             "",
@@ -362,10 +372,18 @@ def probe_reconciliation(
     position_rows: Iterable[dict[str, Any]],
     settlement_rows: Iterable[dict[str, Any]],
     replayed: dict[str, Decimal],
+    outside_settlement_evidence: frozenset[str] = frozenset(),
 ) -> ReconciliationReport:
     """Measure the gap between a fills replay and the exchange's own view.
 
     ``replayed`` maps ticker -> signed net position derived from fills.
+
+    ``outside_settlement_evidence`` names the markets whose open position sits
+    below the settlements route's reach.  They are still absent and still
+    unsettled, but their absence is bounded rather than unexplained, and mixing
+    the two would either hide real defects among expected gaps or report a known
+    limit as a fault.  Empty by default, which keeps every such market in the
+    unexplained bucket -- the fail-closed direction.
     """
     report = ReconciliationReport()
 
@@ -429,18 +447,21 @@ def probe_reconciliation(
             # Absence is only a gap when the replay still holds something.
             #
             # Three ways a market is legitimately absent from positions, and
-            # only the fourth is evidence of missing history:
+            # only the fourth is evidence of a defect:
             #   * the replay closed it to zero by trading -- both sides agree
             #     the member holds nothing, which is agreement, not a gap;
             #   * a settlement closed it -- the exchange drops settled markets
             #     from the response entirely;
-            #   * both of the above.
-            # A market the replay still shows OPEN, with no settlement to
-            # explain it, is the one that means the history is incomplete.
+            #   * it sits below the settlements route's reach, where that route
+            #     produced no evidence either way -- a bounded limit.
+            # A market the replay still shows OPEN, with no settlement, INSIDE
+            # the period settlements demonstrably covered, is the real gap.
             if net == 0:
                 report.markets_absent_and_flat_in_replay += 1
             elif ticker in settled_tickers:
                 report.markets_absent_but_settled += 1
+            elif ticker in outside_settlement_evidence:
+                report.markets_absent_but_outside_settlement_evidence += 1
             else:
                 report.markets_absent_and_unexplained += 1
             continue

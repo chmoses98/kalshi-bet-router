@@ -23,7 +23,8 @@ from .classify import (
     classify_market,
 )
 from .client import KalshiReadOnlyClient, WalkStats
-from .errors import KalshiRouterError, SchemaError
+from .coverage import SettlementCoverage, build_settlement_coverage
+from .errors import HttpStatusError, KalshiRouterError, SchemaError
 from .history import HistoryEvidence
 from .metadata import MetadataResolver
 from .milestones import MilestoneIndex, build_milestone_index
@@ -42,6 +43,7 @@ from .safety import safe_schema_name
 from .schema_probe import SchemaCoverage, probe_fills
 from .sports import REPORT_ORDER, Sport
 from .taxonomy import SportTaxonomy, parse_filters_by_sport
+from .timeaxis import parse_rfc3339_seconds
 
 #: Fail-closed reasons a public milestone sweep could plausibly repair.
 MILESTONE_REPAIRABLE = frozenset({
@@ -84,6 +86,10 @@ class AuditResult:
     reconciliation: ReconciliationReport | None = None
     #: What the fill walks earned the right to claim about the history.
     history: HistoryEvidence = field(default_factory=HistoryEvidence)
+    #: How far back settlement evidence reaches. Empty unless reconciling.
+    settlement_coverage: SettlementCoverage = field(
+        default_factory=SettlementCoverage
+    )
     details: tuple[SensitiveDetail, ...] = ()
     _classifications: dict[str, Classification] = field(default_factory=dict, repr=False)
 
@@ -218,15 +224,29 @@ def run_audit(
     # Settlements are fetched only when reconciliation was asked for, because
     # the walk is unbounded. Without them the replay cannot see a close: a
     # settled market pays out with no fill at all.
-    settlements = _fetch_settlements(client, report) if reconcile else []
+    if reconcile:
+        settlement_rows, settlements, settlement_coverage = _fetch_settlements(
+            client, report
+        )
+        _probe_below_the_floor(client, settlement_coverage)
+        _probe_settlement_archive(client, settlement_coverage)
+    else:
+        settlement_rows, settlements = [], []
+        settlement_coverage = SettlementCoverage()
 
     # The replay is told exactly what the walks earned. A history is COMPLETE
     # only when both fill routes ran out of data rather than out of budget, so
-    # asking for a full walk does not by itself grant the claim.
+    # asking for a full walk does not by itself grant the claim. The settlement
+    # floor is a SECOND completeness dimension: complete fills prove where a
+    # position opened, settlement coverage is what can prove whether it ever
+    # closed, and the two routes do not reach equally far back.
     replay = None
     try:
         replay = AccountingEngine().replay(
-            fills, history_evidence.completeness, settlements=settlements
+            fills,
+            history_evidence.completeness,
+            settlements=settlements,
+            settlement_floor=settlement_coverage.floor,
         )
         accounting = build_diagnostics(replay)
     except SchemaError:
@@ -366,7 +386,9 @@ def run_audit(
     # empty replay would report every market as "missing from the replay" --
     # a fabricated finding.
     reconciliation = (
-        _probe_reconciliation(client, replay) if reconcile and replay is not None else None
+        _probe_reconciliation(client, replay, settlement_rows)
+        if reconcile and replay is not None
+        else None
     )
 
     # Authority over position state has to survive contact with the exchange's
@@ -377,6 +399,18 @@ def run_audit(
     # markets that settled before the settlement window -- markets the exchange
     # has long since dropped. Claiming authority there would assert a portfolio
     # the member does not have.
+    #
+    # Phase C.15 splits that gap in two, because the two halves demand opposite
+    # responses. A market the replay holds open INSIDE the period settlements
+    # demonstrably covered is a contradiction: something is wrong and it is not
+    # coverage. A market below the route's reach is a bounded limit: the route
+    # produced no evidence either way, and it never will.
+    #
+    # Both deny authority -- a portfolio containing markets of unknown outcome
+    # is not the member's position state -- but only the first is a defect.
+    # The bounded half is derived inside build_diagnostics, from the episodes
+    # themselves. Only the contradiction needs the exchange's own view, so only
+    # it is set here.
     if reconciliation is not None and reconciliation.markets_absent_and_unexplained:
         accounting.position_state_contradicted_by_exchange = True
 
@@ -385,6 +419,7 @@ def run_audit(
         accounting=accounting,
         coverage=coverage,
         history=history_evidence,
+        settlement_coverage=settlement_coverage,
         reconciliation=reconciliation,
         details=details,
         _classifications=classifications,
@@ -460,33 +495,151 @@ def _chain_fill_routes(
         evidence.historical_failed = True
 
 
-def _fetch_settlements(client: KalshiReadOnlyClient, report: AuditReport) -> list:
-    """Normalize the settlement walk, excluding-and-counting what will not parse.
+def _fetch_settlements(
+    client: KalshiReadOnlyClient, report: AuditReport
+) -> tuple[list[dict], list, SettlementCoverage]:
+    """Walk the settlements route once, keeping raw rows, values and reach.
 
     Same rule as the fill probe: a settlement that cannot be interpreted is left
     out of accounting and counted, never admitted with an invented payout.
+
+    The raw rows are retained so the reconciliation probe can reuse them.  The
+    walk used to happen twice -- once to build the replay's settlements and once
+    inside the probe -- which doubled the request cost and, worse, allowed the
+    two views to disagree if a settlement landed between them.
+
+    A rejected row is a hole in the coverage measurement, not only in the
+    accounting: its ``settled_time`` might have been the earliest of all.  So the
+    rejects are folded in as unreadable times, which withholds the floor.
     """
+    raw_rows: list[dict] = []
     settlements = []
-    for raw in client.iter_settlements():
+    stats = WalkStats()
+    for raw in client.iter_settlements(stats=stats):
+        raw_rows.append(raw)
         try:
             settlements.append(normalize_settlement(raw))
         except SchemaError:
             report.settlements_rejected += 1
     report.settlements_fetched = len(settlements) + report.settlements_rejected
-    return settlements
+
+    coverage = build_settlement_coverage(
+        settlements, exhausted=stats.exhausted, truncated=stats.truncated
+    )
+    coverage.rows += report.settlements_rejected
+    coverage.rows_with_an_unreadable_time += report.settlements_rejected
+    return raw_rows, settlements, coverage
 
 
-def _probe_reconciliation(client: KalshiReadOnlyClient, replay) -> ReconciliationReport:
+def _probe_below_the_floor(
+    client: KalshiReadOnlyClient, coverage: SettlementCoverage
+) -> None:
+    """Ask the route for one settlement older than the walk's earliest row.
+
+    This checks an assumption of this module's own making.  The settlements walk
+    ends when its cursor runs out, which is easy to read as "the route gave
+    everything".  It only means the route gave everything for the query asked --
+    and if the default query carries an implicit window, an exhausted walk and a
+    complete one are indistinguishable.
+
+    A row that really is older proves the walk was windowed.  The floor is then
+    withheld and nothing is reclassified, because the right response is to
+    re-walk with ``min_ts``, not to state a limit that is really a missing
+    parameter.
+
+    A route that ignores an unknown parameter answers with its newest rows, so
+    every returned row's own timestamp is checked against the floor rather than
+    trusted because it arrived.
+    """
+    floor = coverage.observed_floor
+    if floor is None:
+        return
+    coverage.below_floor_probed = True
+    try:
+        payload = client.probe_settlements_before(max_ts=int(floor) - 1)
+    except HttpStatusError as exc:
+        coverage.below_floor_probe_status = exc.status
+        return
+    except KalshiRouterError:
+        return
+    coverage.below_floor_probe_status = 200
+    rows = payload.get("settlements")
+    if not isinstance(rows, list):
+        return
+    coverage.below_floor_rows_returned = len(rows)
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        at = parse_rfc3339_seconds(row.get("settled_time"))
+        if at is not None and at < floor:
+            coverage.below_floor_rows_older_than_the_floor += 1
+
+
+def _probe_settlement_archive(
+    client: KalshiReadOnlyClient, coverage: SettlementCoverage
+) -> None:
+    """Ask, in one request, whether an archival settlements route exists.
+
+    The fill routes come in a pair: a live one and an archive one that serves
+    everything older than the cutoff.  If settlements have the same pair, the
+    gap this module bounds can be closed outright instead.  The question costs
+    one request, and the answer is recorded either way -- an absent route is a
+    finding, not an error, so a failure degrades the measurement rather than the
+    audit.
+    """
+    coverage.archive_route_probed = True
+    try:
+        payload = client.probe_historical_settlements()
+    except HttpStatusError as exc:
+        coverage.archive_route_status = exc.status
+        return
+    except KalshiRouterError:
+        return
+    coverage.archive_route_available = True
+    coverage.archive_route_status = 200
+    rows = payload.get("settlements")
+    if isinstance(rows, list):
+        coverage.archive_first_page_rows = len(rows)
+
+
+def _markets_outside_settlement_evidence(replay) -> frozenset[str]:
+    """Tickers whose every open episode sits below the settlement floor.
+
+    "Every", not "any": a ticker holding one bounded episode and one that the
+    settlements route did cover is not bounded -- the covered one is still an
+    unexplained open position, and letting the bounded sibling speak for it
+    would hide exactly the contradiction this is meant to expose.
+    """
+    open_episodes: dict[str, list] = {}
+    for episode in replay.episodes:
+        if episode.is_open:
+            open_episodes.setdefault(episode.ticker, []).append(episode)
+    return frozenset(
+        ticker
+        for ticker, episodes in open_episodes.items()
+        if all(e.outcome_bounded_by_settlement_coverage for e in episodes)
+    )
+
+
+def _probe_reconciliation(
+    client: KalshiReadOnlyClient, replay, settlement_rows: list[dict]
+) -> ReconciliationReport:
     """Measure the replay against the exchange's own position view.
 
-    Opt-in, because it walks two more paginated collections and the bounded
+    Opt-in, because it walks another paginated collection and the bounded
     200-fill audit already issues hundreds of requests.  Nothing downstream
     depends on the result: it is a measurement, not a verdict.
+
+    The settlement rows are the ones already walked, not a fresh walk: one view
+    of the settlements, used for both the replay and the measurement.
     """
     replayed = {
         ticker: ledger.position
         for (_subaccount, ticker), ledger in replay.ledgers.items()
     }
     return probe_reconciliation(
-        client.iter_positions(), client.iter_settlements(), replayed
+        client.iter_positions(),
+        settlement_rows,
+        replayed,
+        _markets_outside_settlement_evidence(replay),
     )

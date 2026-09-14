@@ -196,7 +196,13 @@ def apply_settlement(
     )
 
     if episode is not None:
-        episode.closed_at = episode.opened_at
+        # The exchange's own settlement clock, not the opening fill's: an
+        # episode that opened in March and settled in June did not close in
+        # March, and a holding period derived from that would be wrong by
+        # months.  ``None`` when the timestamp will not parse -- an unreadable
+        # clock is left unread rather than filled in with a nearby one.
+        episode.closed_at = settlement.settled_at
+        episode.last_activity_at = settlement.settled_at or episode.last_activity_at
         episode.closing_fill_id = transition.fill_id
         episode.remaining_quantity = ZERO
         episode.total_closed_quantity += closed
@@ -256,6 +262,10 @@ class PositionEpisode:
     subaccount_number: int | None = None
     closing_fill_id: str | None = None
     closed_at: Decimal | None = None
+    #: Execution time of the most recent event applied to this episode, on the
+    #: shared epoch-second axis.  Used to ask whether the episode's activity
+    #: ends above or below the settlement route's evidence floor.
+    last_activity_at: Decimal | None = None
 
     remaining_quantity: Decimal = ZERO
     peak_quantity: Decimal = ZERO
@@ -275,6 +285,14 @@ class PositionEpisode:
     fee_allocation_ambiguous: bool = False
     #: False when bounded history means the opening was never observed.
     provable: bool = True
+    #: False when the episode is still open and its activity ends below the
+    #: settlement route's evidence floor.  The outcome is then neither open nor
+    #: closed but UNKNOWN: a settlement may exist that the route will not serve.
+    #: Distinct from :attr:`provable`, which is about the opening boundary.
+    outcome_provable: bool = True
+    #: True when :attr:`outcome_provable` was cleared by settlement coverage
+    #: rather than by anything about the fills themselves.
+    outcome_bounded_by_settlement_coverage: bool = False
 
     transitions: list[PositionTransition] = field(default_factory=list)
     order_ids: list[str] = field(default_factory=list)
@@ -470,6 +488,7 @@ def _new_episode(
         direction=Direction.LONG_YES if position_after > 0 else Direction.LONG_NO,
         opening_fill_id=fill.fill_id,
         opened_at=parse_execution_time(fill),
+        last_activity_at=parse_execution_time(fill),
         provable=provable,
     )
 
@@ -501,6 +520,9 @@ def _record(
 ) -> None:
     if episode is None:  # pragma: no cover - defensive
         return
+    from .ordering import parse_execution_time
+
+    episode.last_activity_at = parse_execution_time(fill)
     episode.total_opened_quantity += opened
     episode.total_closed_quantity += closed
     episode.remaining_quantity = abs(position_after)

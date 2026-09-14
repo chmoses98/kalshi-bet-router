@@ -2,9 +2,10 @@
 
 Determinism contract
 --------------------
-``replay`` is a **pure function of the fill set**.  It sorts into canonical order
-(see :mod:`.ordering`), de-duplicates by ``fill_id``, and builds fresh ledgers on
-every call.  Therefore:
+``replay`` is a **pure function of its inputs** -- the fill set, the settlements
+and the settlement floor.  It sorts into canonical order (see :mod:`.ordering`),
+de-duplicates by ``fill_id``, sorts settlements by ``settled_time``, and builds
+fresh ledgers on every call.  Therefore:
 
 * the same fills in any input order produce the same final state;
 * replaying a set that contains duplicates produces the same state as the set
@@ -91,6 +92,14 @@ class AccountingResult:
     total_fees: Decimal | None = None
     fills_with_fee: int = 0
     subaccounts_observed: set[int | None] = field(default_factory=set)
+    #: Tickers a settlement row named, whether it applied or was refused. For
+    #: these the settlements route DID produce evidence, so coverage can never
+    #: be the explanation for an episode still open on them.
+    tickers_with_settlement_evidence: set[str] = field(default_factory=set)
+    #: Earliest settlement time the settlements route was shown to serve, on the
+    #: shared epoch-second axis.  ``None`` when no trustworthy floor exists, in
+    #: which case no episode is reclassified -- see :mod:`kalshi_router.coverage`.
+    settlement_floor: Decimal | None = None
 
     def ledger_for(self, ticker: str, subaccount: int | None = None) -> MarketLedger | None:
         return self.ledgers.get((subaccount, ticker))
@@ -109,6 +118,17 @@ class AccountingResult:
         return [e for e in self.episodes if e.is_open]
 
     @property
+    def episodes_with_an_unprovable_outcome(self) -> list[PositionEpisode]:
+        """Open episodes whose outcome the available evidence cannot establish.
+
+        These are NOT open positions.  They are markets the replay can no longer
+        follow, because a settlement that would have closed them predates the
+        settlements route's reach.  Downstream must treat them as unknown, never
+        as inventory.
+        """
+        return [e for e in self.episodes if e.is_open and not e.outcome_provable]
+
+    @property
     def closed_episodes(self) -> list[PositionEpisode]:
         return [e for e in self.episodes if not e.is_open]
 
@@ -124,13 +144,16 @@ class AccountingEngine:
         fills: Iterable[NormalizedFill],
         completeness: HistoryCompleteness = HistoryCompleteness.BOUNDED_WINDOW,
         settlements: Iterable[NormalizedSettlement] | None = None,
+        settlement_floor: Decimal | None = None,
     ) -> AccountingResult:
         """Build the full accounting view from a fill set.
 
         The fills may arrive in any order and may contain duplicates; both are
         normalized away before anything is applied.
         """
-        result = AccountingResult(completeness=completeness)
+        result = AccountingResult(
+            completeness=completeness, settlement_floor=settlement_floor
+        )
 
         unique: dict[str, NormalizedFill] = {}
         duplicates = 0
@@ -171,7 +194,45 @@ class AccountingEngine:
 
         if settlements:
             self._apply_settlements(result, settlements)
+        self._mark_settlement_coverage(result, settlement_floor)
         return result
+
+    @staticmethod
+    def _mark_settlement_coverage(
+        result: AccountingResult, floor: Decimal | None
+    ) -> None:
+        """Separate "still open" from "outcome unknowable" among open episodes.
+
+        An episode whose activity ends at or after ``floor`` sits in a period the
+        settlements route demonstrably covered.  No settlement row closed it, and
+        the route was walked to exhaustion, so it really is open.
+
+        An episode whose activity ends BEFORE ``floor`` sits where the route
+        returned nothing at all.  It may have settled long ago; the route will
+        never say.  Its outcome is marked unprovable -- neither open nor closed
+        -- so that nothing downstream mistakes it for live inventory.
+
+        A ``None`` floor reclassifies nothing.  That is the fail-closed
+        direction: over-marking would quietly convert genuine contradictions,
+        which are defects to chase, into an explained boundary.
+        """
+        if floor is None:
+            return
+        for episode in result.episodes:
+            if not episode.is_open:
+                continue
+            if episode.ticker in result.tickers_with_settlement_evidence:
+                # A settlement row named this market. It was refused rather
+                # than applied, which is a reconciliation problem -- already
+                # recorded as such -- and never a coverage one.
+                continue
+            at = episode.last_activity_at
+            if at is None:  # pragma: no cover - episodes always carry a time
+                episode.outcome_provable = False
+                continue
+            if at < floor:
+                episode.outcome_provable = False
+                episode.outcome_bounded_by_settlement_coverage = True
 
     @staticmethod
     def _apply_settlements(
@@ -197,17 +258,41 @@ class AccountingEngine:
             if not keys:
                 result.settlements_without_a_position += 1
                 continue
+            # The route spoke about this market. Whatever happens next, its
+            # silence is not what leaves an episode open here.
+            result.tickers_with_settlement_evidence.add(settlement.ticker)
             if len(keys) > 1:
                 result.settlements_refused_ambiguous_subaccount += 1
+                _mark_outcome_unprovable(result, settlement.ticker)
                 continue
             ledger = result.ledgers[keys[0]]
             try:
                 transition = apply_settlement(ledger, settlement)
             except SettlementRefused:
                 result.settlements_refused_unreconciled += 1
+                # A refused settlement is NOT an open position. The exchange
+                # settled the market; the replay simply cannot reconcile the
+                # size, so the outcome is unresolved rather than pending.
+                # Leaving it to look open would overstate live inventory.
+                _mark_outcome_unprovable(result, settlement.ticker)
                 continue
             result.transitions.append(transition)
             result.settlements_applied += 1
+
+
+def _mark_outcome_unprovable(result: AccountingResult, ticker: str) -> None:
+    """Flag every open episode on one market as having an unresolved outcome.
+
+    Used where a settlement exists but could not be applied.  The outcome is
+    then neither open nor closed, and saying so is the difference between a
+    known unknown and a phantom position.
+    """
+    for (_subaccount, held), ledger in result.ledgers.items():
+        if held != ticker:
+            continue
+        for episode in ledger.episodes:
+            if episode.is_open:
+                episode.outcome_provable = False
 
 
 def net_position(
