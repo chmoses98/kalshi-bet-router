@@ -146,3 +146,46 @@ def test_the_evidence_renders_its_verdict_and_its_reasons():
 def test_the_evidence_is_counts_and_booleans_only():
     for name, value in HistoryEvidence().as_dict().items():
         assert isinstance(value, (int, bool)), f"{name} is not a count or a flag"
+
+
+# ============ a budget and a completeness claim are mutually exclusive =======
+#
+# --full-history was added subject to the 1-500 max_fills cap, which made
+# COMPLETE unreachable by construction: a capped walk can never report
+# `exhausted`. The fix is to remove the budget, not to raise it.
+
+def test_an_unbounded_walk_ignores_the_configured_max(signer):
+    """The config default is 200; an unbounded walk must pass straight through."""
+    pages = [[make_fill(i) for i in range(250)], [make_fill(999)]]
+    stats = WalkStats()
+    c = client_for(pages, signer=signer)
+    rows = list(c.iter_fills(stats=stats, unbounded=True))
+    assert len(rows) == 251
+    assert stats.exhausted and not stats.truncated
+
+
+def test_a_bounded_walk_still_honours_its_budget(signer):
+    pages = [[make_fill(i) for i in range(250)], [make_fill(999)]]
+    stats = WalkStats()
+    c = client_for(pages, signer=signer)
+    assert len(list(c.iter_fills(max_fills=10, stats=stats))) == 10
+    assert stats.truncated and not stats.exhausted
+
+
+def test_an_unbounded_walk_reaches_completeness_where_a_capped_one_cannot(signer):
+    """The property the cap silently prevented."""
+    big = [[make_fill(i) for i in range(400)], [make_fill(888)]]
+    capped = WalkStats()
+    client_a = client_for(big, signer=signer)
+    list(client_a.iter_fills(max_fills=500, stats=capped))
+    assert capped.exhausted          # 401 rows fits under 500, so this one is fine
+
+    tight = WalkStats()
+    client_b = client_for(big, signer=signer)
+    list(client_b.iter_fills(max_fills=100, stats=tight))
+    assert not tight.exhausted       # a cap below the true size hides exhaustion
+
+    free = WalkStats()
+    client_c = client_for(big, signer=signer)
+    list(client_c.iter_fills(stats=free, unbounded=True))
+    assert free.exhausted            # unbounded always reaches the real end

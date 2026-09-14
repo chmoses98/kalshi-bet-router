@@ -17,7 +17,7 @@ on:
   workflow_dispatch:
     inputs:
       max_fills:
-        description: "Bounded recent fill sample size (1-500)"
+        description: "Bounded recent fill sample size (1-500). Ignored when full_history is set"
         required: false
         default: "200"
       reconcile:
@@ -26,7 +26,7 @@ on:
         type: boolean
         default: false
       full_history:
-        description: "Also walk the archive fill route, so a COMPLETE history can be claimed"
+        description: "Walk BOTH fill routes to exhaustion (ignores max_fills) so a COMPLETE history can be claimed"
         required: false
         type: boolean
         default: false

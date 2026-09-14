@@ -28,6 +28,7 @@ account traded.
 from __future__ import annotations
 
 import time
+import math
 from dataclasses import dataclass
 from typing import Any, Callable, Iterator
 
@@ -134,8 +135,13 @@ class KalshiReadOnlyClient:
         max_fills: int | None = None,
         page_limit: int | None = None,
         stats: WalkStats | None = None,
+        unbounded: bool = False,
     ) -> Iterator[dict[str, Any]]:
         """Yield raw fill objects, newest first, up to ``max_fills``.
+
+        ``unbounded`` walks to exhaustion instead, which is the only way a walk
+        can report ``exhausted`` and therefore the only way a history can be
+        claimed complete.
 
         Pagination follows Kalshi's opaque-cursor scheme: each response carries a
         ``cursor`` whose value is passed to the next request.  An empty or absent
@@ -146,7 +152,7 @@ class KalshiReadOnlyClient:
         it is distinguished from an API failure, which raises.
         """
         yield from self._iter_fill_pages(
-            FILLS_PATH, "get_fills", max_fills, page_limit, stats
+            FILLS_PATH, "get_fills", max_fills, page_limit, stats, unbounded
         )
 
     def _iter_fill_pages(
@@ -156,6 +162,7 @@ class KalshiReadOnlyClient:
         max_fills: int | None,
         page_limit: int | None,
         stats: WalkStats | None = None,
+        unbounded: bool = False,
     ) -> Iterator[dict[str, Any]]:
         """Bounded cursor walk over a fills route.
 
@@ -163,13 +170,19 @@ class KalshiReadOnlyClient:
         fail-closed pagination rules rather than growing a second copy that can
         drift.
         """
-        remaining = self._config.max_fills if max_fills is None else max_fills
+        if unbounded:
+            # A budget and a completeness claim are mutually exclusive: a walk
+            # that stops early can never report `exhausted`, so asking for a
+            # complete history has to remove the budget rather than raise it.
+            remaining = math.inf
+        else:
+            remaining = self._config.max_fills if max_fills is None else max_fills
         per_page = self._config.page_limit if page_limit is None else page_limit
         cursor: str | None = None
         seen_cursors: set[str] = set()
 
         while remaining > 0:
-            params: dict[str, Any] = {"limit": min(per_page, remaining)}
+            params: dict[str, Any] = {"limit": int(min(per_page, remaining))}
             if cursor:
                 params["cursor"] = cursor
             payload = self._get(path, operation, params)
@@ -247,6 +260,7 @@ class KalshiReadOnlyClient:
         max_fills: int | None = None,
         page_limit: int | None = None,
         stats: WalkStats | None = None,
+        unbounded: bool = False,
     ) -> Iterator[dict[str, Any]]:
         """Yield raw fills from the archive, using the same cursor walk.
 
@@ -255,7 +269,12 @@ class KalshiReadOnlyClient:
         that cutoff whether or not it realises it.
         """
         yield from self._iter_fill_pages(
-            HISTORICAL_FILLS_PATH, "get_historical_fills", max_fills, page_limit, stats
+            HISTORICAL_FILLS_PATH,
+            "get_historical_fills",
+            max_fills,
+            page_limit,
+            stats,
+            unbounded,
         )
 
     def get_historical_cutoff(self) -> dict[str, Any]:

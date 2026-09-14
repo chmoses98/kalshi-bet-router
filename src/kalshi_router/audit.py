@@ -432,7 +432,10 @@ def _chain_fill_routes(
     "there was nothing older" is how a partial history gets promoted to a
     complete one, silently.
     """
-    yield from client.iter_fills(max_fills=max_fills, stats=live)
+    # A complete history and a fill budget are mutually exclusive, so
+    # --full-history walks to exhaustion and ignores max_fills entirely rather
+    # than making the operator guess a number large enough to be safe.
+    yield from client.iter_fills(stats=live, unbounded=True)
 
     try:
         client.get_historical_cutoff()
@@ -441,7 +444,7 @@ def _chain_fill_routes(
         evidence.cutoff_retrieved = False
 
     try:
-        yield from client.iter_historical_fills(max_fills=max_fills, stats=archive)
+        yield from client.iter_historical_fills(stats=archive, unbounded=True)
     except KalshiRouterError:
         evidence.historical_failed = True
 
