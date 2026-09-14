@@ -308,13 +308,24 @@ def test_a_full_history_walk_that_exhausts_both_routes_claims_complete(
     assert "HISTORY IS COMPLETE: True" in out
 
 
-def test_a_truncated_full_history_walk_still_refuses_to_claim_complete(
-    monkeypatch, local_env
-):
-    """Asking for a full history does not grant the claim; exhausting does."""
+def test_full_history_ignores_the_fill_budget_entirely(monkeypatch, local_env):
+    """A budget and a completeness claim are mutually exclusive.
+
+    --full-history used to be subject to the 1-500 max_fills cap, which made
+    COMPLETE unreachable by construction: a capped walk can never report
+    `exhausted`. It now walks to exhaustion and ignores the budget, rather than
+    making the operator guess a number large enough to be safe.
+    """
     install_fake_api(monkeypatch, SAMPLE)
     _, out, _ = run(["audit", "--full-history", "--max-fills", "1"])
-    assert "walk truncated (budget ran out): True" in out
+    assert "walk truncated (budget ran out): False" in out
+    assert "HISTORY IS COMPLETE: True" in out
+
+
+def test_a_bounded_audit_still_reports_its_budget_truncation(monkeypatch, local_env):
+    """The budget still applies, and is still reported, without --full-history."""
+    install_fake_api(monkeypatch, SAMPLE)
+    _, out, _ = run(["audit", "--max-fills", "1"])
     assert "HISTORY IS COMPLETE: False" in out
 
 

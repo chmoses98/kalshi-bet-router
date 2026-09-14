@@ -86,8 +86,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--full-history",
         action="store_true",
         help=(
-            "also walk the archive route, so the replay can claim a COMPLETE "
-            "history when both walks exhaust. Unbounded; off by default."
+            "walk both fill routes to EXHAUSTION so the replay can claim a "
+            "COMPLETE history. Ignores --max-fills, because a budget and a "
+            "completeness claim are mutually exclusive. Off by default."
         ),
     )
     audit.add_argument(
