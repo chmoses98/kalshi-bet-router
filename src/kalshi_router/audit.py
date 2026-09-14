@@ -279,7 +279,9 @@ def run_audit(
     # would understate classification quality by counting work never attempted
     # as work that failed, so it gets its own counter and is left out of the
     # classification totals entirely.
-    all_tickers = sorted({fill.ticker for fill in fills})
+    all_tickers = _classification_order(
+        sorted({fill.ticker for fill in fills}), replay
+    )
     report.unique_markets_observed = len(all_tickers)
     if max_classify_markets is not None and len(all_tickers) > max_classify_markets:
         tickers = all_tickers[:max_classify_markets]
@@ -609,6 +611,38 @@ def _probe_settlement_archive(
     rows = payload.get("settlements")
     if isinstance(rows, list):
         coverage.archive_first_page_rows = len(rows)
+
+
+def _classification_order(tickers: list[str], replay) -> list[str]:
+    """Order markets so a bounded metadata sweep sees the routable ones first.
+
+    The bound exists because metadata costs several requests per market and a
+    full history touches far more markets than a run can afford. Which markets
+    it skips was previously decided by alphabetical order, which has nothing to
+    do with routing -- so a run could spend its whole budget on markets that
+    could never be routed and conclude nothing about routing readiness. The
+    first shadow run did exactly that: 549 of the 747 routable episodes were
+    never classified, and the report could not say whether that was a
+    classification problem or a sampling one.
+
+    A market whose episode has an importable identity is the only kind that can
+    become a wager, so those go first. Within each group the original sorted
+    order is kept, so the choice stays deterministic and a re-run classifies the
+    same markets.
+
+    This changes only WHICH markets a bounded run looks at. An unbounded run
+    classifies all of them either way, and the arithmetic is untouched.
+    """
+    if replay is None:
+        return tickers
+    routable = {
+        episode.ticker for episode in replay.episodes if episode.is_importable
+    }
+    if not routable:
+        return tickers
+    return [t for t in tickers if t in routable] + [
+        t for t in tickers if t not in routable
+    ]
 
 
 def _markets_outside_settlement_evidence(replay) -> frozenset[str]:
