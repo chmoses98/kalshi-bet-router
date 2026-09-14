@@ -333,6 +333,37 @@ episode was closed on a payout its cost basis did not cover.
 settlement proves where an episode ended and identity is keyed on where it
 began. Closing is not importability.
 
+## Absence is only a gap when the replay still holds something
+
+The first full-history run (archive walked, 500 fills per route) reported:
+
+```
+absent from positions, EXPLAINED by a settlement: 464
+absent from positions, UNEXPLAINED:               423
+```
+
+423 was **over-reporting**, and the cause was this probe again. It flagged every
+replayed market missing from the positions response — including markets the
+replay itself had already closed to zero by trading. A market both sides agree
+is flat is **agreement**, not a gap.
+
+There are three legitimate ways to be absent from positions and only one that
+means missing history:
+
+| replay says | settlement exists | verdict |
+|---|---|---|
+| flat | either | **agreement** — both sides say the member holds nothing |
+| open | yes | **explained** — the exchange drops settled markets |
+| open | no | **the gap** — history is incomplete for that market |
+
+Flat is checked first, because once the replay is flat there is nothing left for
+a settlement to explain. A test asserts the three buckets partition the absent
+markets exactly, so a future fourth case cannot go uncounted.
+
+This is the same hazard as the 120 false `revenue`/`value` alarms: a check that
+cries wolf at volume gets loosened, and that is how a real fault later slips
+through.
+
 ## Still open
 
 * **`/historical/cutoff` response shape** is unverified against a live response.
