@@ -212,3 +212,89 @@ def test_settlements_are_applied_in_settled_time_order():
     )
     assert result.settlements_applied == 1
     assert result.settlements_without_a_position == 1
+
+
+# ============ a settlement proves the END, never the BEGINNING ==============
+
+def test_a_settled_episode_under_a_bounded_window_stays_provisional():
+    """Closing is not the same as being importable, and conflating them is the
+    defect this pins.
+
+    A settlement proves where an episode ENDED. Identity is keyed on where it
+    BEGAN, and a bounded window still cannot prove that -- back-filling older
+    fills could merge this episode into an older one and change its opening
+    fill. An importer that treated "settled" as "safe to import" would create a
+    wager whose identity later moves underneath it.
+    """
+    from kalshi_router.accounting.identity import ProvisionalIdentity
+
+    result = AccountingEngine().replay(
+        [normalize_fill(make_accounting_fill(index=1, quantity="10.00",
+                                             yes_price="0.5600"))],
+        HistoryCompleteness.BOUNDED_WINDOW,
+        settlements=[normalize_settlement(settlement_row())],
+    )
+    episode = result.ledger_for(SYNTH_TICKER, 0).episodes[0]
+    assert not episode.is_open                       # the settlement closed it
+    assert isinstance(episode.identity, ProvisionalIdentity)   # still not importable
+
+
+def test_the_same_episode_is_importable_once_history_is_complete():
+    from kalshi_router.accounting.identity import StableIdentity
+
+    result = AccountingEngine().replay(
+        [normalize_fill(make_accounting_fill(index=1, quantity="10.00",
+                                             yes_price="0.5600"))],
+        HistoryCompleteness.COMPLETE,
+        settlements=[normalize_settlement(settlement_row())],
+    )
+    episode = result.ledger_for(SYNTH_TICKER, 0).episodes[0]
+    assert not episode.is_open
+    assert isinstance(episode.identity, StableIdentity)
+
+
+def test_replaying_settlements_does_not_upgrade_history_completeness():
+    """The replay must not start claiming authority it has not earned."""
+    result = AccountingEngine().replay(
+        [normalize_fill(make_accounting_fill(index=1, quantity="10.00",
+                                             yes_price="0.5600"))],
+        HistoryCompleteness.BOUNDED_WINDOW,
+        settlements=[normalize_settlement(settlement_row())],
+    )
+    assert result.settlements_applied == 1
+    assert not result.claims_complete_position_state
+
+
+def test_the_fee_counter_counts_settlements_as_well_as_fills():
+    """A settlement carries its own fee, so it is a fee-bearing event too.
+
+    The counter used to be named for fills. Once settlements started producing
+    transitions it was reporting 352 against 200 fills -- a correct total under
+    a wrong label, which is the kind of number that gets mistrusted or, worse,
+    trusted for the wrong thing.
+    """
+    from kalshi_router.accounting.diagnostics import build_diagnostics
+
+    result = replay(
+        [make_accounting_fill(index=1, quantity="10.00", yes_price="0.5600",
+                              fee="0.0100")],
+        [settlement_row()],
+    )
+    diagnostics = build_diagnostics(result)
+    assert diagnostics.events_with_fee_field == 2      # one fill + one settlement
+    assert diagnostics.events_missing_fee_field == 0
+    assert "fee-bearing events (fills + settlements): 2" in diagnostics.render()
+
+
+def test_a_settlement_without_a_fee_is_counted_as_missing_not_zero():
+    from kalshi_router.accounting.diagnostics import build_diagnostics
+
+    row = settlement_row()
+    del row["fee_cost"]
+    result = replay(
+        [make_accounting_fill(index=1, quantity="10.00", yes_price="0.5600",
+                              fee="0.0100")],
+        [row],
+    )
+    diagnostics = build_diagnostics(result)
+    assert diagnostics.events_missing_fee_field == 1

@@ -305,6 +305,34 @@ That second limit is a property of the exchange's schema, not of this code, and
 it constrains any multi-subaccount future: settlement-aware accounting is only
 sound while a ticker is held in at most one subaccount.
 
+### Verified live
+
+Settlement replay, run against the same 200-fill window:
+
+```
+position episodes observed: 155
+  still open at end of window:   3     (was 155)
+  closed within window:        152     (was 0)
+  with complete cost basis:    155
+  with complete exchange fees: 155
+  provable from supplied history: 0
+  with an importable identity:    0
+
+settlements applied: 152
+  REFUSED, size disagreed with the replay:      3
+  REFUSED, ticker held in several subaccounts:  0
+```
+
+**152 of 155 episodes close, and the 3 still open are exactly the 3 refused** —
+their contracts were partly bought outside the window, so the settlement's size
+disagreed with the replay. The two numbers matching is not a coincidence, it is
+the fail-closed rule being exactly as conservative as the evidence requires: no
+episode was closed on a payout its cost basis did not cover.
+
+**Identity did not move.** `provable` and `importable` are still 0, because a
+settlement proves where an episode ended and identity is keyed on where it
+began. Closing is not importability.
+
 ## Still open
 
 * **`/historical/cutoff` response shape** is unverified against a live response.

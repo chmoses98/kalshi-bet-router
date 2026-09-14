@@ -124,6 +124,22 @@ requires proving the history before it is complete, which is Phase C's job —
 which is precisely why Phase E cannot ship a router ahead of Phase C, no matter
 how well-specified this contract is.
 
+### Settling an episode does not make it importable
+
+Settlement replay closes episodes, and it would be easy to read a closed episode
+as a finished, safe-to-import wager. It is not.
+
+**A settlement proves where an episode ENDED. Identity is keyed on where it
+BEGAN.** Back-filling older fills can still merge a settled episode into an
+older one and change its opening fill, so under a bounded window a settled
+episode is `closed` and *still* `ProvisionalIdentity`. An importer that treated
+"settled" as "safe to import" would create a wager whose identity later moves
+underneath it — the exact instability this split exists to prevent.
+
+Tests pin all three halves of that: settled-but-provisional under a bounded
+window, settled-and-stable under complete history, and that replaying
+settlements never upgrades the replay's own completeness claim.
+
 ## Open questions this contract does not yet answer
 
 * **A reduction that is not a close.** MLB's record has one stake and one payout.

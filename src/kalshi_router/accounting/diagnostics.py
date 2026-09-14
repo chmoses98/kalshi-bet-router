@@ -60,8 +60,11 @@ class AccountingDiagnostics:
     #: a future idempotent import.
     episodes_with_importable_identity: int = 0
 
-    fills_with_fee_field: int = 0
-    fills_missing_fee_field: int = 0
+    #: Counts every fee-bearing EVENT, not only fills: a settlement carries its
+    #: own fee_cost and is as much an economic event as an execution. Named for
+    #: what it counts, after settlement replay made "fills" wrong.
+    events_with_fee_field: int = 0
+    events_missing_fee_field: int = 0
     orders_with_complete_fees: int = 0
     orders_missing_fees: int = 0
     #: True when every replayed fill reported a fee, so the account-level total
@@ -121,8 +124,9 @@ class AccountingDiagnostics:
             f"    with ambiguous fee allocation (reversal): "
             f"{self.episodes_with_ambiguous_fee_allocation}",
             "",
-            f"  fills reporting a fee field: {self.fills_with_fee_field}",
-            f"  fills missing a fee field: {self.fills_missing_fee_field}",
+            f"  fee-bearing events (fills + settlements): "
+            f"{self.events_with_fee_field}",
+            f"  events missing a fee field: {self.events_missing_fee_field}",
             f"  accounting schema failures: {self.accounting_schema_failures}",
             f"  orders with complete fee data: {self.orders_with_complete_fees}",
             f"  orders with incomplete fee data: {self.orders_missing_fees}",
@@ -180,9 +184,9 @@ def build_diagnostics(result: AccountingResult) -> AccountingDiagnostics:
         name = counters[transition.kind]
         setattr(diagnostics, name, getattr(diagnostics, name) + 1)
         if transition.fee_dollars is None:
-            diagnostics.fills_missing_fee_field += 1
+            diagnostics.events_missing_fee_field += 1
         else:
-            diagnostics.fills_with_fee_field += 1
+            diagnostics.events_with_fee_field += 1
     diagnostics.fills_without_a_subaccount_number = sum(
         1 for ledger in result.ledgers.values() if ledger.subaccount_number is None
     )
