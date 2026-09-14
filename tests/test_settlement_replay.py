@@ -12,6 +12,7 @@ from decimal import Decimal
 import pytest
 
 from kalshi_router.accounting import AccountingEngine, HistoryCompleteness, TransitionKind
+from kalshi_router.accounting.position import PositionAuthority
 from kalshi_router.errors import SchemaError
 from kalshi_router.models import normalize_fill, normalize_settlement
 
@@ -250,6 +251,9 @@ def test_the_same_episode_is_importable_once_history_is_complete():
     )
     episode = result.ledger_for(SYNTH_TICKER, 0).episodes[0]
     assert not episode.is_open
+    # A settlement is an authoritative closure, so this episode's position story
+    # is earned without any exchange position view at all.
+    assert episode.authority is PositionAuthority.EXPLAINED_SETTLED
     assert isinstance(episode.identity, StableIdentity)
 
 
@@ -352,20 +356,30 @@ def test_an_unfamiliar_result_still_parses_rather_than_failing_closed():
 # no event that could ever close them.
 
 def test_a_contradicted_position_state_is_not_claimed_as_authoritative():
+    """One value, gated. Not a true object beside a false presentation.
+
+    This test used to assert exactly that contradiction -- the object reporting
+    True while the rendered line said False, under the same name. A machine
+    consumer reading as_dict() got the wrong answer, and only a human reading
+    the report got the right one.
+    """
     from kalshi_router.accounting.diagnostics import build_diagnostics
 
-    result = replay(
-        [make_accounting_fill(index=1, quantity="10.00", yes_price="0.5600")],
-        [],
-        completeness=HistoryCompleteness.COMPLETE,
+    result = AccountingEngine().replay(
+        [normalize_fill(make_accounting_fill(index=1, quantity="10.00",
+                                             yes_price="0.5600"))],
+        HistoryCompleteness.COMPLETE,
+        # The exchange reports nothing on this market and no settlement explains
+        # it: the replay's open position is contradicted.
+        exchange_positions={},
     )
     diagnostics = build_diagnostics(result)
-    assert diagnostics.claims_complete_position_state          # fills are complete
 
-    diagnostics.position_state_contradicted_by_exchange = True
-    rendered = diagnostics.render()
-    assert "position state claimed as authoritative: False" in rendered
-    assert "CONTRADICTED BY THE EXCHANGE" in rendered
+    assert diagnostics.fill_history_complete is True
+    assert diagnostics.claims_complete_position_state is False
+    assert diagnostics.as_dict()["claims_complete_position_state"] is False
+    assert "position state claimed as authoritative: False" in diagnostics.render()
+    assert "CONTRADICTED BY THE EXCHANGE" in diagnostics.render()
 
 
 def test_an_uncontradicted_complete_history_still_claims_authority():

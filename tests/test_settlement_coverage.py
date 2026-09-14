@@ -288,24 +288,27 @@ def test_without_a_floor_nothing_is_claimed_to_be_inside_the_evidence():
     assert not diagnostics.settlement_floor_applied
 
 
-def test_bounded_coverage_denies_authority_without_alleging_a_defect():
+def test_bounded_coverage_denies_authority_and_says_why():
+    # Coverage explains WHY an episode is stuck open; it never excuses the
+    # authority claim. There is one gated value, and it is False.
     diagnostics = build_diagnostics(replay_with_floor(at("2026-03-01T00:00:00Z")))
-    diagnostics.position_state_bounded_by_settlement_coverage = True
-    assert diagnostics.claims_complete_position_state
-    assert not diagnostics.position_state_contradicted_by_exchange
-    assert not diagnostics.position_state_is_authoritative
+    assert diagnostics.fill_history_complete
+    assert not diagnostics.claims_complete_position_state
+    assert not diagnostics.as_dict()["claims_complete_position_state"]
+    assert diagnostics.position_state_bounded_by_settlement_coverage
     rendered = diagnostics.render()
     assert "POSITION STATE IS BOUNDED BY SETTLEMENT COVERAGE" in rendered
-    assert "POSITION STATE IS CONTRADICTED" not in rendered
 
 
-def test_authority_needs_all_three_conditions():
-    diagnostics = build_diagnostics(replay_with_floor(at("2026-03-01T00:00:00Z")))
-    assert not diagnostics.position_state_is_authoritative  # bounded episodes
-    clean = build_diagnostics(replay_with_floor(at("2025-01-01T00:00:00Z")))
-    assert clean.position_state_is_authoritative
-    clean.position_state_contradicted_by_exchange = True
-    assert not clean.position_state_is_authoritative
+def test_a_coverage_bounded_episode_is_never_importable():
+    # The episode's opening is provable from a complete fill history, and that
+    # is still not enough: its position story is not earned.
+    episodes = by_ticker(replay_with_floor(at("2026-03-01T00:00:00Z")))
+    old = episodes[OLD_TICKER]
+    assert old.provable is True
+    assert old.authority_is_earned is False
+    assert old.is_importable is False
+    assert old.source_key is None
 
 
 # --------------------------------------------------- the reconciliation split

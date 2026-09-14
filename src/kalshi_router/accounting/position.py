@@ -93,6 +93,52 @@ class Direction(str, Enum):
     LONG_NO = "long_no"
 
 
+class PositionAuthority(str, Enum):
+    """Whether one episode's POSITION STORY is proven, and by what.
+
+    A complete walk of fills proves the fill history.  It does not, by itself,
+    prove the position story: fills say what was executed, and only the
+    exchange's own view -- a current position, or an authoritative closure --
+    says what the account actually holds now.
+
+    The first three states are EARNED.  The last three are not, and each is
+    unearned for a different reason, so they are kept apart rather than collapsed
+    into one "unknown".
+    """
+
+    #: The episode returned to flat by trading, inside a complete fill history.
+    #: Every fill that opened and closed it was observed, and the exchange's
+    #: current-position view has nothing to say about a span that already ended.
+    CLOSED_BY_FILLS = "closed_by_fills"
+    #: An authoritative settlement event closed it, with the exchange's own
+    #: payout and fee.
+    EXPLAINED_SETTLED = "explained_settled"
+    #: Still open, and the exchange reports the same net position on that market.
+    RECONCILED_CURRENT = "reconciled_current"
+
+    #: Still open, the exchange reports no such position, and no settlement
+    #: explains the closure.  The replay's inventory is contradicted.
+    UNEXPLAINED = "unexplained"
+    #: The exchange reports a position and it is not the one the replay computed
+    #: -- or a settlement named the market and disagreed about its size.
+    CONFLICTED = "conflicted"
+    #: Still open and NO exchange view was supplied, so nothing was checked.
+    #: Not a contradiction; not authority either.  Absence of a reconciliation is
+    #: not evidence of a successful one.
+    NOT_RECONCILED = "not_reconciled"
+
+
+#: The states in which a position story is proven.  Everything else is unearned,
+#: and unearned authority must never produce an importable identity.
+EARNED_AUTHORITY = frozenset(
+    {
+        PositionAuthority.CLOSED_BY_FILLS,
+        PositionAuthority.EXPLAINED_SETTLED,
+        PositionAuthority.RECONCILED_CURRENT,
+    }
+)
+
+
 def project_fill(fill: NormalizedFill) -> tuple[Decimal, Decimal | None]:
     """Project one fill onto the signed YES axis.
 
@@ -336,23 +382,44 @@ class PositionEpisode:
     #: True when :attr:`outcome_provable` was cleared by settlement coverage
     #: rather than by anything about the fills themselves.
     outcome_bounded_by_settlement_coverage: bool = False
+    #: Whether this episode's POSITION STORY is proven, and by what.  Defaults to
+    #: the unearned state: authority is granted by evidence, never assumed while
+    #: waiting for it.
+    authority: PositionAuthority = PositionAuthority.NOT_RECONCILED
 
     transitions: list[PositionTransition] = field(default_factory=list)
     order_ids: list[str] = field(default_factory=list)
 
     @property
-    def identity(self) -> Identity:
-        """Stable only when the opening boundary is provable from the history.
+    def authority_is_earned(self) -> bool:
+        """Whether reconciliation has proven this episode's position story."""
+        return self.authority in EARNED_AUTHORITY
 
-        A bounded window cannot prove where flat was, so back-filling older
-        fills can merge this episode into an older one and change or remove its
-        opening fill.  Such an episode therefore gets a
+    @property
+    def identity(self) -> Identity:
+        """Stable only when BOTH boundaries are proven.  Two gates, not one.
+
+        **The opening boundary**, from the fill history.  A bounded window cannot
+        prove where flat was, so back-filling older fills can merge this episode
+        into an older one and change or remove its opening fill.
+
+        **The position story**, from reconciliation.  A complete fill history
+        says what was executed; it does not say what the account holds.  An
+        episode the replay shows open while the exchange reports no such
+        position is contradicted, and a contradicted position must not hand a
+        downstream importer a stable key merely because every fill was seen.
+
+        Either gate failing yields a
         :class:`~kalshi_router.accounting.identity.ProvisionalIdentity`, which
-        carries no source key at all.
+        carries no source key at all -- so the refusal is structural, not a
+        boolean a caller has to remember to check.
         """
-        if not self.provable:
+        if not self.provable or not self.authority_is_earned:
             return ProvisionalIdentity(
-                debug_label=f"provisional:{self.ticker}:{self.opening_fill_id}"
+                debug_label=(
+                    f"provisional:{self.ticker}:{self.opening_fill_id}"
+                    f":{self.authority.value}"
+                )
             )
         return StableIdentity(
             episode_source_key(self.subaccount_number, self.ticker, self.opening_fill_id)

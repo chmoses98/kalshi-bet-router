@@ -602,6 +602,105 @@ the replay's settlements and once inside the reconciliation probe. Beyond the
 doubled cost, the two views could disagree if a settlement landed between them.
 One walk now serves both.
 
+## Authority is earned, in the data model rather than in the report
+
+C.14 found the right defect and fixed it in the wrong place. It suppressed the
+authority claim **in the rendered report**, by printing a gated expression:
+
+```python
+claims_complete_position_state and not position_state_contradicted_by_exchange
+```
+
+while `claims_complete_position_state` itself still derived from fill
+completeness alone — and `as_dict()` still exported that raw `True`. One true
+value and one false presentation, under a single name. A human reading the
+report got the right answer; every machine consumer got the wrong one.
+
+The same defect ran deeper. `provable` was also set from completeness alone, so
+a market the exchange contradicted still received a **stable, importable episode
+identity**. The gate a downstream importer would actually hit was wide open.
+
+### Three concepts, kept apart
+
+| Concept | Question | Answered by |
+|---|---|---|
+| `fill_history_complete` | Did both fill routes exhaust with nothing rejected? | the fill walks |
+| position authority | Does the replayed position reconcile with exchange truth? | positions + settlements |
+| episode importability | Is *this* episode proven enough for downstream use? | both gates together |
+
+The first is necessary for the other two and sufficient for neither.
+
+### One value, three surfaces
+
+`claims_complete_position_state` is now the **effective** claim: true only when
+the fill history is complete *and* every episode's position story has been
+earned. There is no second, ungated value anywhere. The object, `as_dict()` and
+the rendered report carry the same boolean, and a test asserts they can never
+disagree across reconciled, unexplained, conflicted, never-reconciled and
+closed-by-fills cases. The raw walk result survives under its own honest name,
+`fill_history_complete`, which grants nothing.
+
+### Per-episode authority
+
+Withholding the global claim must not destroy valid evidence, so authority is
+recorded per episode:
+
+| State | Meaning | Earned? |
+|---|---|---|
+| `CLOSED_BY_FILLS` | returned to flat by trading, every fill observed | yes |
+| `EXPLAINED_SETTLED` | an authoritative settlement closed it | yes |
+| `RECONCILED_CURRENT` | open, and the exchange reports the same net position | yes |
+| `UNEXPLAINED` | open, exchange reports nothing, no settlement explains it | no |
+| `CONFLICTED` | exchange truth and the replay disagree | no |
+| `NOT_RECONCILED` | open, and no exchange view was supplied | no |
+
+A closed episode is proven by the events that closed it — the exchange's
+current-position view has nothing to say about a span that already ended, since
+a settled market leaves that response entirely. An open episode is a claim about
+what the account holds *now*, and only the exchange can confirm that.
+
+`NOT_RECONCILED` is deliberately distinct from `UNEXPLAINED`: absence of a check
+is not the result of a check. Nothing was asked, so nothing was earned.
+
+### Importability is structural, not advisory
+
+`PositionEpisode.identity` now requires **both** gates: a provable opening *and*
+earned authority. Either failing yields a `ProvisionalIdentity`, which exposes no
+`source_key` or `source_id` attribute at all, so `require_importable_identity()`
+refuses it. A caller cannot bypass the gate by forgetting to read a warning
+boolean, because there is no key to read.
+
+Crucially, this is per-episode. One unexplained historical market withholds the
+account-level claim while leaving every reconciled market its identity — the
+evidence that *is* good is not thrown away to describe the evidence that is not.
+
+### Reconciliation moved before the replay
+
+It used to run afterwards and set a flag on the diagnostics. That ordering is
+what made the defect possible: a check that runs after the fact can only
+complain about an identity that already exists. The exchange's position view is
+now an **input** to the replay, and every authority flag is derived from the
+episodes themselves rather than set by the orchestrator.
+
+Two failure modes in reading that view fail closed:
+
+* a row whose ticker will not parse is dropped — a quantity with no market says
+  nothing about any market;
+* a row whose **quantity** will not parse is kept as `None`, not dropped.
+  Dropping it would make the market look *absent*, and absent is exactly how the
+  exchange reports a market it has settled — so a parse failure would read as a
+  contradiction nobody observed. `None` becomes `CONFLICTED`.
+
+One ticker held in two subaccounts is also `CONFLICTED`: the positions response
+carries no subaccount field, and attributing one reported quantity to one of two
+independent positions would merge them.
+
+### The governing principle
+
+> **A complete walk of fills proves the fill history. It does not, by itself,
+> prove the position story.** Position authority must be earned through
+> reconciliation with exchange state or an authoritative closure event.
+
 ## Still open
 
 * **`/historical/cutoff` response shape** is unverified against a live response.

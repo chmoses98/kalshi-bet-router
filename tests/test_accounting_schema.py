@@ -6,6 +6,7 @@ from decimal import Decimal
 
 import pytest
 
+from kalshi_router.accounting.position import PositionAuthority
 from kalshi_router.accounting import AccountingEngine, HistoryCompleteness
 from kalshi_router.accounting.position import project_fill
 from kalshi_router.errors import SchemaError
@@ -221,8 +222,15 @@ def test_same_ticker_in_two_subaccounts_never_nets_together():
 
 
 def test_two_subaccounts_produce_separate_episodes_with_distinct_identities():
+    # Distinct tickers, so each position reconciles against the exchange on its
+    # own and both earn an identity. The point under test is that the SUBACCOUNT
+    # is part of the key.
+    fills = [acct_fill(1, 0, ticker="KXSYNTH-A-1"), acct_fill(2, 7, ticker="KXSYNTH-A-2")]
     result = AccountingEngine().replay(
-        [acct_fill(1, 0), acct_fill(2, 7)], COMPLETE
+        fills,
+        COMPLETE,
+        exchange_positions={"KXSYNTH-A-1": Decimal("10.00"),
+                            "KXSYNTH-A-2": Decimal("10.00")},
     )
     episodes = result.episodes
     assert len(episodes) == 2
@@ -230,6 +238,22 @@ def test_two_subaccounts_produce_separate_episodes_with_distinct_identities():
     assert episodes[0].source_key != episodes[1].source_key
     assert "kalshi:episode:0:" in episodes[0].source_key
     assert "kalshi:episode:7:" in episodes[1].source_key
+
+
+def test_one_ticker_in_two_subaccounts_cannot_be_reconciled_and_fails_closed():
+    """The positions response carries no subaccount, so it cannot be split.
+
+    Attributing one reported quantity to one of two independent positions would
+    merge them, which is the failure the subaccount key exists to prevent. So
+    neither earns authority and neither exposes an identity.
+    """
+    fills = [acct_fill(1, 0), acct_fill(2, 7)]          # same ticker
+    result = AccountingEngine().replay(
+        fills, COMPLETE, exchange_positions={"KXSYNTH-A-1": Decimal("20.00")}
+    )
+    assert all(e.authority is PositionAuthority.CONFLICTED for e in result.episodes)
+    assert all(e.source_key is None for e in result.episodes)
+    assert result.claims_complete_position_state is False
 
 
 def test_a_close_in_one_subaccount_does_not_close_the_other():

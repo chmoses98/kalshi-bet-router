@@ -37,13 +37,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import Enum
-from typing import Iterable
+from typing import Iterable, Mapping
 
 from ..models import NormalizedFill, NormalizedSettlement
 from .execution import OrderAggregationStats, OrderExecution, aggregate_orders
 from .ordering import sort_fills
 from .position import (
+    EARNED_AUTHORITY,
     MarketLedger,
+    PositionAuthority,
     PositionEpisode,
     PositionTransition,
     SettlementRefusal,
@@ -106,14 +108,47 @@ class AccountingResult:
     #: shared epoch-second axis.  ``None`` when no trustworthy floor exists, in
     #: which case no episode is reclassified -- see :mod:`kalshi_router.coverage`.
     settlement_floor: Decimal | None = None
+    #: Whether the caller supplied the exchange's own current-position view.
+    #: Without it nothing was checked, and an unchecked open position is not an
+    #: authoritative one.
+    exchange_view_supplied: bool = False
 
     def ledger_for(self, ticker: str, subaccount: int | None = None) -> MarketLedger | None:
         return self.ledgers.get((subaccount, ticker))
 
     @property
-    def claims_complete_position_state(self) -> bool:
-        """True only when the replay can honestly assert the account's positions."""
+    def fill_history_complete(self) -> bool:
+        """Did both fill routes exhaust, with nothing rejected?
+
+        This is the RAW completeness of the fill walk and nothing more.  It is
+        necessary for position authority and nowhere near sufficient, so it is
+        named for what it measures rather than for what a reader might hope it
+        implies.
+        """
         return self.completeness is HistoryCompleteness.COMPLETE
+
+    @property
+    def claims_complete_position_state(self) -> bool:
+        """The EFFECTIVE authority claim -- the one machine consumers read.
+
+        A complete walk of fills proves the fill history.  It does not prove the
+        position story.  So this is true only when the fill history is complete
+        AND every episode's position story has been earned: closed by observed
+        fills, closed by an authoritative settlement, or reconciled against the
+        exchange's own current position.
+
+        One unexplained or conflicted market makes this False, because the claim
+        is about the account's position state as a whole and that state is then
+        partly unknown.  Per-episode authority is NOT destroyed with it -- see
+        :attr:`PositionEpisode.authority` -- so a reconciled market keeps its
+        importable identity while the global claim is withheld.
+
+        There is deliberately no second, ungated value under this name.  The
+        object, ``as_dict()`` and the rendered report all report this.
+        """
+        if not self.fill_history_complete:
+            return False
+        return all(e.authority in EARNED_AUTHORITY for e in self.episodes)
 
     @property
     def episodes(self) -> list[PositionEpisode]:
@@ -151,6 +186,7 @@ class AccountingEngine:
         completeness: HistoryCompleteness = HistoryCompleteness.BOUNDED_WINDOW,
         settlements: Iterable[NormalizedSettlement] | None = None,
         settlement_floor: Decimal | None = None,
+        exchange_positions: Mapping[str, Decimal | None] | None = None,
     ) -> AccountingResult:
         """Build the full accounting view from a fill set.
 
@@ -201,7 +237,46 @@ class AccountingEngine:
         if settlements:
             self._apply_settlements(result, settlements)
         self._mark_settlement_coverage(result, settlement_floor)
+        self._assign_authority(result, exchange_positions)
         return result
+
+    @staticmethod
+    def _assign_authority(
+        result: AccountingResult,
+        exchange_positions: Mapping[str, Decimal | None] | None,
+    ) -> None:
+        """Decide, per episode, whether its position story is proven and by what.
+
+        A CLOSED episode is proven by the events that closed it: a settlement is
+        the exchange's own closure, and a close by fills is fully observed inside
+        the history. The exchange's current-position view has nothing to say
+        about a span that already ended -- a settled market leaves that response
+        entirely -- so it is not consulted for them.
+
+        An OPEN episode is a claim about what the account holds NOW, and only the
+        exchange can confirm that. Every way of failing to confirm it is kept
+        distinct, because they call for different responses: a contradiction is a
+        defect, a conflict is a reconciliation failure, and an absent exchange
+        view is simply a question never asked.
+        """
+        result.exchange_view_supplied = exchange_positions is not None
+
+        held_in: dict[str, int] = {}
+        for _subaccount, ticker in result.ledgers:
+            held_in[ticker] = held_in.get(ticker, 0) + 1
+
+        for ledger in result.ledgers.values():
+            for episode in ledger.episodes:
+                if not episode.is_open:
+                    episode.authority = (
+                        PositionAuthority.EXPLAINED_SETTLED
+                        if _closed_by_settlement(episode)
+                        else PositionAuthority.CLOSED_BY_FILLS
+                    )
+                    continue
+                episode.authority = _open_episode_authority(
+                    result, ledger, exchange_positions, held_in
+                )
 
     @staticmethod
     def _mark_settlement_coverage(
@@ -286,6 +361,42 @@ class AccountingEngine:
                 continue
             result.transitions.append(transition)
             result.settlements_applied += 1
+
+
+def _closed_by_settlement(episode: PositionEpisode) -> bool:
+    return any(t.kind is TransitionKind.SETTLE for t in episode.transitions)
+
+
+def _open_episode_authority(
+    result: AccountingResult,
+    ledger: MarketLedger,
+    exchange_positions: Mapping[str, Decimal | None] | None,
+    held_in: dict[str, int],
+) -> PositionAuthority:
+    ticker = ledger.ticker
+    if ticker in result.tickers_with_settlement_evidence:
+        # A settlement named this market and could not be applied. The exchange
+        # says the market ended; the replay still holds it. That is a
+        # disagreement with exchange truth, not an unasked question.
+        return PositionAuthority.CONFLICTED
+    if exchange_positions is None:
+        return PositionAuthority.NOT_RECONCILED
+    if ticker not in exchange_positions:
+        return PositionAuthority.UNEXPLAINED
+    if held_in.get(ticker, 0) > 1:
+        # The positions response carries no subaccount, so a reported quantity
+        # cannot be attributed to one of several independent positions.
+        # Attributing it anyway would merge them.
+        return PositionAuthority.CONFLICTED
+    reported = exchange_positions[ticker]
+    if reported is None:
+        # The exchange named the market but its quantity would not parse.
+        # That is a failure to compare, not a comparison that succeeded -- and
+        # treating it as absence would report a contradiction we did not observe.
+        return PositionAuthority.CONFLICTED
+    if reported == ledger.position:
+        return PositionAuthority.RECONCILED_CURRENT
+    return PositionAuthority.CONFLICTED
 
 
 def _count_refusal(result: AccountingResult, refusal: SettlementRefusal) -> None:
