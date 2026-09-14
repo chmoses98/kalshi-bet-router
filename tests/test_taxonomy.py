@@ -132,3 +132,72 @@ def test_three_way_collision_is_still_one_ambiguous_competition():
     assert taxonomy.sport_for_competition("Shared") is None
     assert taxonomy.collision_count == 1
     assert taxonomy.competition_count == 0
+
+
+# ================= object-shaped competitions (the live shape) ===============
+#
+# The live endpoint sends `competitions` as an OBJECT, not a list:
+#
+#     inner keys observed: competitions:object, scopes:list[str]
+#
+# A reader that only walked lists found nothing, which is why three live runs
+# reported 22 sports and 0 competitions.
+
+def test_object_shaped_competitions_are_read():
+    taxonomy = parse_filters_by_sport({
+        "filters_by_sports": {
+            "Baseball": {"competitions": {"MLB": {}, "NPB": {}}, "scopes": ["Game"]},
+            "Football": {"competitions": {"NFL": {}}},
+        }
+    })
+    assert taxonomy.competition_count == 3
+    assert taxonomy.sport_for_competition("MLB") == "baseball"
+    assert taxonomy.sport_for_competition("NFL") == "football"
+
+
+def test_list_shaped_competitions_still_work():
+    """Both shapes are read, so the parser does not depend on which arrives."""
+    taxonomy = parse_filters_by_sport({
+        "filters_by_sports": {"Baseball": {"competitions": ["MLB", "NPB"]}}
+    })
+    assert taxonomy.competition_count == 2
+    assert taxonomy.sport_for_competition("MLB") == "baseball"
+
+
+def test_a_name_nested_inside_the_object_value_is_also_read():
+    taxonomy = parse_filters_by_sport({
+        "filters_by_sports": {
+            "Baseball": {"competitions": {"mlb": {"name": "Major League Baseball"}}}
+        }
+    })
+    assert taxonomy.sport_for_competition("Major League Baseball") == "baseball"
+    assert taxonomy.sport_for_competition("mlb") == "baseball"
+
+
+def test_object_shape_still_fails_closed_on_a_collision():
+    """Over-reading names cannot produce a WRONG sport, only no sport."""
+    taxonomy = parse_filters_by_sport({
+        "filters_by_sports": {
+            "Baseball": {"competitions": {"Shared Cup": {}}},
+            "Football": {"competitions": {"Shared Cup": {}}},
+        }
+    })
+    assert taxonomy.sport_for_competition("Shared Cup") is None
+    assert taxonomy.is_ambiguous_competition("Shared Cup")
+    assert taxonomy.collision_count == 1
+
+
+def test_an_unknown_competition_resolves_to_none_not_a_guess():
+    taxonomy = parse_filters_by_sport({
+        "filters_by_sports": {"Baseball": {"competitions": {"MLB": {}}}}
+    })
+    assert taxonomy.sport_for_competition("Some Unlisted League") is None
+
+
+def test_the_shape_diagnostic_describes_an_object_valued_key():
+    taxonomy = parse_filters_by_sport({
+        "filters_by_sports": {"Baseball": {"competitions": {"MLB": {}}, "scopes": ["Game"]}}
+    })
+    assert taxonomy.observed_key_kinds["competitions"] == "object"
+    assert taxonomy.observed_key_kinds["scopes"] == "list[str]"
+    assert "competitions_value_object" in taxonomy.observed_entry_keys
