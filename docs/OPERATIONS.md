@@ -168,7 +168,19 @@ always holds exactly *main plus everything not yet recorded* — content that is
 a function of the account, not of when the job ran.
 
 The router never pushes to the destination's `main`. The force-with-lease goes
-only onto its own branch, whose previous tip is this job's own earlier output.
+only onto its own branch, whose previous tip is this job's own earlier output —
+and it carries an **explicit expected value**, because a bare
+`--force-with-lease` does not work from a `--depth 1` clone. That clone is
+single-branch, so there is no remote-tracking ref for the router's own branch
+and git rejects the push as *stale info*. The first run succeeds (nothing to
+lease against yet) and every run after it fails, which is a failure shape worth
+naming: it would have looked correct exactly once.
+
+Fetching the branch is necessary and not sufficient — with the ref present the
+lease still cannot infer an expectation for a local branch with no upstream —
+so the expectation is stated outright, with an empty value meaning "must not
+exist yet". Measured on a real shallow clone, including a check that the lease
+still refuses when a second clone moves the branch in between.
 
 A run that pushes the branch but cannot open the pull request **fails**, and
 says so: the wagers exist but are not recorded, and that is not a success.
