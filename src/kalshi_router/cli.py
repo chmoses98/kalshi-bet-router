@@ -482,6 +482,25 @@ def _run_backfill(args, client, out, err) -> int:
     return EXIT_OK
 
 
+def _walk_settlements(client) -> list:
+    """Every settlement the exchange will hand over, normalized. Nothing else.
+
+    A row this router cannot read is SKIPPED rather than raising: one
+    uninterpretable settlement out of thousands should cost that settlement,
+    not the whole pass -- and a wager whose settlement was skipped simply stays
+    unsettled, which is a state the destinations already model.
+    """
+    from .models import SchemaError, normalize_settlement
+
+    settlements = []
+    for raw in client.iter_settlements():
+        try:
+            settlements.append(normalize_settlement(raw))
+        except SchemaError:
+            continue
+    return settlements
+
+
 def _run_settle(args, client, out, err) -> int:
     """Attribute the exchange's settlements to the gap window's wagers.
 
@@ -515,15 +534,28 @@ def _run_settle(args, client, out, err) -> int:
         print(f"settlement window: {exc}", file=err)
         return EXIT_CONFIG
 
+    # THE SETTLEMENTS ARE WALKED DIRECTLY, NOT THROUGH reconcile=True.
+    #
+    # That flag is the accounting engine's switch, and it buys four things:
+    # an unbounded settlements walk, two archive-reach probes, and the whole
+    # position view -- because the REPLAY needs all of them to decide whether a
+    # market ever closed. This command reads none of it. It needs the
+    # settlements and nothing else, and it already knows which wagers it is
+    # attributing them to.
+    #
+    # Measured: the first settlement run spent over half an hour in that branch
+    # against a 45-minute job timeout, while the wager pass over the same window
+    # took four minutes. Two walks instead of two walks plus a replay, two
+    # probes and a position fetch.
     try:
         result = run_audit(
             client,
             max_fills=None,
             full_history=True,
-            reconcile=True,          # settlements are only walked when asked for
             backfill_window=window,
             now=Decimal(int(time.time())),
         )
+        settlements_walked = _walk_settlements(client)
     except KalshiRouterError as exc:
         print(f"settlement pass failed: {type(exc).__name__}: {exc}", file=err)
         return EXIT_API
@@ -536,7 +568,7 @@ def _run_settle(args, client, out, err) -> int:
     # Latest settlement per ticker. A market settles once, so a second row for
     # one ticker is a re-observation rather than a second event; taking the
     # last keeps the most recently reported state without merging two.
-    by_ticker = {s.ticker: s for s in result.settlements}
+    by_ticker = {s.ticker: s for s in settlements_walked}
 
     settlements = settle_batch(wagers, by_ticker)
 
