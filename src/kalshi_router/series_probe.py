@@ -87,6 +87,11 @@ class SeriesProbeResult:
     #: Set when the series exists but its metadata names a DIFFERENT sport.
     contradicted: bool = False
     note: str = ""
+    #: What the series object actually carried, so a run that corroborates
+    #: NOTHING can be told apart from a probe reading the wrong fields. These
+    #: are public catalogue values, the same class this project already prints
+    #: as "settlement keys observed".
+    observed: str = ""
 
     @property
     def promotable(self) -> bool:
@@ -129,6 +134,8 @@ class SeriesProbeReport:
             detail = f" via {r.evidence_field}" if r.evidence_field else ""
             note = f"  ({r.note})" if r.note else ""
             lines.append(f"  {r.ticker:<18} {r.expected.value:<7} {state}{detail}{note}")
+            if r.observed and not r.promotable:
+                lines.append(f"      observed: {r.observed}")
         return "\n".join(lines)
 
 
@@ -173,6 +180,10 @@ def probe_series(client, candidates: dict[str, Sport]) -> SeriesProbeReport:
 
         result.exists = True
         result.http_status = 200
+        result.observed = "; ".join(
+            f"{name.removeprefix('series.')}={text[:48]!r}"
+            for name, text in _metadata_tokens(series)
+        ) or f"no readable text fields; keys present: {','.join(sorted(series))[:120]}"
 
         # Corroboration is checked against EVERY sport, not just the expected
         # one, so a series whose metadata names a different sport is reported
