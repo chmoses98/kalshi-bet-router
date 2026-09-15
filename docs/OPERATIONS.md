@@ -219,7 +219,7 @@ failure, because that is a defect rather than a refusal.
 
 | Sport | Status | Why |
 |---|---|---|
-| **MLB** | **PRODUCTION** | The only destination with an importer. Delivery is scheduled, and the round trip through that importer is proven. Nothing has been delivered yet because nothing has been eligible yet. |
+| **MLB** | **ARMED** (see below) | The only destination with an importer. Every step of the delivery path is proven; the schedule itself has not yet been observed to fire. Nothing has been delivered because nothing has been eligible. |
 | **NFL** | **DISABLED** | `nfl_edge.handicap.schema.Execution` cannot stand alone — it requires a parent `recommendation_id`. A Kalshi execution proves a bet was placed, not that anything recommended it, so synthesizing a parent would be exactly the fabricated provenance this system must not produce. |
 | **CFB** | **DISABLED** | `tests/test_no_recommendation_surface.py` mechanically forbids any symbol containing `stake` across the CFB packages. A wager ledger cannot exist there without deleting that test — and recording a CFB wager would not promote the CFB model in any case. |
 | **TENNIS** | **DISABLED** | `Opportunity.__post_init__` raises *"authority is fixed: this object cannot express a real wager"*. Its schema is research-authority only. |
@@ -228,6 +228,38 @@ Three of the four destinations mechanically refuse to hold a wager. That is
 their decision, enforced by their own tests, and this system routes to none of
 them. `WagerRefusal.NO_DESTINATION_IMPORTER` is the refusal, and it is reported
 as `NOT_ROUTABLE` rather than as a fault.
+
+## The schedule has not been observed to fire
+
+Stated plainly because the alternative is a document that says "production" on
+the strength of a `cron:` line nobody has seen run.
+
+The cron went live on `main` at about 01:19Z on 2026-09-15. By 02:07Z three
+`*/15` boundaries had passed and **no run with `event=schedule` existed**.
+
+Every cause that can be checked from here has been ruled out:
+
+| Cause | Checked |
+|---|---|
+| workflow disabled | `state: active` |
+| cron not on the default branch | `default_branch: main`, and the cron is on `main` |
+| repository is a fork (schedules off by default) | `fork: false` |
+| archived or disabled repository | both `false` |
+| inactive repository (schedules are suspended after 60 days) | `pushed_at` is minutes old |
+
+What remains is GitHub's own scheduler, which deprioritizes high-frequency
+crons on public repositories and can delay a newly added one substantially.
+That is an explanation, not a verification, and it is recorded as such.
+
+**What this does and does not mean.** Every step the schedule would perform is
+independently proven: the payload build, the destination clone, the importer
+round trip (`NEW` → `DUPLICATE_NOOP` → `CONFLICT`), the receipts summary, the
+`data/` guard, the branch, the lease, the credential helper, and the
+pull-request permission on all four destinations. What is unproven is only that
+GitHub will start it on a timer.
+
+Until a scheduled run is observed, MLB is **ARMED** rather than **PRODUCTION**,
+and `workflow_dispatch` remains available as the manual path.
 
 ## Privacy
 
