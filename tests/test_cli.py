@@ -26,14 +26,22 @@ def local_env(monkeypatch, fake_private_key_pem):
 
 
 def install_fake_api(monkeypatch, pages, metadata=None, taxonomy=None):
-    """Replace the client's transport so no network call is ever made."""
+    """Replace the client's transport so no network call is ever made.
+
+    Returns the list the created transports are appended to, so a test can
+    assert on WHICH ROUTES a command walked. That is a fact about the command;
+    a stopwatch assertion would be a flake.
+    """
     handler = paged_fills_handler(
         pages,
         metadata if metadata is not None else build_metadata(),
         taxonomy=taxonomy,
     )
+    transports = []
 
     def factory(signer, config):
+        transport = FakeTransport(handler)
+        transports.append(transport)
         return KalshiReadOnlyClient(
             signer=signer,
             config=AuditConfig(
@@ -42,11 +50,12 @@ def install_fake_api(monkeypatch, pages, metadata=None, taxonomy=None):
                 page_limit=config.page_limit,
                 max_retries=0,
             ),
-            transport=FakeTransport(handler),
+            transport=transport,
             sleep=lambda _: None,
         )
 
     monkeypatch.setattr(cli, "KalshiReadOnlyClient", factory)
+    return transports
 
 
 def run(argv):
@@ -936,3 +945,35 @@ def test_the_settlement_report_never_prints_a_payout(monkeypatch, local_env, tmp
     assert IMPORTABLE_MARKET not in out
     for token in SENSITIVE_TOKENS:
         assert token not in out
+
+
+def test_the_settlement_pass_walks_only_what_it_reads(monkeypatch, local_env, tmp_path):
+    """`reconcile=True` is the ACCOUNTING ENGINE's switch, not this command's.
+
+    It buys an unbounded settlements walk, two archive-reach probes and the
+    whole position view, because the REPLAY needs all of them to decide whether
+    a market ever closed. `settle` reads none of that -- it needs the
+    settlements and already knows which wagers it is attributing them to.
+
+    Measured: the first settlement run spent over half an hour in that branch
+    against a 45-minute job timeout, while the wager pass over the same window
+    took four minutes.
+
+    Asserted on the ROUTES REQUESTED rather than on a stopwatch, because a
+    timing assertion in CI is a flake and a route assertion is a fact.
+    """
+    transports = install_fake_api(
+        monkeypatch, IMPORTABLE_WINDOW, metadata=importable_metadata()
+    )
+
+    code, out, err = run([
+        "settle", "--since", "2026-09-11T00:00:00Z", "--destination", "MLB",
+    ])
+
+    assert code == cli.EXIT_OK, err
+    paths = [p for transport in transports for p in transport.paths]
+    assert paths, "no route was walked at all; this test would prove nothing"
+    assert any("settlements" in p for p in paths), "the settlements route was never walked"
+    assert not any("positions" in p for p in paths), (
+        f"the position view is fetched but never read: {sorted({p.split('?')[0] for p in paths})}"
+    )
