@@ -116,6 +116,73 @@ def write_backfill_payloads(wagers, out_dir: str, import_batch_id: str, allowed_
     )
 
 
+def write_settlement_payloads(settlements, out_dir: str, allowed_sports_by_key: dict) -> dict[str, int]:
+    """One settlement payload per destination, and counts only.
+
+    Grouped by the SPORT OF THE WAGER each settlement belongs to, which the
+    caller supplies as ``{source_bet_key: sport}``. This function does not
+    classify anything: a settlement carries a market ticker, and deciding a
+    sport from a ticker is exactly the inference this system refuses. The wager
+    it settles was already classified on Kalshi's own competition evidence, so
+    that answer is reused rather than re-derived from something weaker.
+
+    A settlement whose wager is not in that map is REFUSED rather than dropped:
+    it is a payout with no home, and sending it to a destination chosen by
+    guesswork is worse than not sending it.
+    """
+    import json
+    import os
+
+    grouped: dict[str, list] = {}
+    for settlement in settlements:
+        sport = allowed_sports_by_key.get(settlement.source_bet_key)
+        if sport is None:
+            raise ValueError(
+                "a settlement reached delivery for a wager whose sport is not "
+                "known; its destination would have to be guessed"
+            )
+        grouped.setdefault(sport, []).append(settlement)
+
+    os.makedirs(out_dir, exist_ok=True)
+    counts: dict[str, int] = {}
+    for sport, rows in sorted(grouped.items()):
+        rows.sort(key=lambda row: row.source_bet_key)
+        payload = {"settlements": [_settlement_row(row) for row in rows]}
+        path = os.path.join(out_dir, f"{sport}-settlements.json")
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+        counts[sport] = len(rows)
+    return counts
+
+
+def _settlement_row(settlement) -> dict:
+    """One settlement in the shape both destinations' importers accept.
+
+    Money crosses to float here because that is what the destination schemas
+    declare. Every value was computed in Decimal and is converted once, at this
+    boundary. A figure the router refused stays None -- never zero, which is a
+    settlement that paid nothing and a different claim entirely.
+    """
+    return {
+        "source_bet_key": settlement.source_bet_key,
+        "market_ticker": settlement.market_ticker,
+        "side": settlement.side,
+        "settlement_status": settlement.settlement_status,
+        "settled_at": settlement.settled_at,
+        "result": settlement.result,
+        "gross_return": (
+            None if settlement.gross_return is None else float(settlement.gross_return)
+        ),
+        "net_profit_loss": (
+            None if settlement.net_profit_loss is None
+            else float(settlement.net_profit_loss)
+        ),
+        "refusals": list(settlement.refusals),
+        "venue": "kalshi",
+    }
+
+
 def _write_payloads(wagers, out_dir: str, *, import_batch_id: str, allowed_sports, why: str) -> dict[str, int]:
     """One importer payload per destination, each in that destination's words.
 

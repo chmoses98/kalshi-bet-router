@@ -124,6 +124,11 @@ class AuditResult:
     #: SENSITIVE: the eligible wagers themselves. Written to a payload file for
     #: the destination importer and never rendered.
     production_wagers: tuple = ()
+    #: SENSITIVE: the normalized settlements this run walked. Each carries a
+    #: ticker and a payout, so they are handled exactly like the wagers above --
+    #: written to a payload file for a destination importer, never rendered.
+    #: Empty unless reconciliation was asked for, because the walk is unbounded.
+    settlements: tuple = ()
     details: tuple[SensitiveDetail, ...] = ()
     _classifications: dict[str, Classification] = field(default_factory=dict, repr=False)
 
@@ -510,6 +515,7 @@ def run_audit(
         finality=finality_evidence,
         production=production_diagnostics,
         production_wagers=tuple(production_wagers),
+        settlements=tuple(settlements),
         accounting=accounting,
         coverage=coverage,
         history=history_evidence,
