@@ -414,3 +414,103 @@ def test_delivery_keeps_one_sports_failure_from_rolling_back_another(deliver_tex
 
 def test_the_audit_workflow_still_never_receives_the_downstream_credential():
     assert DOWNSTREAM_SECRET not in AUDIT_WORKFLOW.read_text()
+
+
+# ============ Phase 6: the historical shadow comparison ======================
+#
+# It holds the KALSHI credential and reads the owner's complete betting
+# history, but it has no reason to write anywhere -- so these tests pin that it
+# cannot, and that nothing it prints can name a market.
+
+COMPARE_WORKFLOW = ROOT / ".github/workflows/historical-shadow-compare.yml"
+
+
+@pytest.fixture(scope="module")
+def compare() -> dict:
+    return load(COMPARE_WORKFLOW)
+
+
+@pytest.fixture(scope="module")
+def compare_text() -> str:
+    return strip_comments(COMPARE_WORKFLOW.read_text())
+
+
+def test_the_comparison_never_receives_the_downstream_credential():
+    """It validates. It does not deliver. So it gets no write credential."""
+    assert DOWNSTREAM_SECRET not in COMPARE_WORKFLOW.read_text()
+
+
+def test_the_comparison_is_dispatch_only(compare):
+    assert set(triggers(compare)) == {"workflow_dispatch"}
+
+
+def test_the_comparison_holds_read_only_permissions(compare):
+    assert compare["permissions"] == {"contents": "read"}
+
+
+def test_the_comparison_clones_the_ledger_without_a_credential(compare_text):
+    """A public clone. A token in this step would be a token that can push."""
+    assert "https://github.com/chmoses98/edge-finder-api" in compare_text
+    for pattern in ("x-access-token", "credential.helper", "extraheader", "@github.com"):
+        assert pattern not in compare_text
+
+
+def test_the_comparison_never_pushes_or_commits(compare_text):
+    for verb in ("git push", "git commit", "git add", "create_pull_request", "gh pr"):
+        assert verb not in compare_text
+
+
+def test_the_comparison_never_requests_sensitive_details(compare_text):
+    assert "--show-sensitive-details" not in compare_text
+
+
+def test_the_comparison_uploads_no_artifact(compare_text):
+    """The ledger clone and the replay both hold the owner's betting history."""
+    assert "upload-artifact" not in compare_text
+
+
+def test_the_comparison_walks_the_full_history(compare_text):
+    """A truncated walk would report the truncation as disagreement."""
+    assert "--full-history" in compare_text
+    assert "--shadow-wagers" in compare_text
+    assert "--compare-ledger" in compare_text
+
+
+# ---- and the enumeration, so a future workflow is covered by default --------
+
+
+def kalshi_credentialed_workflows() -> list[Path]:
+    return [p for p in workflow_files() if "KALSHI_PRIVATE_KEY" in p.read_text()]
+
+
+def test_there_is_at_least_one_kalshi_credentialed_workflow():
+    """Guards the enumeration below against silently testing nothing."""
+    assert kalshi_credentialed_workflows()
+
+
+@pytest.mark.parametrize(
+    "path", kalshi_credentialed_workflows(), ids=lambda p: p.name
+)
+def test_no_kalshi_workflow_ever_requests_sensitive_details(path):
+    """--show-sensitive-details prints individual markets. Never in Actions.
+
+    The CLI refuses it in CI anyway; this is the second lock, on the side that
+    a code change cannot quietly move.
+    """
+    assert "--show-sensitive-details" not in strip_comments(path.read_text())
+
+
+@pytest.mark.parametrize(
+    "path", kalshi_credentialed_workflows(), ids=lambda p: p.name
+)
+def test_no_kalshi_workflow_uploads_an_artifact(path):
+    """Every one of these holds the owner's betting activity in memory."""
+    assert "upload-artifact" not in path.read_text()
+
+
+@pytest.mark.parametrize(
+    "path", kalshi_credentialed_workflows(), ids=lambda p: p.name
+)
+def test_every_kalshi_workflow_refuses_to_run_off_main(path):
+    """A credentialed workflow must not be runnable from an arbitrary ref."""
+    assert "refs/heads/main" in path.read_text()

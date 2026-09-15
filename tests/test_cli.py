@@ -444,3 +444,60 @@ def test_deliver_walks_without_a_sampling_ceiling(tmp_path):
     # The parsed namespace says "no budget"; the config supplies a default only
     # so the client has a legal shape.
     assert args.max_fills is None
+
+
+# ---------------------------------------------------------------------------
+# Phase 6: the historical shadow comparison is validation, never backfill.
+# ---------------------------------------------------------------------------
+
+
+def test_compare_ledger_without_shadow_wagers_is_refused(monkeypatch, local_env, tmp_path):
+    """Comparing against an empty set would read as total disagreement."""
+    ledger = tmp_path / "bets.jsonl"
+    ledger.write_text("", encoding="utf-8")
+    install_fake_api(monkeypatch, SAMPLE)
+
+    code, out, err = run(["audit", "--compare-ledger", str(ledger)])
+
+    assert code == cli.EXIT_CONFIG
+    assert "--shadow-wagers" in err
+    assert "COMPARISON" not in out
+
+
+def test_compare_ledger_reports_counts_and_names_no_market(monkeypatch, local_env, tmp_path):
+    ledger = tmp_path / "bets.jsonl"
+    ledger.write_text(
+        json.dumps(
+            {
+                "marketTicker": market_for("MLB"),
+                "side": "YES",
+                "stake": 5.0,
+                "entryPrice": 0.5,
+                "result": "WIN",
+                "sport": "MLB",
+                "platform": "KALSHI",
+                "recordStatus": "ACTIVE",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    install_fake_api(monkeypatch, SAMPLE)
+
+    code, out, err = run(
+        ["audit", "--shadow-wagers", "--compare-ledger", str(ledger)]
+    )
+
+    assert code == cli.EXIT_OK, err
+    assert "HISTORICAL SHADOW COMPARISON" in out
+    assert "ledger rows read: 1" in out
+    # The ledger row it just read names a real market. That must not reach the log.
+    assert market_for("MLB") not in out
+    for token in SENSITIVE_TOKENS:
+        assert token not in out
+
+
+def test_no_comparison_section_appears_without_the_flag(monkeypatch, local_env):
+    install_fake_api(monkeypatch, SAMPLE)
+    _, out, _ = run(["audit", "--shadow-wagers"])
+    assert "HISTORICAL SHADOW COMPARISON" not in out
