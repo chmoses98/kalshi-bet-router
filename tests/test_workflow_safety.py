@@ -1129,3 +1129,49 @@ def test_the_helper_reads_the_token_at_invocation_not_at_configuration(path, tmp
         capture_output=True, text=True, env=env,
     )
     assert "password=TOKEN-UNDER-TEST" in filled.stdout, filled.stderr
+
+
+@pytest.mark.parametrize("name,text", _delivering_workflow_texts(), ids=lambda v: v if isinstance(v, str) and len(v) < 40 else "")
+def test_the_dry_run_prints_a_diffstat_never_the_diff(name, text):
+    """One word is the difference between a count and a publication.
+
+    The dry-run branch shows what the import changed. With --stat that is:
+
+        data/edgelab/bets/bets.jsonl | 1 +
+        1 file changed, 1 insertion(+)
+
+    Without it, the same command prints the added ledger lines -- ticker,
+    stake, entry price, source key -- into a PUBLIC Actions log. Measured on a
+    scratch repository, not assumed.
+
+    The workflow is correct today. Nothing was stopping it from stopping being
+    correct.
+    """
+    import re
+
+    joined = text.replace("\\\n", " ")
+    # Match a git DIFF COMMAND, not any line containing both words -- the pull
+    # request body says "the rows are in the diff" and the API host contains
+    # "git", and the first draft of this test flagged both.
+    invocation = re.compile(r"(?:^|\$\()\s*git\b[^|;]*?\sdiff\b")
+    diffs = [
+        line for line in joined.splitlines()
+        if invocation.search(line) and "--cached --name-only" not in line
+    ]
+    assert diffs, f"{name} shows the dry run nothing at all"
+    for line in diffs:
+        assert "--stat" in line, (
+            f"{name}: this would print the wager rows themselves: {line.strip()}"
+        )
+
+
+@pytest.mark.parametrize("name,text", _delivering_workflow_texts(), ids=lambda v: v if isinstance(v, str) and len(v) < 40 else "")
+def test_no_command_in_the_delivery_step_cats_the_ledger(name, text):
+    """The payload and the ledger both carry the owner's betting activity.
+
+    A `cat`, a `head`, or a `jq .` over either would put it in the log as
+    surely as a bad diff. None of them has any business here.
+    """
+    joined = text.replace("\\\n", " ")
+    for forbidden in ("cat ${payload}", "cat \"${payload}\"", "jq . ", "head ", "tail "):
+        assert forbidden not in joined, f"{name} would print a payload or ledger: {forbidden}"
