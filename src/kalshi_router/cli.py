@@ -38,6 +38,14 @@ EXIT_CONFIG = 2
 EXIT_API = 3
 EXIT_SENSITIVE_REFUSED = 4
 
+#: A recovery run that imports PRE-CUTOVER history must say so in words.
+#:
+#: A boolean flag is too easy to set by accident -- in a workflow input, in a
+#: copied command line, in a retry. The destination ledgers already hold
+#: manually entered wagers for that period, so admitting history is a decision
+#: about someone's financial record, and this makes stating it deliberate.
+PRE_CUTOVER_ACKNOWLEDGEMENT = "I have decided to import pre-cutover history"
+
 SENSITIVE_BANNER = """
 !!  SENSITIVE LOCAL DIAGNOSTICS  !!
 The block below identifies individual markets you traded. It is private betting
@@ -69,6 +77,18 @@ def _add_deliver_parser(sub) -> None:
     # not merely unset here -- it does not exist. Defaulted so the shared
     # credential setup in main() can read it uniformly.
     deliver.set_defaults(show_sensitive_details=False, max_fills=None)
+    deliver.add_argument(
+        "--include-pre-cutover",
+        default=None,
+        metavar="ACKNOWLEDGEMENT",
+        help=(
+            "RECOVERY ONLY. Admit orders submitted at or before the production "
+            "cutover. Requires the exact phrase "
+            f"{PRE_CUTOVER_ACKNOWLEDGEMENT!r}. Off unless stated: the "
+            "destination ledgers already hold manually entered wagers for that "
+            "period."
+        ),
+    )
     deliver.add_argument(
         "--allow-stabilization",
         action="store_true",
@@ -259,6 +279,9 @@ def _run_deliver(args, client, out, err) -> int:
             production=True,
             now=Decimal(int(time.time())),
             allow_stabilization=args.allow_stabilization,
+            include_pre_cutover=(
+                args.include_pre_cutover == PRE_CUTOVER_ACKNOWLEDGEMENT
+            ),
         )
     except KalshiRouterError as exc:
         print(f"delivery failed: {type(exc).__name__}: {exc}", file=err)
@@ -280,6 +303,18 @@ def main(argv: list[str] | None = None, stdout=None, stderr=None) -> int:
     out = stdout if stdout is not None else sys.stdout
     err = stderr if stderr is not None else sys.stderr
     args = build_parser().parse_args(argv)
+
+    if getattr(args, "include_pre_cutover", None) is not None:
+        if args.include_pre_cutover != PRE_CUTOVER_ACKNOWLEDGEMENT:
+            # Refuse rather than fall back to the safe behaviour: someone who
+            # typed the flag intends to import history, and silently doing the
+            # normal thing would look like it worked.
+            print(
+                "--include-pre-cutover requires the exact acknowledgement "
+                f"{PRE_CUTOVER_ACKNOWLEDGEMENT!r}.",
+                file=err,
+            )
+            return EXIT_CONFIG
 
     if getattr(args, "compare_ledger", None) and not args.shadow_wagers:
         # Failing here rather than silently comparing an empty set: a run that

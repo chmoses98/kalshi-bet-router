@@ -287,6 +287,31 @@ class ProductionDiagnostics:
     #: no-op, and every refusal below it is a deferral or a defect.
     orders_after_cutover: int = 0
 
+    #: Pre-cutover orders admitted by an explicit recovery run. Zero on every
+    #: normal run, and a test pins that -- a non-zero value here in a scheduled
+    #: run would mean the cutover had stopped being the boundary it is.
+    pre_cutover_admitted: int = 0
+
+    #: WHY a post-cutover market could not be classified.
+    #:
+    #: "sport unresolved: 1" tells the owner a wager was refused; it does not
+    #: tell them whether that is a taxonomy gap they should close or a market
+    #: this router is right to refuse forever. Those call for opposite
+    #: responses, so they are counted separately. Named int fields rather than a
+    #: mapping, so the diagnostics stay structurally counts-only and no
+    #: competition string can ride out in a key.
+    unresolved_metadata_lookup_failed: int = 0
+    unresolved_no_metadata: int = 0
+    unresolved_malformed_event_metadata: int = 0
+    unresolved_competition_absent: int = 0
+    unresolved_competition_unknown: int = 0
+    unresolved_competition_ambiguous: int = 0
+    unresolved_milestone_conflict: int = 0
+    unresolved_evidence_conflict: int = 0
+    unresolved_ambiguous_family: int = 0
+    unresolved_insufficient: int = 0
+    unresolved_reason_unavailable: int = 0
+
     #: Which finality verdict post-cutover orders received.
     final_market_closed: int = 0
     final_stable: int = 0
@@ -314,6 +339,7 @@ class ProductionDiagnostics:
             "production filter (counts only; nothing delivered by this report):",
             f"  orders considered: {self.orders_considered}",
             f"  after the production cutover: {self.orders_after_cutover}",
+            f"  pre-cutover admitted by recovery: {self.pre_cutover_admitted}",
             f"  ELIGIBLE for delivery: {self.eligible}",
             "",
             "  finality of post-cutover orders:",
@@ -335,6 +361,22 @@ class ProductionDiagnostics:
             f"{self.refused_game_date_not_established}",
             f"    reduction not representable: "
             f"{self.refused_reduction_not_representable}",
+            "",
+            "",
+            "  why post-cutover markets were unresolved:",
+            f"    metadata lookup failed: {self.unresolved_metadata_lookup_failed}",
+            f"    no metadata resolved: {self.unresolved_no_metadata}",
+            f"    malformed event metadata: {self.unresolved_malformed_event_metadata}",
+            f"    competition absent: {self.unresolved_competition_absent}",
+            f"    competition unknown to the taxonomy: "
+            f"{self.unresolved_competition_unknown}",
+            f"    competition ambiguous in the taxonomy: "
+            f"{self.unresolved_competition_ambiguous}",
+            f"    milestone conflict: {self.unresolved_milestone_conflict}",
+            f"    evidence conflict: {self.unresolved_evidence_conflict}",
+            f"    ambiguous family without a league: {self.unresolved_ambiguous_family}",
+            f"    insufficient authoritative metadata: {self.unresolved_insufficient}",
+            f"    reason unavailable: {self.unresolved_reason_unavailable}",
             "",
             f"  HEALTHY NO-OP: {self.is_healthy_no_op}",
         ]
@@ -369,6 +411,7 @@ def evaluate_order(
     now: Decimal,
     destinations: frozenset[str],
     allow_stabilization: bool = False,
+    include_pre_cutover: bool = False,
 ) -> tuple[ProductionWager | None, ProductionRefusal | None, OrderFinality | None]:
     """Apply every gate to one order, cheapest and most decisive first.
 
@@ -381,7 +424,18 @@ def evaluate_order(
     never classified; the caller distinguishes "not attempted" from "attempted
     and unresolved" by passing ``"UNRESOLVED"`` for the latter.
     """
-    if not is_after_cutover(order):
+    # RECOVERY ONLY. ``include_pre_cutover`` defaults to False at every layer,
+    # so a caller that forgets about it gets the safe behaviour. It exists for
+    # the recovery path, where the owner has decided a specific historical
+    # window should be imported despite the destination already holding
+    # manually entered wagers -- and that decision is theirs, stated at
+    # dispatch, never inferred from a run's circumstances.
+    #
+    # It is safe only because it is not a bypass of the duplicate check: the
+    # source key is derived from the order, so a pre-cutover order already in
+    # the ledger under the same key lands on DUPLICATE_NOOP, and one recorded
+    # manually with DIFFERENT economics lands on CONFLICT and is refused.
+    if not include_pre_cutover and not is_after_cutover(order):
         return None, ProductionRefusal.BEFORE_CUTOVER, None
 
     finality = assess_finality(order, now, market_status, allow_stabilization)
@@ -433,6 +487,22 @@ def evaluate_order(
     )
 
 
+#: UnresolvedReason -> the counter it increments. Keyed by the classifier's own
+#: enum so a new reason is a KeyError in a test rather than a silent zero.
+UNRESOLVED_COUNTERS: dict[str, str] = {
+    "metadata_lookup_failed": "unresolved_metadata_lookup_failed",
+    "no_metadata_resolved": "unresolved_no_metadata",
+    "malformed_event_metadata": "unresolved_malformed_event_metadata",
+    "competition_absent": "unresolved_competition_absent",
+    "competition_unknown": "unresolved_competition_unknown",
+    "competition_ambiguous_in_taxonomy": "unresolved_competition_ambiguous",
+    "milestone_competition_conflict": "unresolved_milestone_conflict",
+    "evidence_conflict": "unresolved_evidence_conflict",
+    "ambiguous_sport_family_without_league": "unresolved_ambiguous_family",
+    "insufficient_authoritative_metadata": "unresolved_insufficient",
+}
+
+
 def evaluate_production(
     orders,
     sports: dict[str, str],
@@ -441,6 +511,7 @@ def evaluate_production(
     now: Decimal,
     destinations: frozenset[str],
     allow_stabilization: bool = False,
+    include_pre_cutover: bool = False,
 ) -> tuple[list[ProductionWager], ProductionDiagnostics]:
     """Filter every order down to the ones safe to deliver, and count the rest."""
     diagnostics = ProductionDiagnostics()
@@ -456,7 +527,12 @@ def evaluate_production(
             now,
             destinations,
             allow_stabilization,
+            include_pre_cutover,
         )
+        if include_pre_cutover and not is_after_cutover(order):
+            # Counted as what it is, so a recovery run's report still says how
+            # much of what it delivered was history rather than new activity.
+            diagnostics.pre_cutover_admitted += 1
         if refusal is not ProductionRefusal.BEFORE_CUTOVER:
             diagnostics.orders_after_cutover += 1
         if finality is not None:

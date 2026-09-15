@@ -501,3 +501,61 @@ def test_no_comparison_section_appears_without_the_flag(monkeypatch, local_env):
     install_fake_api(monkeypatch, SAMPLE)
     _, out, _ = run(["audit", "--shadow-wagers"])
     assert "HISTORICAL SHADOW COMPARISON" not in out
+
+
+# ---------------------------------------------------------------------------
+# Phase 12: the pre-cutover acknowledgement.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "true",
+        "yes",
+        "I have decided to import pre-cutover history.",  # trailing period
+        "i have decided to import pre-cutover history",   # wrong case
+        "",
+    ],
+)
+def test_a_wrong_pre_cutover_acknowledgement_is_refused(
+    phrase, monkeypatch, local_env, tmp_path
+):
+    """Refused, not silently downgraded to the safe behaviour.
+
+    Someone who typed the flag intends to import history; quietly doing the
+    normal thing would look like it worked.
+    """
+    install_fake_api(monkeypatch, SAMPLE)
+    code, out, err = run(
+        [
+            "deliver",
+            "--out-dir", str(tmp_path / "payloads"),
+            "--include-pre-cutover", phrase,
+        ]
+    )
+
+    assert code == cli.EXIT_CONFIG
+    assert "acknowledgement" in err
+    assert "payloads written" not in out
+
+
+def test_the_exact_acknowledgement_is_accepted(monkeypatch, local_env, tmp_path):
+    install_fake_api(monkeypatch, SAMPLE)
+    code, out, err = run(
+        [
+            "deliver",
+            "--out-dir", str(tmp_path / "payloads"),
+            "--include-pre-cutover", cli.PRE_CUTOVER_ACKNOWLEDGEMENT,
+        ]
+    )
+
+    assert code == cli.EXIT_OK, err
+    assert "payloads written" in out
+
+
+def test_deliver_without_the_flag_never_requests_pre_cutover(tmp_path):
+    args = cli.build_parser().parse_args(
+        ["deliver", "--out-dir", str(tmp_path / "payloads")]
+    )
+    assert args.include_pre_cutover is None
