@@ -176,3 +176,135 @@ def test_ci_workflow_is_read_only():
 
 def test_ci_workflow_runs_the_test_suite():
     assert any("pytest" in block for block in run_blocks(load(CI_WORKFLOW)))
+
+
+# ============ the downstream delivery credential, and where it may appear =====
+
+PROBE_WORKFLOW = ROOT / ".github/workflows/downstream-credential-probe.yml"
+WORKFLOW_DIR = ROOT / ".github/workflows"
+
+#: The one secret that can WRITE outside this repository. Everything about it is
+#: blast radius, so the rules below are about where it may appear at all.
+DOWNSTREAM_SECRET = "DOWNSTREAM_REPO_TOKEN"
+
+
+def workflow_files() -> list[Path]:
+    return sorted(WORKFLOW_DIR.glob("*.yml")) + sorted(WORKFLOW_DIR.glob("*.yaml"))
+
+
+def workflows_referencing(secret: str) -> list[str]:
+    return [p.name for p in workflow_files() if secret in p.read_text()]
+
+
+@pytest.fixture(scope="module")
+def probe() -> dict:
+    return load(PROBE_WORKFLOW)
+
+
+@pytest.fixture(scope="module")
+def probe_text() -> str:
+    return strip_comments(PROBE_WORKFLOW.read_text())
+
+
+def test_the_readonly_audit_never_receives_the_downstream_credential():
+    """The research workflow reads Kalshi. It has no business writing anywhere.
+
+    Stated as a property of the audit workflow rather than a review habit: a
+    future edit that hands it the delivery token fails CI.
+    """
+    assert DOWNSTREAM_SECRET not in AUDIT_WORKFLOW.read_text()
+
+
+def test_ci_never_receives_the_downstream_credential():
+    # CI runs on pull requests, including from forks on a public repository.
+    assert DOWNSTREAM_SECRET not in CI_WORKFLOW.read_text()
+
+
+def test_only_credentialed_workflows_name_the_downstream_secret():
+    """An allowlist, so a new workflow cannot quietly acquire write access.
+
+    Adding a delivery workflow is a deliberate act; this test makes it one.
+    """
+    allowed = {"downstream-credential-probe.yml"}
+    assert set(workflows_referencing(DOWNSTREAM_SECRET)) <= allowed
+
+
+def test_the_probe_is_dispatch_only_and_never_runs_on_a_pull_request(probe):
+    events = triggers(probe)
+    assert set(events) == {"workflow_dispatch"}
+    # pull_request_target on a public repo would hand fork code the secret.
+    assert "pull_request_target" not in events
+    assert "pull_request" not in events
+    assert "schedule" not in events
+
+
+def test_the_probe_holds_no_write_permission_on_this_repository(probe):
+    # The downstream token is what writes downstream. GITHUB_TOKEN stays read.
+    assert probe["permissions"] == {"contents": "read"}
+
+
+def test_the_probe_refuses_to_run_from_a_ref_other_than_main(probe_text):
+    assert "refs/heads/main" in probe_text
+
+
+def test_the_probe_never_puts_the_credential_in_a_url(probe_text):
+    """A URL reaches server logs, proxy logs and any redirect target.
+
+    The token must travel as an Authorization header and nowhere else.
+    """
+    assert "Authorization: Bearer" in probe_text
+    for leak in ("://${DOWNSTREAM_REPO_TOKEN}", "@github.com", "x-access-token:"):
+        assert leak not in probe_text
+
+
+def test_the_probe_never_echoes_or_traces_the_credential(probe_text):
+    assert "set -x" not in probe_text
+    # Printing the value, a prefix or a suffix all identify the token.
+    for leak in (
+        "echo ${DOWNSTREAM_REPO_TOKEN}",
+        'echo "${DOWNSTREAM_REPO_TOKEN}"',
+        "${DOWNSTREAM_REPO_TOKEN:0:",
+        "${DOWNSTREAM_REPO_TOKEN: -",
+    ):
+        assert leak not in probe_text
+
+
+def test_the_probe_writes_nothing_anywhere(probe_text):
+    """It proves a write credential by READING repository metadata.
+
+    A probe that creates a branch to prove it can create a branch has to be
+    trusted to clean up after itself, and the thing it would be writing next to
+    is canonical wager data.
+    """
+    lowered = probe_text.lower()
+    for mutation in (
+        '-x post', '-x put', '-x patch', '-x delete',
+        '--request post', '--request put', '--request delete',
+        "git push", "git commit", "/git/refs", "/contents/", "/pulls",
+    ):
+        assert mutation not in lowered
+
+
+def test_the_probe_uploads_no_artifact(probe):
+    for step in steps(probe):
+        assert "upload-artifact" not in (step.get("uses") or "")
+
+
+def test_the_probe_covers_exactly_the_four_destinations(probe_text):
+    for repo in (
+        "chmoses98/edge-finder-api",
+        "chmoses98/nfl-edge-finder",
+        "chmoses98/cfb-edge-finder",
+        "chmoses98/Tennis-Edge-Finder",
+    ):
+        assert repo in probe_text
+
+
+def test_the_probe_reads_permissions_structurally_not_by_substring(probe_text):
+    """`grep '"push": true'` would match that string anywhere in the body.
+
+    Reporting write access the token does not have is the one failure a
+    credential probe must not have, so the field is read with jq.
+    """
+    assert "jq -r '.permissions.push" in probe_text
+    assert "grep" not in probe_text
