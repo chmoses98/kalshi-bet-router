@@ -60,7 +60,10 @@ def _add_deliver_parser(sub) -> None:
         ),
     )
     deliver.add_argument(
-        "--page-limit", type=int, default=None, help="rows per API page"
+        "--page-limit",
+        type=int,
+        default=DEFAULT_PAGE_LIMIT,
+        help=f"rows per API page (default {DEFAULT_PAGE_LIMIT})",
     )
     # The deliver path never renders a wager, so the sensitive-details mode is
     # not merely unset here -- it does not exist. Defaulted so the shared
@@ -73,6 +76,39 @@ def _add_deliver_parser(sub) -> None:
             "Treat an order with no new fill for the stabilization window as "
             "final, even while its market is open. Supported by measurement: "
             "every order in this account's history filled within one second."
+        ),
+    )
+
+
+def config_from_args(args) -> AuditConfig:
+    """Build the client's request shape from any subcommand's parsed arguments.
+
+    This is a named function rather than three lines inside ``main()`` because
+    it is the one piece of setup EVERY subcommand goes through, and a
+    subcommand that omits an option it never uses must not be able to break it.
+    The first release of ``deliver`` did exactly that -- it declared no
+    ``max_fills``, and ``AuditConfig`` compared ``1 <= None`` and crashed before
+    a single request was made. The test suite now parses every subparser and
+    passes it through here.
+
+    A subcommand that does not offer a sampling budget leaves these unset.
+    ``AuditConfig`` is the CLIENT's request shape: it still needs a page size
+    and a default ceiling even when the subcommand will override both.
+    ``deliver`` walks to exhaustion, which sets the budget to infinity inside
+    the client, so the ceiling is genuinely inert for it -- but ``None`` was
+    not inert, it was a crash.
+    """
+    return AuditConfig(
+        base_url=base_url_from_env(),
+        max_fills=(
+            DEFAULT_MAX_FILLS
+            if getattr(args, "max_fills", None) is None
+            else args.max_fills
+        ),
+        page_limit=(
+            DEFAULT_PAGE_LIMIT
+            if getattr(args, "page_limit", None) is None
+            else args.page_limit
         ),
     )
 
@@ -237,11 +273,7 @@ def main(argv: list[str] | None = None, stdout=None, stderr=None) -> int:
 
     try:
         key_id, private_key = read_credentials()
-        config = AuditConfig(
-            base_url=base_url_from_env(),
-            max_fills=args.max_fills,
-            page_limit=args.page_limit,
-        )
+        config = config_from_args(args)
         signer = KalshiSigner(key_id, private_key)
     except ConfigurationError as exc:
         print(f"configuration error: {exc}", file=err)
