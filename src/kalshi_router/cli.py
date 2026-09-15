@@ -543,10 +543,20 @@ def _run_settle(args, client, out, err) -> int:
     # settlements and nothing else, and it already knows which wagers it is
     # attributing them to.
     #
-    # Measured: the first settlement run spent over half an hour in that branch
-    # against a 45-minute job timeout, while the wager pass over the same window
-    # took four minutes. Two walks instead of two walks plus a replay, two
-    # probes and a position fetch.
+    # MEASURED, from the run timestamps:
+    #
+    #   backfill-settle  run 1, step 7   21:06:26 -> 21:15:18   8m52s, CANCELLED
+    #   backfill-deliver run 2, step 8   20:11:33 -> 20:15:24   3m51s, completed
+    #   backfill-deliver run 3, step 8   20:22:48 -> 20:27:30   4m42s, completed
+    #   backfill-deliver run 4, step 8   20:54:43 -> 21:01:43   7m00s, completed
+    #
+    # The settlement step had run 8m52s WITHOUT FINISHING when it was cancelled
+    # by hand -- it did not reach the job timeout. The wager pass over the same
+    # window finishes in under seven. So the cost is real and the exact excess
+    # is unknown, because the run never completed to be measured.
+    #
+    # Two walks here instead of two walks plus a replay, two probes and a
+    # position fetch.
     try:
         result = run_audit(
             client,
