@@ -181,6 +181,44 @@ def _add_backfill_parser(sub) -> None:
     backfill.set_defaults(show_sensitive_details=False, max_fills=None, page_limit=None)
 
 
+def _add_settle_parser(sub) -> None:
+    settle = sub.add_parser(
+        "settle",
+        help="attribute exchange settlements to the gap window's wagers (writes payloads only)",
+    )
+    settle.add_argument(
+        "--since",
+        required=True,
+        metavar="RFC3339",
+        help=(
+            "Start of the window. The END is always the production cutover and "
+            "is not settable, exactly as it is for `backfill`."
+        ),
+    )
+    settle.add_argument(
+        "--destination",
+        action="append",
+        default=[],
+        metavar="SPORT",
+        help=(
+            "A destination to emit settlements for. REPEATABLE and REQUIRED: "
+            "nothing is implied. MLB is deliberately not a default -- that "
+            "repository has its own canonical settlement driver, and a second "
+            "one would be a second authority on the same fact."
+        ),
+    )
+    settle.add_argument(
+        "--out-dir",
+        default=None,
+        metavar="DIR",
+        help=(
+            "Write one settlement payload per destination. Omitted, this "
+            "command reports counts and writes nothing."
+        ),
+    )
+    settle.set_defaults(show_sensitive_details=False, max_fills=None, page_limit=None)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="kalshi-router",
@@ -284,6 +322,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_deliver_parser(sub)
     _add_series_probe_parser(sub)
     _add_backfill_parser(sub)
+    _add_settle_parser(sub)
     return parser
 
 
@@ -443,6 +482,99 @@ def _run_backfill(args, client, out, err) -> int:
     return EXIT_OK
 
 
+def _run_settle(args, client, out, err) -> int:
+    """Attribute the exchange's settlements to the gap window's wagers.
+
+    Writes payload FILES for the destinations named, and prints counts. A
+    settlement carries a ticker and a payout, so it is handled exactly as the
+    wagers are: it reaches a destination importer, never this log.
+
+    THE DESTINATIONS ARE NAMED, NOT INFERRED. MLB has its own canonical
+    settlement driver -- `settle_markets.py` re-derives every outcome from the
+    MLB Stats API -- and emitting settlements there would create a second
+    authority on the same fact. So this command emits for exactly the
+    destinations asked for and refuses to run with none.
+    """
+    from .backfill import BackfillWindow
+    from .destination import write_settlement_payloads
+    from .settlement import settle_batch
+
+    destinations = {d.strip().upper() for d in args.destination if d.strip()}
+    if not destinations:
+        print(
+            "--destination is required and repeatable; name every destination "
+            "that should receive settlements. Nothing is implied, and MLB is "
+            "deliberately not a default: it has its own settlement driver.",
+            file=err,
+        )
+        return EXIT_CONFIG
+
+    try:
+        window = BackfillWindow(args.since)
+    except ValueError as exc:
+        print(f"settlement window: {exc}", file=err)
+        return EXIT_CONFIG
+
+    try:
+        result = run_audit(
+            client,
+            max_fills=None,
+            full_history=True,
+            reconcile=True,          # settlements are only walked when asked for
+            backfill_window=window,
+            now=Decimal(int(time.time())),
+        )
+    except KalshiRouterError as exc:
+        print(f"settlement pass failed: {type(exc).__name__}: {exc}", file=err)
+        return EXIT_API
+
+    print(f"settlement window: {window.start_iso}  ->  {window.end_iso} (the cutover)", file=out)
+    print(f"destinations: {sorted(destinations)}", file=out)
+    print("", file=out)
+
+    wagers = [w for w in result.production_wagers if w.sport in destinations]
+    # Latest settlement per ticker. A market settles once, so a second row for
+    # one ticker is a re-observation rather than a second event; taking the
+    # last keeps the most recently reported state without merging two.
+    by_ticker = {s.ticker: s for s in result.settlements}
+
+    settlements = settle_batch(wagers, by_ticker)
+
+    established = sum(1 for s in settlements if s.is_established)
+    settled = sum(1 for s in settlements if s.settlement_status == "SETTLED")
+    reasons: dict[str, int] = {}
+    for one in settlements:
+        for reason in one.refusals:
+            reasons[reason] = reasons.get(reason, 0) + 1
+
+    print("settlement attribution (counts only; payouts are NOT printed):", file=out)
+    print(f"  wagers in the window for these destinations: {len(wagers)}", file=out)
+    print(f"  settled: {settled}", file=out)
+    print(f"  not settled: {len(wagers) - settled}", file=out)
+    print(f"  profit and loss established: {established}", file=out)
+    print(f"  profit and loss UNESTABLISHED: {len(wagers) - established}", file=out)
+    for reason in sorted(reasons):
+        print(f"    {reason}: {reasons[reason]}", file=out)
+
+    if args.out_dir:
+        # Only SETTLED rows cross. An unsettled wager is recorded downstream by
+        # having no settlement row at all, so sending a PENDING one would be
+        # sending a row the destination is built to refuse.
+        deliverable = [s for s in settlements if s.settlement_status == "SETTLED"]
+        sports = {w.source_key: w.sport for w in wagers}
+        counts = write_settlement_payloads(deliverable, args.out_dir, sports)
+        print("", file=out)
+        print("settlement payloads written (rows per destination; rows are NOT printed):", file=out)
+        if not counts:
+            print("  none -- nothing in the window has settled", file=out)
+        for sport, rows in sorted(counts.items()):
+            print(f"  {sport}: {rows}", file=out)
+
+    print("", file=out)
+    print(result.transport.render(), file=out)
+    return EXIT_OK
+
+
 def _run_series_probe(client, out, err) -> int:
     """Corroborate candidate series tickers against Kalshi's own catalogue.
 
@@ -558,6 +690,9 @@ def main(argv: list[str] | None = None, stdout=None, stderr=None) -> int:
 
     if args.command == "backfill":
         return _run_backfill(args, client, out, err)
+
+    if args.command == "settle":
+        return _run_settle(args, client, out, err)
 
     try:
         result = run_audit(

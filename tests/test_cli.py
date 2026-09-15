@@ -379,6 +379,7 @@ def _subcommand_argvs(tmp_path):
         "deliver": ["--out-dir", str(tmp_path / "payloads")],
         "series-probe": [],
         "backfill": ["--since", "2026-09-11T00:00:00Z"],
+        "settle": ["--since", "2026-09-11T00:00:00Z", "--destination", "NFL"],
     }
     return required
 
@@ -874,3 +875,64 @@ def test_the_backfill_payload_rows_never_reach_the_log(monkeypatch, local_env, t
     assert "sourceBetKey" in written, "the fixture must actually contain what is being kept out of the log"
     for sensitive in ("sourceBetKey", "entryPrice", "executionEconomics"):
         assert sensitive not in out, out
+
+
+# The settlement pass names its destinations. Nothing is implied.
+
+def test_settle_refuses_to_run_with_no_destination(monkeypatch, local_env):
+    """MLB has its own canonical settlement driver -- `settle_markets.py`
+    re-derives every outcome from the MLB Stats API -- so a settlement emitted
+    there would be a SECOND authority on the same fact.
+
+    Defaulting to "every destination" would produce exactly that on a run
+    nobody read the flags of, so the command refuses instead.
+    """
+    install_fake_api(monkeypatch, IMPORTABLE_WINDOW, metadata=importable_metadata())
+
+    code, out, err = run(["settle", "--since", "2026-09-11T00:00:00Z"])
+
+    assert code == cli.EXIT_CONFIG
+    assert "--destination is required" in err
+    assert "MLB is deliberately not a default" in err
+
+
+def test_settle_has_no_flag_for_the_window_end():
+    """The end is PRODUCTION_CUTOVER_ISO structurally, exactly as it is for
+    `backfill`. A settlement pass that could reach past the cutover would be
+    settling production's wagers on the backfill's authority."""
+    args = cli.build_parser().parse_args(
+        ["settle", "--since", "2026-09-11T00:00:00Z", "--destination", "NFL"]
+    )
+
+    assert not hasattr(args, "until")
+    assert not hasattr(args, "end")
+
+
+def test_settle_writes_no_payload_unless_a_directory_is_asked_for(monkeypatch, local_env, tmp_path):
+    """Reporting stays the default, for the same reason it does on `backfill`."""
+    install_fake_api(monkeypatch, IMPORTABLE_WINDOW, metadata=importable_metadata())
+
+    code, out, err = run([
+        "settle", "--since", "2026-09-11T00:00:00Z", "--destination", "MLB",
+    ])
+
+    assert code == cli.EXIT_OK, err
+    assert "settlement attribution" in out
+    assert "settlement payloads written" not in out
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_the_settlement_report_never_prints_a_payout(monkeypatch, local_env, tmp_path):
+    """A settlement carries a ticker and a payout, and this repository's Actions
+    logs are public."""
+    install_fake_api(monkeypatch, IMPORTABLE_WINDOW, metadata=importable_metadata())
+
+    code, out, err = run([
+        "settle", "--since", "2026-09-11T00:00:00Z", "--destination", "MLB",
+        "--out-dir", str(tmp_path),
+    ])
+
+    assert code == cli.EXIT_OK, err
+    assert IMPORTABLE_MARKET not in out
+    for token in SENSITIVE_TOKENS:
+        assert token not in out

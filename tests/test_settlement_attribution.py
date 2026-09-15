@@ -15,6 +15,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
+import pytest
+
 from kalshi_router.models import NormalizedSettlement
 from kalshi_router.settlement import (
     LOST,
@@ -204,3 +206,72 @@ def test_a_refusal_and_a_figure_are_never_both_absent_without_a_reason():
     ):
         assert result.net_profit_loss is None
         assert result.refusals, result
+
+
+# ------------------------------------------- the payload each destination gets
+
+class TestSettlementPayloads:
+    """A settlement's destination comes from the WAGER it settles, never from
+    its own ticker.
+
+    Deciding a sport from a market ticker is precisely the inference this system
+    refuses -- it is what the whole classification gate exists to prevent. The
+    wager was already classified on Kalshi's own competition evidence, so that
+    answer is reused rather than re-derived from something weaker.
+    """
+
+    def settlements(self):
+        return settle_batch(
+            [FakeWager(source_key="kalshi:v1:b"), FakeWager(source_key="kalshi:v1:a")],
+            {TICKER: settlement()},
+        )
+
+    def test_each_destination_gets_its_own_file(self, tmp_path):
+        from kalshi_router.destination import write_settlement_payloads
+
+        counts = write_settlement_payloads(
+            self.settlements(), str(tmp_path),
+            {"kalshi:v1:a": "NFL", "kalshi:v1:b": "CFB"},
+        )
+
+        assert counts == {"CFB": 1, "NFL": 1}
+        assert (tmp_path / "NFL-settlements.json").exists()
+        assert (tmp_path / "CFB-settlements.json").exists()
+
+    def test_a_settlement_whose_wager_has_no_sport_is_refused(self, tmp_path):
+        """A payout with no home. Sending it to a destination chosen by
+        guesswork is worse than not sending it."""
+        from kalshi_router.destination import write_settlement_payloads
+
+        with pytest.raises(ValueError, match="would have to be guessed"):
+            write_settlement_payloads(self.settlements(), str(tmp_path),
+                                      {"kalshi:v1:a": "NFL"})
+
+    def test_a_refused_figure_crosses_as_null_and_keeps_its_reason(self, tmp_path):
+        """Never zero. Zero is a settlement that paid nothing, which is a
+        different claim from one that could not be computed."""
+        import json
+
+        from kalshi_router.destination import write_settlement_payloads
+
+        shared = settle_batch(
+            [FakeWager(source_key="kalshi:v1:a"), FakeWager(source_key="kalshi:v1:b")],
+            {TICKER: settlement(fee_dollars=Decimal("0.25"))},
+        )
+        write_settlement_payloads(shared, str(tmp_path),
+                                  {"kalshi:v1:a": "NFL", "kalshi:v1:b": "NFL"})
+
+        rows = json.loads((tmp_path / "NFL-settlements.json").read_text())["settlements"]
+        assert [row["net_profit_loss"] for row in rows] == [None, None]
+        assert [row["gross_return"] for row in rows] == [10.0, 10.0]
+        assert all(row["refusals"] == ["shared_position_fee"] for row in rows)
+
+    def test_the_payload_is_byte_identical_whatever_order_they_arrive_in(self, tmp_path):
+        from kalshi_router.destination import write_settlement_payloads
+
+        a, b = tmp_path / "a", tmp_path / "b"
+        keys = {"kalshi:v1:a": "NFL", "kalshi:v1:b": "NFL"}
+        write_settlement_payloads(self.settlements(), str(a), keys)
+        write_settlement_payloads(list(reversed(self.settlements())), str(b), keys)
+
+        assert (a / "NFL-settlements.json").read_bytes() == (b / "NFL-settlements.json").read_bytes()
