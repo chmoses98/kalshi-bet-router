@@ -200,6 +200,35 @@ says so: the wagers exist but are not recorded, and that is not a success.
 > catch this only forbade `$RANDOM`, `date` and `GITHUB_RUN_ID`; none appeared,
 > so it passed while testing the wrong property.
 
+## A windowed fill walk was considered and is NOT worth doing
+
+Every run walks the account's complete fill history — about 1750 orders, five
+minutes. The obvious optimisation is to walk from `cutover - margin` forward
+with `min_ts`: a bounded but EXHAUSTIVE walk of a time range, which is a
+different thing from a budget-truncated walk and would not violate the rule
+that a budget and a completeness claim are mutually exclusive.
+
+It is not worth doing, for two measured reasons rather than one guessed one.
+
+**It would buy no latency.** The point would be to record a wager sooner. But
+the delay is not the build — it is GitHub's queue, measured at 126–326 minutes
+on this account. Turning a five-minute build into a thirty-second one changes a
+number that is already invisible next to a multi-hour wait.
+
+**Nothing is being throttled.** The transport telemetry exists to answer this.
+Three full-history runs, seventy minutes apart, took 5m19s, 5m38s and 5m01s —
+the most recent was the fastest, so there is no upward trend — and an exhausted
+retry raises, which would fail the job, so all three being green means zero
+exhaustions.
+
+The cost it would carry is real: the window boundary has to be provably wider
+than any order's fill span, and getting it wrong drops orders SILENTLY, which
+is the one failure this system must not have. Paying that for an optimisation
+with no measurable benefit is a bad trade.
+
+Revisit it if the queue delay disappears or if the telemetry starts showing
+rate-limit retries. Not before.
+
 ## Health states
 
 A scheduled run annotates itself with one of five:
