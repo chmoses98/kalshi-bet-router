@@ -348,3 +348,99 @@ def test_an_exchange_contradiction_suppresses_the_authority_claim(monkeypatch, l
     if "absent from positions, UNEXPLAINED: 0" not in out:
         assert "position state claimed as authoritative: False" in out
         assert "CONTRADICTED BY THE EXCHANGE" in out
+
+
+# ---------------------------------------------------------------------------
+# Every subcommand must survive the shared setup in main().
+#
+# The first release of `deliver` did not: it declared no --max-fills, so
+# AuditConfig evaluated `1 <= None` and the command died before making a single
+# request. The bug was invisible to the unit tests because each of them
+# exercised one subcommand's handler directly, never the shared prologue.
+#
+# These tests enumerate the subparsers instead of naming them, so a subcommand
+# added later is covered the day it is added rather than the day it breaks.
+# ---------------------------------------------------------------------------
+
+
+def _subcommand_argvs(tmp_path):
+    """Minimal valid argv for every registered subcommand.
+
+    Discovering the names from the parser (rather than hard-coding them) is the
+    point: a new subcommand that this mapping does not cover fails the guard
+    test below, which is a far better failure than a crash in production.
+    """
+    required = {
+        "audit": [],
+        "deliver": ["--out-dir", str(tmp_path / "payloads")],
+    }
+    return required
+
+
+def _registered_subcommands():
+    parser = cli.build_parser()
+    actions = [
+        action
+        for action in parser._actions  # noqa: SLF001 - argparse exposes no public API
+        if isinstance(action, __import__("argparse")._SubParsersAction)
+    ]
+    assert len(actions) == 1, "the CLI is expected to have exactly one subcommand group"
+    return sorted(actions[0].choices)
+
+
+def test_every_subcommand_has_a_smoke_argv(tmp_path):
+    """A new subcommand must be added to the coverage below, not forgotten."""
+    assert set(_registered_subcommands()) == set(_subcommand_argvs(tmp_path))
+
+
+@pytest.mark.parametrize("command", _registered_subcommands())
+def test_every_subcommand_builds_a_usable_client_config(command, tmp_path):
+    """The shared prologue must not crash on a subcommand's parsed arguments.
+
+    This is the exact failure that reached a live run: AuditConfig received
+    None for max_fills and compared it against an int.
+    """
+    argv = [command] + _subcommand_argvs(tmp_path)[command]
+    args = cli.build_parser().parse_args(argv)
+
+    config = cli.config_from_args(args)
+
+    # Constructing it at all is most of the assertion -- AuditConfig validates
+    # in __post_init__ -- but assert the values are usable rather than merely
+    # present, so a future "fix" that passes 0 or a negative also fails here.
+    assert config.max_fills >= 1
+    assert config.page_limit >= 1
+
+
+def test_deliver_runs_end_to_end_through_main(monkeypatch, local_env, tmp_path):
+    """Run the exact command the delivery workflow runs, against a fake API.
+
+    Every other deliver test calls the handler directly, which is why a crash
+    in the shared prologue reached a live run. This one goes through main(),
+    so the prologue is on the path.
+    """
+    install_fake_api(monkeypatch, SAMPLE)
+    out_dir = tmp_path / "payloads"
+    code, out, err = run(["deliver", "--out-dir", str(out_dir), "--allow-stabilization"])
+
+    assert code == cli.EXIT_OK, err
+    assert "payloads written" in out
+    # And it is still counts-only: no ticker, no identifier.
+    for token in SENSITIVE_TOKENS:
+        assert token not in out
+    assert market_for("MLB") not in out
+
+
+def test_deliver_walks_without_a_sampling_ceiling(tmp_path):
+    """`deliver` must not carry a budget that could truncate the order history.
+
+    The ceiling on its config is inert (the walk is unbounded), and that has to
+    stay true: a truncated walk would silently under-report the account's
+    orders, and an under-reported order is a wager that never gets recorded.
+    """
+    args = cli.build_parser().parse_args(
+        ["deliver", "--out-dir", str(tmp_path / "payloads")]
+    )
+    # The parsed namespace says "no budget"; the config supplies a default only
+    # so the client has a legal shape.
+    assert args.max_fills is None
