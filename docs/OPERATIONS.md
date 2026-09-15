@@ -46,6 +46,12 @@ wager was written), so the runs would queue without bound.
 cadence ≥ 2× the measured build — rather than the number, so changing the
 cadence means confronting the measurement.
 
+**The cron is not the latency.** GitHub's scheduler on this account runs hours
+late — measured at 126–326 minutes over eight consecutive runs on a sibling
+repository, see *"The schedule has not been observed to fire yet"* below. The
+cadence is correct as configured; what a wager actually waits for is the next
+run GitHub decides to start.
+
 ## Why re-running is safe
 
 Measured against the destination's real importer in a throwaway sandbox, not
@@ -229,15 +235,28 @@ their decision, enforced by their own tests, and this system routes to none of
 them. `WagerRefusal.NO_DESTINATION_IMPORTER` is the refusal, and it is reported
 as `NOT_ROUTABLE` rather than as a fault.
 
-## The schedule has not been observed to fire
+## The schedule has not been observed to fire yet, and that is normal here
 
 Stated plainly because the alternative is a document that says "production" on
 the strength of a `cron:` line nobody has seen run.
 
-The cron went live on `main` at about 01:19Z on 2026-09-15. By 02:07Z three
-`*/15` boundaries had passed and **no run with `event=schedule` existed**.
+The cron went live on `main` at about 01:19Z on 2026-09-15. At 02:26Z, 67
+minutes later, no run with `event=schedule` existed.
 
-Every cause that can be checked from here has been ruled out:
+**That is not late on this account.** Measured directly on a sibling repository
+with a long-running cron (`chmoses98/cfb-edge-finder`, Research Settlement,
+`0 */6 * * *`), the delay between a cron slot and the run actually starting,
+over eight consecutive scheduled runs:
+
+```
+126, 154, 169, 206, 219, 294, 323, 326 minutes      (2.1h - 5.4h)
+```
+
+Every one of them eventually fired. So GitHub's scheduler works on this
+account; it is simply slow, by hours, and 67 minutes is below the minimum lag
+ever observed here.
+
+The structural causes were checked anyway, and all are ruled out:
 
 | Cause | Checked |
 |---|---|
@@ -245,21 +264,33 @@ Every cause that can be checked from here has been ruled out:
 | cron not on the default branch | `default_branch: main`, and the cron is on `main` |
 | repository is a fork (schedules off by default) | `fork: false` |
 | archived or disabled repository | both `false` |
-| inactive repository (schedules are suspended after 60 days) | `pushed_at` is minutes old |
+| inactive repository (60-day suspension) | `pushed_at` is minutes old |
 
-What remains is GitHub's own scheduler, which deprioritizes high-frequency
-crons on public repositories and can delay a newly added one substantially.
-That is an explanation, not a verification, and it is recorded as such.
+### What this means for the cadence
 
-**What this does and does not mean.** Every step the schedule would perform is
-independently proven: the payload build, the destination clone, the importer
-round trip (`NEW` → `DUPLICATE_NOOP` → `CONFLICT`), the receipts summary, the
-`data/` guard, the branch, the lease, the credential helper, and the
-pull-request permission on all four destinations. What is unproven is only that
-GitHub will start it on a timer.
+The 15-minute cron is sound engineering against a 5-minute build, and **GitHub
+will not honour it**. On the evidence above the real latency between a wager
+becoming eligible and a run picking it up is hours, not minutes, and it is set
+by the platform's queue rather than by this repository.
 
-Until a scheduled run is observed, MLB is **ARMED** rather than **PRODUCTION**,
-and `workflow_dispatch` remains available as the manual path.
+That is not a reason to change the cron: a shorter one would not be honoured
+either, a longer one would only add to a delay that is already dominated by the
+queue, and GitHub collapses missed occurrences rather than backfilling them, so
+nothing stacks. It IS a reason not to describe this system as recording a wager
+"within 15 minutes". It records it on the next run GitHub starts.
+
+`workflow_dispatch` is the path with predictable latency, and it is the one to
+use when a wager needs recording promptly.
+
+### What is unproven is only the timer
+
+Every step the schedule would perform is independently proven: the payload
+build, the destination clone, the importer round trip (`NEW` →
+`DUPLICATE_NOOP` → `CONFLICT`), the receipts summary, the `data/` guard, the
+branch, the lease, the credential helper, and the pull-request permission on
+all four destinations.
+
+Until a scheduled run is observed, MLB is **ARMED** rather than **PRODUCTION**.
 
 ## Privacy
 
