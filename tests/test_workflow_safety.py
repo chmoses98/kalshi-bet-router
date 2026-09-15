@@ -895,3 +895,49 @@ def test_a_destination_is_usable_only_if_every_check_passed(probe_text):
     ]
     assert condition, "the verdict condition moved"
     assert '${pr_ok}' in condition[0], "pr_ok is printed but does not gate the verdict"
+
+
+@pytest.mark.parametrize("name,text", _delivering_workflow_texts(), ids=lambda v: v if isinstance(v, str) and len(v) < 40 else "")
+def test_the_lease_carries_an_explicit_expected_value(name, text):
+    """A bare --force-with-lease fails from the SECOND run onward.
+
+    Measured against a real shallow clone: `git clone --depth 1` is
+    SINGLE-BRANCH, its refspec is +refs/heads/main:refs/remotes/origin/main and
+    nothing else, so there is no remote-tracking ref for the router's own
+    branch. A bare lease has nothing to form an expectation against and git
+    rejects the push as "stale info".
+
+    The first run succeeds (the branch does not exist yet), which is precisely
+    why this would have looked fine exactly once.
+    """
+    joined = text.replace("\\\n", " ")
+    pushes = [line for line in joined.splitlines() if "git" in line and " push" in line]
+    assert pushes
+    for line in pushes:
+        assert "--force-with-lease=" in line, (
+            f"{name}: a bare --force-with-lease is rejected as stale info from a "
+            f"shallow clone: {line.strip()}"
+        )
+        assert '${expected}' in line
+
+
+@pytest.mark.parametrize("name,text", _delivering_workflow_texts(), ids=lambda v: v if isinstance(v, str) and len(v) < 40 else "")
+def test_the_expected_value_comes_from_an_explicitly_fetched_ref(name, text):
+    """Fetching is NECESSARY and not sufficient -- but without it, rev-parse
+    finds nothing and the lease would always read "must not exist", which would
+    silently turn the lease off rather than fail."""
+    joined = text.replace("\\\n", " ")
+    fetches = [line for line in joined.splitlines() if "fetch" in line and "refs/remotes/origin" in line]
+    assert fetches, f"{name} never fetches the branch it leases against"
+    assert any("expected=" in line for line in joined.splitlines())
+
+
+@pytest.mark.parametrize("name,text", _delivering_workflow_texts(), ids=lambda v: v if isinstance(v, str) and len(v) < 40 else "")
+def test_a_missing_branch_yields_an_empty_expectation_not_a_failure(name, text):
+    """On the first run the branch does not exist. rev-parse must fall back to
+    an empty string, which the lease reads as "must not exist yet"."""
+    joined = text.replace("\\\n", " ")
+    assert any(
+        "rev-parse" in line and 'echo ""' in line
+        for line in joined.splitlines()
+    ), f"{name}: the first run would fail on a missing ref"

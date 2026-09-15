@@ -225,11 +225,34 @@ jobs:
 
             git -C "${work}" commit -q -m "Recover Kalshi wagers via kalshi-bet-router (${sport})"
 
-            # --force-with-lease, and ONLY onto this router-owned branch: the
-            # branch is rebuilt from main every run, so its previous tip is
-            # this job's own earlier output, never anyone else's work. The
-            # destination's main is never pushed to.
-            git -C "${work}" push -q --force-with-lease \
+            # THE LEASE NEEDS AN EXPLICIT EXPECTED VALUE HERE, and getting
+            # this wrong fails from the SECOND run onward rather than the
+            # first -- so it would have looked fine exactly once.
+            #
+            # A --depth 1 clone is SINGLE-BRANCH: its refspec is
+            # +refs/heads/main:refs/remotes/origin/main and nothing else. So
+            # there is no remote-tracking ref for the router's own branch, a
+            # bare --force-with-lease has nothing to form a lease against, and
+            # git rejects the push as "stale info".
+            #
+            # Fetching the branch is necessary and NOT sufficient: even with
+            # the remote-tracking ref present, the lease still cannot infer an
+            # expected value for a local branch with no configured upstream.
+            # Both of those were measured against a real shallow clone, and the
+            # first attempted fix (fetch alone) was observed to still fail.
+            #
+            # So the expectation is stated outright. An EMPTY value means "the
+            # branch must not exist yet", which is the first run.
+            git -C "${work}" fetch -q --depth 1 origin \
+              "+refs/heads/${branch}:refs/remotes/origin/${branch}" || true
+            expected="$(git -C "${work}" rev-parse "refs/remotes/origin/${branch}" 2>/dev/null || echo "")"
+
+            # ONLY onto this router-owned branch: it is rebuilt from main every
+            # run, so its previous tip is this job's own earlier output. The
+            # lease still refuses if anything else moved it -- verified by
+            # having a second clone push in between.
+            git -C "${work}" push -q \
+              --force-with-lease="refs/heads/${branch}:${expected}" \
               origin "HEAD:refs/heads/${branch}"
             echo "  pushed ${branch}"
             echo "  destination commit: $(git -C "${work}" rev-parse HEAD)"
