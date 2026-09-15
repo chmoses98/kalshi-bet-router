@@ -142,6 +142,13 @@ class BackfillDiagnostics:
         return dict(vars(self))
 
     @property
+    def contradicts_itself(self) -> bool:
+        """More wagers reconciled than there were orders to reconstruct them
+        from. Structurally impossible, so seeing it means a count is wired
+        wrong rather than that something surprising happened."""
+        return self.reconciled > self.orders_in_window
+
+    @property
     def reconciled(self) -> int:
         return (
             self.exact_existing
@@ -155,7 +162,8 @@ class BackfillDiagnostics:
     def render(self) -> str:
         return "\n".join([
             "backfill reconciliation (counts only; only MISSING_IMPORTABLE writes):",
-            f"  orders in the window: {self.orders_in_window}",
+            f"  orders in the window: {self.orders_in_window}"
+            + ("   <- INCONSISTENT with the count below" if self.contradicts_itself else ""),
             f"  refused before reconciliation: {self.refused_before_reconciliation}",
             f"  reconciled: {self.reconciled}",
             f"    EXACT_EXISTING (owner already recorded it): {self.exact_existing}",
@@ -228,14 +236,21 @@ def _materially_disagrees(wager, row) -> bool:
     return False
 
 
-def reconcile(wagers, ledger_rows_by_sport, supported_sports):
+def reconcile(wagers, ledger_rows_by_sport, supported_sports, orders_in_window=0):
     """Reconcile every reconstructed wager. Returns (importable, diagnostics).
 
     ``importable`` holds ONLY the MISSING_IMPORTABLE wagers, because that is
     the only verdict permitted to create a canonical row and a caller should
     not have to filter correctly to stay safe.
+
+    ``orders_in_window`` is passed in because this function cannot know it --
+    it sees the wagers that survived the gates, not the orders they came from.
+    Defaulting the field to 0 and rendering it anyway printed "orders in the
+    window: 0" directly above "reconciled: 42", which is not a small
+    cosmetic problem: a report that contradicts itself on its own first line
+    is not evidence of anything.
     """
-    diagnostics = BackfillDiagnostics()
+    diagnostics = BackfillDiagnostics(orders_in_window=orders_in_window)
     importable = []
     for wager in wagers:
         rows = ledger_rows_by_sport.get(wager.sport, [])

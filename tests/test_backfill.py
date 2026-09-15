@@ -256,3 +256,49 @@ def test_the_batch_id_is_a_durable_constant():
     assert BACKFILL_IMPORT_BATCH_ID == (
         "kalshi-gap-backfill-2026-09-12-through-production-cutover-v1"
     )
+
+
+# ---------------------------------------------------------------------------
+# A report that contradicts itself is not evidence of anything.
+# ---------------------------------------------------------------------------
+
+
+def test_the_window_count_is_passed_in_not_defaulted():
+    """reconcile() sees the wagers that survived the gates, not the orders they
+    came from. It cannot know the window count, so it must be told."""
+    _importable, diagnostics = reconcile(
+        [FakeWager()], {}, frozenset(), orders_in_window=76
+    )
+
+    assert diagnostics.orders_in_window == 76
+
+
+def test_reconciling_more_wagers_than_orders_is_flagged_as_inconsistent():
+    """The defect this guards: 'orders in the window: 0' printed directly above
+    'reconciled: 42'. Structurally impossible, so it means a count is wired
+    wrong rather than that something surprising happened."""
+    wagers = [FakeWager(market_ticker=str(i), source_key=f"k{i}") for i in range(42)]
+
+    _importable, diagnostics = reconcile(wagers, {}, frozenset(), orders_in_window=0)
+
+    assert diagnostics.reconciled == 42
+    assert diagnostics.contradicts_itself
+    assert "INCONSISTENT" in diagnostics.render()
+
+
+def test_a_consistent_report_says_nothing_about_inconsistency():
+    wagers = [FakeWager(market_ticker=str(i), source_key=f"k{i}") for i in range(3)]
+
+    _importable, diagnostics = reconcile(wagers, {}, frozenset(), orders_in_window=76)
+
+    assert not diagnostics.contradicts_itself
+    assert "INCONSISTENT" not in diagnostics.render()
+
+
+def test_equal_counts_are_consistent():
+    """Every order becoming exactly one wager is the normal case, not a defect."""
+    wagers = [FakeWager(market_ticker=str(i), source_key=f"k{i}") for i in range(5)]
+
+    _importable, diagnostics = reconcile(wagers, {}, frozenset(), orders_in_window=5)
+
+    assert not diagnostics.contradicts_itself

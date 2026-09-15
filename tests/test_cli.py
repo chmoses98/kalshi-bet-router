@@ -599,3 +599,29 @@ def test_backfill_rejects_a_malformed_ledger_spec(monkeypatch, local_env):
 
     assert code == cli.EXIT_CONFIG
     assert "SPORT=PATH" in err
+
+
+#: Fills inside the backfill window, so the report has a non-zero count to get
+#: wrong. The first version of the test below used the default fixture, whose
+#: fills fall outside the window -- so both numbers were 0 and it passed with
+#: the wiring removed. A test that cannot fail is worse than no test.
+IN_WINDOW = [[
+    make_fill(1, ticker=market_for("MLB"), created_time="2026-09-12T18:00:00Z"),
+    make_fill(2, ticker=market_for("MLB"), created_time="2026-09-13T18:00:00Z"),
+    make_fill(3, ticker=market_for("MLB"), created_time="2026-09-14T18:00:00Z"),
+]]
+
+
+def test_backfill_reports_the_orders_it_actually_walked(monkeypatch, local_env):
+    """The defect was in the WIRING, not in reconcile().
+
+    `orders in the window: 0` printed above `reconciled: 42`, because the CLI
+    never passed the count it already had.
+    """
+    install_fake_api(monkeypatch, IN_WINDOW)
+
+    code, out, err = run(["backfill", "--since", "2026-09-11T00:00:00Z"])
+
+    assert code == cli.EXIT_OK, err
+    assert "orders in the window: 3" in out, out
+    assert "INCONSISTENT" not in out, out

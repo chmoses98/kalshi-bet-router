@@ -399,7 +399,13 @@ def _run_backfill(args, client, out, err) -> int:
 
     print("", file=out)
     print(f"destination ledgers supplied: {sorted(ledgers) or 'none'}", file=out)
-    _importable, diagnostics = reconcile(wagers, ledgers, frozenset(ledgers))
+    # orders_considered on the production diagnostics IS the in-window order
+    # count: evaluate_window hands evaluate_production exactly the candidates
+    # the window selected.
+    _importable, diagnostics = reconcile(
+        wagers, ledgers, frozenset(ledgers),
+        orders_in_window=result.production.orders_considered,
+    )
     print("", file=out)
     print(diagnostics.render(), file=out)
     print("", file=out)
