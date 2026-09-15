@@ -686,18 +686,64 @@ def to_import_row(wager: ProductionWager) -> dict:
         "side": wager.side,
         "stake": float(wager.stake),
         "entryPrice": float(wager.vwap_price),
+        # Quantity, NOT an economics field: the destination's canonical builder
+        # takes `contracts` as its own parameter, and it is deliberately absent
+        # from _EXECUTION_ECONOMICS_FIELDS. It also comes straight from the
+        # fills' own quantities -- never divided back out of the stake, which
+        # would turn a rounding artefact into a contract count.
         "contracts": float(wager.contracts),
-        "contractCost": float(wager.vwap_price * wager.contracts),
-        "totalFees": float(wager.total_fees),
-        "actualCashConsumed": float(wager.stake),
+        "executionEconomics": execution_economics(wager),
         "status": "pending",
-        "executionStatus": "HELD_TO_SETTLEMENT",
-        # The fees are the exchange's own, read from its fills. Nothing here is
-        # reconstructed from a fee schedule, which is what the lower tiers of
-        # these enums mean.
-        "feeStatus": "ACTUAL_API_FILL",
-        "economicsSource": "EXACT_API_EXECUTION",
         "source": "OTHER",
         "entryMethod": "IMPORTED_RECEIPT",
         "trackingType": "REAL",
+    }
+
+
+def execution_economics(wager: ProductionWager) -> dict:
+    """The exact exchange economics, in the destination's canonical shape.
+
+    NESTED, NOT FLAT, and that distinction cost a real wager. These fields were
+    previously emitted at the top level of the row, where the destination's
+    batch importer never looks: it reads `row["executionEconomics"]` and expands
+    it through `_execution_economics_defaults`. So every one of them silently
+    became null on the first genuine delivery -- including `totalFees`, which is
+    the entire reason for routing from actual fills rather than reconstructing a
+    fee schedule.
+
+    Every key here is checked against the destination's own
+    `_EXECUTION_ECONOMICS_FIELDS`, which REFUSES an unknown key rather than
+    dropping it. That refusal is a feature and this function is written to rely
+    on it: a typo fails the import loudly instead of vanishing, which is exactly
+    what did not happen last time.
+
+    WHAT IS DELIBERATELY LEFT NULL. Only what this order actually evidences is
+    filled in. `exitFees`, `grossCashReturned`, `grossSettlementPayout`,
+    `exitSaleProceeds` and `realizedROI` belong to a position that has closed,
+    and this one has not. `feeType` would need taker/maker resolved across every
+    fill of the order, which the aggregate does not currently carry -- so it
+    stays null rather than being guessed at MIXED. A null here means "not
+    established", and filling it to avoid a null would be the lie.
+    """
+    contract_cost = wager.vwap_price * wager.contracts
+    return {
+        # contracts x VWAP. The price is quantity-weighted across the order's
+        # own fills, so this is the cost actually paid, not a nominal one.
+        "contractCost": float(contract_cost),
+        "averageFillPrice": float(wager.vwap_price),
+        # The exchange's own fee, summed from its fills. Nothing here is
+        # reconstructed from a fee schedule, which is what the lower tiers of
+        # feeStatus and feeSource mean.
+        "totalFees": float(wager.total_fees),
+        "actualCashConsumed": float(contract_cost + wager.total_fees),
+        "executionStatus": "HELD_TO_SETTLEMENT",
+        "feeStatus": "ACTUAL_API_FILL",
+        # EXACT_ORDER_EXECUTION rather than EXACT_API_FILL: the fee is summed
+        # over one ORDER's fills, which is the unit this router records.
+        "feeSource": "EXACT_ORDER_EXECUTION",
+        "economicsSource": "EXACT_API_EXECUTION",
+        # The destination maps EXACT_API_EXECUTION to HIGH in its own
+        # _CONFIDENCE_BY_SOURCE table; this states that mapping rather than
+        # inventing a confidence of its own.
+        "economicsConfidence": "HIGH",
     }

@@ -360,3 +360,100 @@ def test_the_delivered_row_invents_no_field_the_destination_owns():
 
     for field in ("betId", "validationStatus", "provenance", "createdAt", "recordedAt"):
         assert field not in row
+
+
+# ---------------------------------------- the destination's economics contract
+#
+# On the first genuine delivery the wager was recorded with a stake and a price
+# and nothing else: contracts, contractCost, totalFees and actualCashConsumed
+# all landed null. These fields were emitted FLAT at the top level of the row,
+# and the destination reads them from a NESTED `executionEconomics` object --
+# so the importer accepted a hollow row rather than failing. `totalFees` is the
+# entire reason for routing from actual fills instead of a fee schedule, so a
+# null there is not a cosmetic loss.
+
+#: Copied verbatim from the destination's `lib.edgelab.bets`
+#: `_EXECUTION_ECONOMICS_FIELDS`. The destination REFUSES an unknown key rather
+#: than dropping it, so a key absent from this tuple would fail the import
+#: loudly -- which is the property that makes the nested shape safe to rely on,
+#: and the property the flat shape never got to use.
+DESTINATION_ECONOMICS_FIELDS = (
+    "contractCost", "averageFillPrice", "entryFees", "exitFees", "totalFees",
+    "actualCashConsumed", "unusedAllocatedCash",
+    "grossCashReturned", "grossSettlementPayout", "exitSaleProceeds", "realizedROI",
+    "executionStatus", "feeStatus", "feeType", "feeMultiplier", "feeSource",
+    "feeScheduleVersion", "feeEffectiveDate", "economicsSource", "economicsConfidence",
+)
+
+
+def test_execution_economics_are_nested_not_flat():
+    """The defect, stated as a property.
+
+    A top-level `totalFees` is invisible to the destination, so its presence
+    there is not a harmless duplicate -- it is the bug.
+    """
+    row = _delivered_row()
+
+    assert isinstance(row["executionEconomics"], dict)
+    leaked = sorted(set(row) & set(DESTINATION_ECONOMICS_FIELDS))
+    assert leaked == [], f"economics fields emitted flat, where the importer never looks: {leaked}"
+
+
+def test_every_economics_key_is_one_the_destination_accepts():
+    """An unknown key would fail the whole import, so it must never be sent."""
+    economics = _delivered_row()["executionEconomics"]
+
+    unknown = sorted(set(economics) - set(DESTINATION_ECONOMICS_FIELDS))
+    assert unknown == [], f"the destination would refuse the batch over: {unknown}"
+
+
+def test_contracts_stays_top_level_because_it_is_not_an_economics_field():
+    """`contracts` is a quantity the canonical builder takes directly, and is
+    deliberately absent from the destination's economics field list. Nesting it
+    would make the importer refuse the entire batch."""
+    row = _delivered_row()
+
+    assert row["contracts"] == 10.0
+    assert "contracts" not in row["executionEconomics"]
+    assert "contracts" not in DESTINATION_ECONOMICS_FIELDS
+
+
+def test_the_emitted_economics_carry_exact_exchange_evidence():
+    economics = _delivered_row()["executionEconomics"]
+
+    assert economics["averageFillPrice"] == 0.53
+    assert economics["contractCost"] == 5.3          # 10 x 0.53
+    assert economics["totalFees"] == 0.07
+    assert economics["actualCashConsumed"] == 5.37   # 5.3 + 0.07
+    assert economics["executionStatus"] == "HELD_TO_SETTLEMENT"
+    assert economics["feeStatus"] == "ACTUAL_API_FILL"
+    assert economics["feeSource"] == "EXACT_ORDER_EXECUTION"
+    assert economics["economicsSource"] == "EXACT_API_EXECUTION"
+    assert economics["economicsConfidence"] == "HIGH"
+
+
+def test_the_opening_execution_identity_holds_in_the_emitted_row():
+    """contracts x VWAP = contractCost; + fees = cash consumed = stake."""
+    row = _delivered_row()
+    economics = row["executionEconomics"]
+
+    assert round(row["contracts"] * economics["averageFillPrice"], 6) == economics["contractCost"]
+    assert round(economics["contractCost"] + economics["totalFees"], 6) == economics["actualCashConsumed"]
+    assert economics["actualCashConsumed"] == row["stake"]
+
+
+def test_fields_belonging_to_a_closed_position_are_left_null():
+    """Only what this order evidences is filled in.
+
+    An exit price, a settlement payout and a realised ROI belong to a position
+    that has closed, and this one has not. Filling them to avoid a null would be
+    the lie -- a null here means "not established".
+    """
+    economics = _delivered_row()["executionEconomics"]
+
+    for field in ("exitFees", "grossCashReturned", "grossSettlementPayout",
+                  "exitSaleProceeds", "realizedROI", "unusedAllocatedCash"):
+        assert economics.get(field) is None, f"{field} was asserted for an open position"
+    # feeType would need taker/maker resolved across every fill of the order,
+    # which the aggregate does not carry, so it is not guessed at MIXED.
+    assert economics.get("feeType") is None
