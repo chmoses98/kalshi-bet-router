@@ -955,9 +955,10 @@ def test_the_settlement_pass_walks_only_what_it_reads(monkeypatch, local_env, tm
     a market ever closed. `settle` reads none of that -- it needs the
     settlements and already knows which wagers it is attributing them to.
 
-    Measured: the first settlement run spent over half an hour in that branch
-    against a 45-minute job timeout, while the wager pass over the same window
-    took four minutes.
+    Measured: the first settlement run's attribution step had run 8m52s without
+    finishing when it was cancelled by hand, against a wager pass over the same
+    window that completes in 3m51s to 7m00s. The exact excess is unknown,
+    because that run never completed to be measured.
 
     Asserted on the ROUTES REQUESTED rather than on a stopwatch, because a
     timing assertion in CI is a flake and a route assertion is a fact.
