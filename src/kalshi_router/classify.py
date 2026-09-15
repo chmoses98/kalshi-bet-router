@@ -783,6 +783,53 @@ def describe_competition_collisions(taxonomy) -> tuple[CollisionDetail, ...]:
     return tuple(details)
 
 
+def competitions_under_our_sports(taxonomy) -> dict[str, tuple[str, ...]]:
+    """Every competition the catalogue files under a sport that could hold one
+    of our four leagues.
+
+    THE QUESTION THIS EXISTS TO ANSWER. ``sport_from_competition`` maps
+    "pro baseball" to MLB as a LOCAL rule, while the series probe refuses to
+    promote a series on the strength of ``title='Pro Baseball ...'`` precisely
+    because professional baseball also means NPB and KBO. Those two positions
+    contradict each other, and the ambiguity gate is currently the only thing
+    stopping the weaker one from deciding where wagers get recorded.
+
+    Kalshi's own catalogue can settle it. If the Baseball heading lists NPB or
+    KBO as competitions ALONGSIDE "Pro Baseball", then "Pro Baseball" is a
+    distinct catalogue entry that does not cover them, and reading it as MLB is
+    supported by the exchange rather than by our own say-so. If instead the
+    catalogue has no separate entry for them, "Pro Baseball" may well be the
+    label it files them under, and reading it as MLB would put a Japanese or
+    Korean game into an MLB ledger.
+
+    Public catalogue data: sport headings and competition names from
+    ``GET /search/filters_by_sport``. No account data.
+    """
+    if taxonomy is None:
+        return {}
+    by_sport: dict[str, list[str]] = {}
+    for competition, sport in getattr(taxonomy, "competition_to_sport", {}).items():
+        if possible_sports(sport):
+            by_sport.setdefault(sport, []).append(competition)
+    for competition, claimants in getattr(taxonomy, "ambiguous_claimants", {}).items():
+        for sport in claimants:
+            if possible_sports(sport):
+                by_sport.setdefault(sport, []).append(f"{competition} (contested)")
+    return {sport: tuple(sorted(names)) for sport, names in sorted(by_sport.items())}
+
+
+def render_competitions_under_our_sports(by_sport) -> str:
+    if not by_sport:
+        return "competitions under our sports: none resolved"
+    lines = ["competitions the catalogue files under our sports "
+             "(public catalogue names; no account data):"]
+    for sport, names in by_sport.items():
+        lines.append(f"  {sport}: {len(names)}")
+        for name in names:
+            lines.append(f"    {name}")
+    return "\n".join(lines)
+
+
 def render_collision_details(details) -> str:
     """Text for the probe. Empty when there is nothing to name."""
     if not details:

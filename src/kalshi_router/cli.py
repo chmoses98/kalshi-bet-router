@@ -421,9 +421,11 @@ def _run_series_probe(client, out, err) -> int:
     written by the same run that decided it wanted more entries.
     """
     from .classify import (
+        competitions_under_our_sports,
         describe_competition_collisions,
         measure_competition_collisions,
         render_collision_details,
+        render_competitions_under_our_sports,
     )
     from .series_probe import MLB_LEDGER_CANDIDATES, probe_series
     from .sports import Sport
@@ -464,6 +466,11 @@ def _run_series_probe(client, out, err) -> int:
     # reader looking for one sport can read it as being about that sport.
     print("", file=out)
     print(render_collision_details(describe_competition_collisions(taxonomy)), file=out)
+    # Whether "Pro Baseball" is MLB-specific is decided by what ELSE the
+    # catalogue files under Baseball, not by our own mapping table.
+    print("", file=out)
+    print(render_competitions_under_our_sports(
+        competitions_under_our_sports(taxonomy)), file=out)
     return EXIT_OK
 
 

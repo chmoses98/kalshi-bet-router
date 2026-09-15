@@ -709,3 +709,23 @@ def test_the_series_probe_names_the_collisions_it_counts(monkeypatch, local_env)
     # ...and which one it is.
     assert "competition 'pro baseball'" in out, out
     assert "claimed by: baseball, football" in out, out
+
+
+def test_the_series_probe_lists_what_else_lives_under_our_sports(monkeypatch, local_env):
+    """Wired at the CLI, for the same reason as the collision naming."""
+    from .synthetic import make_taxonomy
+
+    install_fake_api(
+        monkeypatch,
+        [[]],
+        taxonomy=make_taxonomy({
+            "Baseball": ["Pro Baseball", "NPB"],
+            "Hockey": ["Pro Baseball"],
+        }),
+    )
+
+    code, out, err = run(["series-probe"])
+
+    assert code == cli.EXIT_OK, err
+    assert "competitions the catalogue files under our sports" in out, out
+    assert "npb" in out, out

@@ -963,3 +963,64 @@ def test_describing_collisions_changes_no_verdict():
         context(competition="Shared Competition"), taxonomy=AMBIGUOUS_TAXONOMY
     )
     assert after.sport is before.sport is Sport.UNRESOLVED
+
+
+def test_the_catalogue_listing_shows_what_else_lives_under_a_sport():
+    """The evidence that decides whether "Pro Baseball" means MLB.
+
+    `sport_from_competition` maps "pro baseball" to MLB as a LOCAL rule, while
+    the series probe refuses to promote a series on `title='Pro Baseball ...'`
+    because professional baseball also means NPB and KBO. Those positions
+    contradict each other, and only the catalogue can settle which is right.
+
+    A separate NPB entry means "Pro Baseball" does not cover NPB, so reading it
+    as MLB is the exchange's distinction rather than ours.
+    """
+    from kalshi_router.classify import competitions_under_our_sports
+
+    from .synthetic import make_taxonomy
+
+    taxonomy = parse_filters_by_sport(make_taxonomy({
+        "Baseball": ["Pro Baseball", "College Baseball", "NPB"],
+        "Tennis": ["ATP Madrid"],
+    }))
+    by_sport = competitions_under_our_sports(taxonomy)
+
+    assert "npb" in by_sport["baseball"]
+    assert "pro baseball" in by_sport["baseball"]
+
+
+def test_a_contested_competition_is_still_listed_and_marked():
+    """A collision must not make a competition vanish from the listing.
+
+    It is filed out of `competition_to_sport` precisely because it is
+    contested, so a listing built only from that map would omit the one
+    competition the reader came to look at.
+    """
+    from kalshi_router.classify import competitions_under_our_sports
+
+    from .synthetic import make_taxonomy
+
+    taxonomy = parse_filters_by_sport(make_taxonomy({
+        "Baseball": ["Pro Baseball"],
+        "Hockey": ["Pro Baseball"],
+    }))
+    by_sport = competitions_under_our_sports(taxonomy)
+
+    assert by_sport["baseball"] == ("pro baseball (contested)",)
+    # Hockey narrows to none of ours, so it is not listed as one of our sports.
+    assert "hockey" not in by_sport
+
+
+def test_the_listing_covers_only_sports_that_could_hold_one_of_our_four():
+    from kalshi_router.classify import competitions_under_our_sports
+
+    from .synthetic import make_taxonomy
+
+    taxonomy = parse_filters_by_sport(make_taxonomy({
+        "Baseball": ["Pro Baseball"],
+        "Basketball": ["Pro Basketball (M)"],
+    }))
+    by_sport = competitions_under_our_sports(taxonomy)
+
+    assert set(by_sport) == {"baseball"}
