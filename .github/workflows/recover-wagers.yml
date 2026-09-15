@@ -200,6 +200,29 @@ jobs:
 
             git -C "${work}" checkout -q -b "${branch}"
             git -C "${work}" add -A
+
+            # WHAT GOES INTO SOMEONE ELSE'S REPOSITORY IS CHECKED, NOT ASSUMED.
+            #
+            # `git add -A` is safe here only because the destination's own
+            # .gitignore covers what the importer leaves behind -- measured on
+            # a real clone, it creates three __pycache__ directories and a
+            # bets.jsonl.lock, and ignores all of them. That is a property of
+            # THEIR repository, which can change without anyone telling this
+            # workflow.
+            #
+            # So: a router-authored commit may only touch data/. A lock file or
+            # a .pyc appearing in one means something changed upstream, and
+            # stopping is far better than quietly committing it every 15
+            # minutes.
+            staged="$(git -C "${work}" diff --cached --name-only)"
+            unexpected="$(printf '%s\n' "${staged}" | grep -v '^data/' || true)"
+            if [ -n "${unexpected}" ]; then
+              echo "::error::${sport}: the import dirtied files outside data/ -- refusing to commit them:"
+              printf '%s\n' "${unexpected}"
+              failures=$((failures + 1))
+              continue
+            fi
+
             git -C "${work}" commit -q -m "Recover Kalshi wagers via kalshi-bet-router (${sport})"
 
             # --force-with-lease, and ONLY onto this router-owned branch: the

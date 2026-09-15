@@ -780,3 +780,36 @@ def test_only_the_health_annotation_may_claim_a_health_verdict(path):
             assert "::notice::" in line or "::warning::" in line, (
                 f"{path.name} states a health verdict outside the annotation: {line.strip()}"
             )
+
+
+@pytest.mark.parametrize("name,text", _delivering_workflow_texts(), ids=lambda v: v if isinstance(v, str) and len(v) < 40 else "")
+def test_a_router_commit_may_only_touch_the_data_directory(name, text):
+    """`git add -A` writes into SOMEONE ELSE'S repository every 15 minutes.
+
+    It is safe today only because the destination's own .gitignore covers what
+    the importer leaves behind -- measured on a real clone, three __pycache__
+    directories and a bets.jsonl.lock, all ignored. That is a property of THEIR
+    repository, which can change without telling this workflow.
+
+    So the staged set is checked before committing, and anything outside data/
+    stops the delivery rather than riding along.
+    """
+    assert "diff --cached --name-only" in text, f"{name} commits without checking what"
+    assert "grep -v '^data/'" in text
+    assert "dirtied files outside data/" in text
+
+
+@pytest.mark.parametrize("name,text", _delivering_workflow_texts(), ids=lambda v: v if isinstance(v, str) and len(v) < 40 else "")
+def test_an_unexpected_staged_file_is_a_failure_not_a_warning(name, text):
+    """Committing a lock file into the destination every 15 minutes is worse
+    than a red job."""
+    joined = text.replace("\\\n", " ")
+    lines = joined.splitlines()
+    for index, line in enumerate(lines):
+        if "dirtied files outside data/" in line:
+            window = "\n".join(lines[index : index + 6])
+            assert "failures=$((failures + 1))" in window, f"{name}: does not count as a failure"
+            assert "::error::" in line
+            break
+    else:  # pragma: no cover - the assertion above already covers absence
+        raise AssertionError(f"{name} has no guard")
