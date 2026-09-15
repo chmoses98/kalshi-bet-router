@@ -275,20 +275,50 @@ def test_the_probe_never_echoes_or_traces_the_credential(probe_text):
         assert leak not in probe_text
 
 
-def test_the_probe_writes_nothing_anywhere(probe_text):
-    """It proves a write credential by READING repository metadata.
+def test_the_probe_creates_nothing_anywhere(probe_text):
+    """It proves a write credential without writing.
 
-    A probe that creates a branch to prove it can create a branch has to be
-    trusted to clean up after itself, and the thing it would be writing next to
-    is canonical wager data.
+    This began as a blanket ban on every mutating verb, which was the stronger
+    and simpler guarantee. It has been NARROWED, deliberately, and the reason
+    is worth stating because the narrowing is the risky part:
+
+    delivery ENDS in a pull request, and `.permissions` on the repository
+    object does not report Pull requests:write. A token with Contents:write and
+    without it would push the branch and then fail on the FIRST REAL WAGER. The
+    only way to ask GitHub that question is to attempt the call, so exactly one
+    POST is now permitted -- and only the one that CANNOT create anything,
+    because its head branch does not exist.
+
+    Everything else stays banned outright, and the exception is asserted rather
+    than assumed: a POST to any other path, or to /pulls without the
+    impossible head, fails here.
     """
     lowered = probe_text.lower()
+
+    # Still absolutely forbidden: nothing that could modify or delete.
     for mutation in (
-        '-x post', '-x put', '-x patch', '-x delete',
-        '--request post', '--request put', '--request delete',
-        "git push", "git commit", "/git/refs", "/contents/", "/pulls",
+        '-x put', '-x patch', '-x delete',
+        '--request put', '--request patch', '--request delete',
+        "git push", "git commit", "/git/refs", "/contents/",
     ):
-        assert mutation not in lowered
+        assert mutation not in lowered, f"the probe must never {mutation}"
+
+    # POST is permitted only as the pull-request permission probe.
+    joined = probe_text.replace("\\\n", " ")
+    posts = [
+        line for line in joined.splitlines()
+        if "-X POST" in line or "--request POST" in line
+    ]
+    for line in posts:
+        assert "/pulls" in line, f"POST to something other than /pulls: {line.strip()}"
+
+    assert len(posts) <= 1, "exactly one POST is permitted"
+    if posts:
+        # The head must be the branch that cannot exist, so nothing can be
+        # created even if authorization succeeds.
+        assert "__probe_branch_that_does_not_exist__" in joined, (
+            "the pull-request probe must use a head branch that cannot exist"
+        )
 
 
 def test_the_probe_uploads_no_artifact(probe):
@@ -813,3 +843,55 @@ def test_an_unexpected_staged_file_is_a_failure_not_a_warning(name, text):
             break
     else:  # pragma: no cover - the assertion above already covers absence
         raise AssertionError(f"{name} has no guard")
+
+
+# ---- the probe must stay a PROBE ------------------------------------------
+
+
+def test_the_probe_checks_pull_request_permission_not_just_contents(probe_text):
+    """Contents:write is not enough. Delivery ENDS in a pull request, and a
+    token without Pull requests:write would push the branch and then fail on
+    the first real wager -- the worst moment to find out."""
+    assert "/pulls" in probe_text
+    assert "pr_ok" in probe_text
+
+
+def test_the_pull_request_probe_cannot_create_anything(probe_text):
+    """It asks to open a pull request from a head branch that does not exist,
+    so GitHub has nothing to create from. The only question is which error
+    comes back."""
+    assert "__probe_branch_that_does_not_exist__" in probe_text
+
+
+def test_a_created_pull_request_is_treated_as_an_error(probe_text):
+    """Impossible from a non-existent head -- and if it ever happens, the probe
+    wrote to someone's repository and that must not pass silently."""
+    joined = probe_text.replace("\\\n", " ")
+    lines = joined.splitlines()
+    for index, line in enumerate(lines):
+        if line.strip().startswith("201)"):
+            window = "\n".join(lines[index : index + 5])
+            assert "::error::" in window
+            assert 'pr_ok="false"' in window
+            return
+    raise AssertionError("the probe does not handle a 201 at all")
+
+
+def test_an_unrecognised_probe_status_is_unknown_rather_than_guessed(probe_text):
+    """Reporting an uninterpreted status as either pass or fail would be an
+    opinion dressed as a measurement."""
+    assert 'pr_ok="unknown"' in probe_text
+    assert "is not interpreted" in probe_text
+
+
+def test_a_destination_is_usable_only_if_every_check_passed(probe_text):
+    """pr_ok must gate the verdict, not merely be printed beside it."""
+    joined = probe_text.replace("\\\n", " ")
+    verdict = [line for line in joined.splitlines() if "NOT USABLE" in line]
+    assert verdict
+    condition = [
+        line for line in joined.splitlines()
+        if 'if [ "${status}" != "200" ]' in line
+    ]
+    assert condition, "the verdict condition moved"
+    assert '${pr_ok}' in condition[0], "pr_ok is printed but does not gate the verdict"
