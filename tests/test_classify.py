@@ -731,3 +731,181 @@ def test_malformed_metadata_error_never_echoes_the_value():
         )
     )
     assert "Secret Competition" not in result.reason
+
+
+# ---------------------------------------------------------------------------
+# Measuring the L2 ambiguity gate.
+#
+# The live run of 2026-09-15 refused 649 markets as COMPETITION_AMBIGUOUS and
+# classified ZERO episodes as MLB -- in an account whose destination ledger
+# holds 457 MLB bets. That is a reason to MEASURE the gate, not to lower it.
+#
+# The taxonomy's top level is SPORTS ("Baseball", "Football"); our four are
+# leagues inside them. So a collision is two SPORTS claiming one competition
+# name, and the question is whether those sports could contain different ones
+# of our four. These tests pin that the measurement tells a real conflict from
+# a nominal one, because that difference is what any future decision about the
+# gate would have to rest on.
+#
+# Nothing here changes a verdict, and the last test proves it.
+# ---------------------------------------------------------------------------
+
+from kalshi_router.classify import measure_competition_collisions
+from kalshi_router.taxonomy import SportTaxonomy
+
+
+def _taxonomy(claimants):
+    taxonomy = SportTaxonomy()
+    taxonomy.ambiguous_claimants = {k: set(v) for k, v in claimants.items()}
+    taxonomy.ambiguous_competitions = set(claimants)
+    return taxonomy
+
+
+def test_no_taxonomy_measures_nothing_rather_than_crashing():
+    assert measure_competition_collisions(None).collisions == 0
+
+
+def test_baseball_versus_football_is_a_real_conflict():
+    """Baseball could be MLB; Football could be NFL or CFB. Resolving this
+    would mean choosing between them on our own say-so."""
+    structure = measure_competition_collisions(
+        _taxonomy({"world series": {"baseball", "football"}})
+    )
+
+    assert structure.conflicting_routable_sports == 1
+    assert structure.one_routable_claimant == 0
+
+
+def test_a_sport_that_narrows_nothing_does_not_create_a_conflict():
+    """Golf contains none of our four, so Tennis-versus-Golf is not a
+    disagreement about which of OUR leagues a market belongs to."""
+    structure = measure_competition_collisions(
+        _taxonomy({"us open": {"tennis", "golf"}})
+    )
+
+    assert structure.one_routable_claimant == 1
+    assert structure.conflicting_routable_sports == 0
+
+
+def test_a_collision_between_two_out_of_scope_sports_costs_nothing():
+    structure = measure_competition_collisions(
+        _taxonomy({"finals": {"basketball", "hockey"}})
+    )
+
+    assert structure.no_routable_claimant == 1
+
+
+def test_an_unheard_of_sport_is_neither_nominal_nor_conflicting():
+    """It narrows nothing, so calling it either would be an opinion."""
+    structure = measure_competition_collisions(
+        _taxonomy({"open": {"baseball", "kabaddi"}})
+    )
+
+    assert structure.unknown_claimant == 1
+    assert structure.one_routable_claimant == 0
+    assert structure.conflicting_routable_sports == 0
+
+
+def test_the_buckets_partition_the_collisions():
+    structure = measure_competition_collisions(
+        _taxonomy({
+            "a": {"baseball", "football"},
+            "b": {"tennis", "golf"},
+            "c": {"basketball", "hockey"},
+            "d": {"baseball", "kabaddi"},
+        })
+    )
+
+    assert structure.collisions == 4
+    assert (
+        structure.conflicting_routable_sports
+        + structure.one_routable_claimant
+        + structure.no_routable_claimant
+        + structure.unknown_claimant
+    ) == structure.collisions
+
+
+def test_it_prices_the_ordering_by_counting_what_the_direct_rule_would_decide():
+    """The gate runs BEFORE the direct rule, so each of these is a market the
+    router could name and refuses to."""
+    structure = measure_competition_collisions(
+        _taxonomy({"mlb": {"baseball", "golf"}})
+    )
+
+    assert structure.direct_rule_would_decide == 1
+    assert structure.direct_rule_agrees_with_claimant == 1
+    assert structure.direct_rule_contradicts_claimant == 0
+
+
+def test_a_contradiction_is_reported_as_the_case_FOR_the_gate():
+    """If the direct rule says MLB and no claimant sport could contain MLB,
+    the gate is preventing a wrong answer rather than discarding a right one.
+    That has to be visible in its own right."""
+    structure = measure_competition_collisions(
+        _taxonomy({"mlb": {"basketball", "hockey"}})
+    )
+
+    assert structure.direct_rule_would_decide == 1
+    assert structure.direct_rule_contradicts_claimant == 1
+    assert structure.direct_rule_agrees_with_claimant == 0
+
+
+def test_an_unknown_claimant_is_never_scored_as_agreement_or_contradiction():
+    """We cannot say what it narrows to, so we say neither."""
+    structure = measure_competition_collisions(
+        _taxonomy({"mlb": {"baseball", "kabaddi"}})
+    )
+
+    assert structure.direct_rule_would_decide == 1
+    assert structure.direct_rule_agrees_with_claimant == 0
+    assert structure.direct_rule_contradicts_claimant == 0
+
+
+def test_the_measurement_is_structurally_counts_only():
+    structure = measure_competition_collisions(
+        _taxonomy({"kxmlbgame": {"baseball", "football"}})
+    )
+
+    for name, value in structure.as_dict().items():
+        assert isinstance(value, int), f"{name} is {type(value).__name__}"
+    assert "kxmlb" not in structure.render().lower()
+
+
+def test_measuring_changes_no_verdict():
+    """The gate is untouched. Uses the file's own AMBIGUOUS_TAXONOMY, and
+    compares the classification before and after the measurement runs."""
+    before = classify_market(
+        context(competition="Shared Competition"), taxonomy=AMBIGUOUS_TAXONOMY
+    )
+
+    measure_competition_collisions(AMBIGUOUS_TAXONOMY)
+
+    after = classify_market(
+        context(competition="Shared Competition"), taxonomy=AMBIGUOUS_TAXONOMY
+    )
+    assert after.sport is Sport.UNRESOLVED
+    assert after.unresolved_reason is UnresolvedReason.COMPETITION_AMBIGUOUS
+    assert (after.sport, after.unresolved_reason) == (before.sport, before.unresolved_reason)
+
+
+def test_measuring_does_not_mutate_the_taxonomy():
+    """It is a pure read. A measurement that edited its input would be a very
+    quiet way to change every later verdict."""
+    import copy
+
+    original = copy.deepcopy(AMBIGUOUS_TAXONOMY)
+
+    measure_competition_collisions(AMBIGUOUS_TAXONOMY)
+
+    assert AMBIGUOUS_TAXONOMY.ambiguous_competitions == original.ambiguous_competitions
+    assert AMBIGUOUS_TAXONOMY.competition_to_sport == original.competition_to_sport
+    assert AMBIGUOUS_TAXONOMY.ambiguous_claimants == original.ambiguous_claimants
+
+
+def test_the_real_ambiguous_taxonomy_measures_as_a_conflict():
+    """Football-versus-Tennis on one name: they could contain different ones of
+    our four, so this is the kind of collision the gate exists for."""
+    structure = measure_competition_collisions(AMBIGUOUS_TAXONOMY)
+
+    assert structure.collisions == 1
+    assert structure.conflicting_routable_sports == 1

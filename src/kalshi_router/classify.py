@@ -51,6 +51,7 @@ from typing import TYPE_CHECKING, Any, Iterable
 
 from .competitions import (
     is_ambiguous_sport,
+    possible_sports,
     normalize,
     sport_from_competition,
     sport_from_taxonomy_sport,
@@ -635,3 +636,127 @@ def classify_market(
 
     return build(winner.sport, f"{winner.level.value}: {winner.detail}", evidence, series_ticker,
                  resolved_by=winner.level, unverified=used_unverified, conflict=conflict)
+
+
+# ---------------------------------------------- measuring the L2 ambiguity gate
+#
+# The live run of 2026-09-15 refused 649 markets as COMPETITION_AMBIGUOUS and
+# classified ZERO of the account's episodes as MLB, in an account whose
+# destination ledger holds 457 MLB bets. So the ambiguity gate is not a rare
+# edge; it is the dominant outcome, and the system cannot record the wagers it
+# exists to record.
+#
+# That is a reason to MEASURE the gate, not to lower it. The gate is there
+# because a competition claimed by two sports in Kalshi's own catalogue is one
+# our local rules must not quietly overrule. But "two sports claim this name"
+# and "two sports disagree about which game this is" are different statements,
+# and only the second justifies refusing. A collision between a league and its
+# own parent category is the first kind.
+#
+# Nothing below changes a verdict. It reports the SHAPE of the collisions so
+# the difference can be established from evidence instead of argued about.
+
+
+@dataclass
+class CollisionStructure:
+    """Counts only. What KIND of ambiguity the taxonomy's collisions are.
+
+    The taxonomy's top level is SPORTS ("Baseball", "Football"), and our four
+    are leagues inside them. So a collision is two sports claiming one
+    competition name, and the question that matters is whether those two sports
+    could contain DIFFERENT ones of our four.
+    """
+
+    collisions: int = 0
+
+    #: The claimant sports could contain two or more DIFFERENT ones of our four.
+    #: A real conflict: resolving it would mean choosing on our own say-so.
+    conflicting_routable_sports: int = 0
+    #: Every claimant that narrows anything narrows to the SAME one of our four.
+    #: Nominal: the catalogue lists the name under two sports, it does not
+    #: disagree about which of our leagues it could be.
+    one_routable_claimant: int = 0
+    #: No claimant could contain any of our four. Refusing costs nothing.
+    no_routable_claimant: int = 0
+    #: At least one claimant is a sport we have never heard of, so we cannot say
+    #: what it narrows to. Counted apart from a real conflict, because "unknown"
+    #: and "contradicted" are different and only one of them is evidence.
+    unknown_claimant: int = 0
+
+    #: Of the collisions, how many the DIRECT competition rule would decide on
+    #: its own. This prices the current ordering: the gate runs BEFORE the
+    #: direct rule, so every one of these is a market the router could name and
+    #: refuses to.
+    direct_rule_would_decide: int = 0
+    #: ...and the claimant sports could contain exactly that answer. The gate is
+    #: discarding a resolvable answer the catalogue does not contradict.
+    direct_rule_agrees_with_claimant: int = 0
+    #: ...and no claimant could contain that answer. A non-zero value here is
+    #: the case FOR the gate, stated in its own terms.
+    direct_rule_contradicts_claimant: int = 0
+
+    def as_dict(self) -> dict[str, int]:
+        return dict(vars(self))
+
+    def render(self) -> str:
+        return "\n".join([
+            "taxonomy competition collisions (counts only; no verdict changes):",
+            f"  collisions: {self.collisions}",
+            f"    claimant sports could contain DIFFERENT ones of our four: "
+            f"{self.conflicting_routable_sports}",
+            f"    all claimants narrow to the same one (nominal): "
+            f"{self.one_routable_claimant}",
+            f"    no claimant could contain any of our four: "
+            f"{self.no_routable_claimant}",
+            f"    a claimant sport we have never heard of: {self.unknown_claimant}",
+            "",
+            f"  the direct competition rule would decide: "
+            f"{self.direct_rule_would_decide}",
+            f"    and the claimants could contain that answer: "
+            f"{self.direct_rule_agrees_with_claimant}",
+            f"    and no claimant could (the case FOR the gate): "
+            f"{self.direct_rule_contradicts_claimant}",
+        ])
+
+
+def measure_competition_collisions(taxonomy) -> CollisionStructure:
+    """Describe the taxonomy's collisions without resolving any of them."""
+    structure = CollisionStructure()
+    if taxonomy is None:
+        return structure
+
+    for competition, claimants in sorted(
+        getattr(taxonomy, "ambiguous_claimants", {}).items()
+    ):
+        structure.collisions += 1
+
+        narrowed = [possible_sports(name) for name in sorted(claimants)]
+        if any(members is None for members in narrowed):
+            # An unheard-of sport narrows nothing, so this collision cannot be
+            # called nominal OR conflicting. Saying so is the honest answer;
+            # folding it into either bucket would be an opinion.
+            structure.unknown_claimant += 1
+            possible: frozenset = frozenset()
+            known = False
+        else:
+            possible = frozenset().union(*narrowed) if narrowed else frozenset()
+            known = True
+            if len(possible) > 1:
+                structure.conflicting_routable_sports += 1
+            elif len(possible) == 1:
+                structure.one_routable_claimant += 1
+            else:
+                structure.no_routable_claimant += 1
+
+        direct = sport_from_competition(competition)
+        if direct not in ROUTABLE_SPORTS:
+            continue
+        structure.direct_rule_would_decide += 1
+        if not known:
+            continue
+        if direct in possible:
+            structure.direct_rule_agrees_with_claimant += 1
+        else:
+            structure.direct_rule_contradicts_claimant += 1
+
+    return structure

@@ -90,7 +90,9 @@ jobs:
             echo "pre-cutover history: NOT requested (the normal case)."
           fi
 
-          python -m kalshi_router.cli deliver "${args[@]}"
+          python -m kalshi_router.cli deliver "${args[@]}" \
+            | tee "${RUNNER_TEMP}/report.txt"
+          grep -E '^HEALTH=' "${RUNNER_TEMP}/report.txt" >> "${GITHUB_ENV}"
 
       - name: Deliver each destination
         env:
@@ -189,3 +191,29 @@ jobs:
           if [ "${failures}" -ne 0 ]; then
             exit 1
           fi
+
+      - name: Annotate the run's health
+        run: |
+          set -euo pipefail
+          # A REFUSAL IS NOT A FAILURE. This step never fails the job: the one
+          # state that asks for a human (BLOCKED) is a correct refusal of a
+          # wager this system cannot record, and failing a job every 15 minutes
+          # for something only the owner can fix would train them to ignore it.
+          # It is a warning and a job summary, which is what "visible" means
+          # here.
+          case "${HEALTH:-}" in
+            healthy_no_op)
+              echo "::notice::HEALTHY NO-OP -- no post-cutover activity." ;;
+            delivered)
+              echo "::notice::DELIVERED -- at least one wager was handed to a destination." ;;
+            deferred)
+              echo "::notice::DEFERRED -- held by a gate that opens on its own. The next run is the fix." ;;
+            not_routable)
+              echo "::notice::NOT ROUTABLE -- post-cutover activity this system is designed never to route." ;;
+            blocked)
+              echo "::warning::BLOCKED -- a wager was placed that this system cannot record, and waiting will not change that. See the refusal counts above." ;;
+            *)
+              echo "::error::The run reported no health state ('${HEALTH:-}'). That is itself a defect."
+              exit 1 ;;
+          esac
+          echo "health: ${HEALTH:-unknown}" >> "${GITHUB_STEP_SUMMARY}"

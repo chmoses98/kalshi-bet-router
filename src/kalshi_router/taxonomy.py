@@ -92,6 +92,14 @@ class SportTaxonomy:
 
     #: normalized competition name -> normalized sport name (unambiguous only)
     competition_to_sport: dict[str, str] = field(default_factory=dict)
+    #: normalized competition -> the sports that claim it, for the collisions
+    #: only. Retained (rather than discarded after the ambiguity set is built)
+    #: so the SHAPE of a collision can be measured: "two sports claim this" and
+    #: "two sports disagree about which game this is" are not the same
+    #: statement, and only the second is a reason nobody can resolve it.
+    #:
+    #: These are Kalshi's own published catalogue names, not account data.
+    ambiguous_claimants: dict[str, set[str]] = field(default_factory=dict)
     #: normalized competitions claimed by more than one sport; never resolvable
     ambiguous_competitions: set[str] = field(default_factory=set)
     #: normalized sport name -> original display name
@@ -261,5 +269,6 @@ def parse_filters_by_sport(payload: dict[str, Any]) -> SportTaxonomy:
             # Two or more sports claim this name: the taxonomy cannot say who
             # owns it, so nobody does.
             taxonomy.ambiguous_competitions.add(competition)
+            taxonomy.ambiguous_claimants[competition] = set(sports)
 
     return taxonomy

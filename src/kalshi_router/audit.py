@@ -18,9 +18,11 @@ from .accounting.engine import AccountingEngine, HistoryCompleteness
 from .aggregate import AuditReport
 from .classify import (
     Classification,
+    CollisionStructure,
     EvidenceLevel,
     UnresolvedReason,
     classify_market,
+    measure_competition_collisions,
 )
 from .client import KalshiReadOnlyClient, WalkStats
 from .coverage import SettlementCoverage, build_settlement_coverage
@@ -97,6 +99,9 @@ class AuditResult:
     coverage: SchemaCoverage = field(default_factory=SchemaCoverage)
     #: Replay-versus-exchange measurement.  Empty unless explicitly requested.
     reconciliation: ReconciliationReport | None = None
+    #: What kind of ambiguity the taxonomy's competition collisions are.
+    #: Measured, never acted on: it changes no verdict.
+    collisions: CollisionStructure = field(default_factory=CollisionStructure)
     #: What the fill walks earned the right to claim about the history.
     history: HistoryEvidence = field(default_factory=HistoryEvidence)
     #: How far back settlement evidence reaches. Empty unless reconciling.
@@ -484,6 +489,7 @@ def run_audit(
 
     return AuditResult(
         report=report,
+        collisions=measure_competition_collisions(taxonomy),
         wagers=wager_diagnostics,
         ledger_comparison=ledger_comparison,
         finality=finality_evidence,

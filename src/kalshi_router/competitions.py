@@ -85,6 +85,43 @@ OUT_OF_SCOPE_SPORTS: frozenset[str] = frozenset({
 #: without a recognized competition is the fail-closed case.
 AMBIGUOUS_SPORTS: frozenset[str] = frozenset({"football", "baseball"})
 
+#: Which of OUR four sports could live under a taxonomy SPORT name.
+#:
+#: The taxonomy's top level is sports ("Baseball", "Football", "Tennis"), and
+#: our four are leagues inside them. AMBIGUOUS_SPORTS above says a sport name is
+#: not sufficient; this says what it does narrow the answer TO, which is a
+#: different and useful question when reasoning about a collision between two
+#: sports that both claim one competition name.
+#:
+#: A sport absent from this map narrows nothing: ``possible_sports`` returns
+#: None for it rather than an empty set, because "this sport contains none of
+#: our four" and "we have never heard of this sport" must not be the same
+#: answer.
+SPORT_FAMILY_MEMBERS: dict[str, frozenset[Sport]] = {
+    "baseball": frozenset({Sport.MLB}),
+    "football": frozenset({Sport.NFL, Sport.CFB}),
+    "american football": frozenset({Sport.NFL, Sport.CFB}),
+    "college football": frozenset({Sport.CFB}),
+    SPORT_TENNIS: frozenset({Sport.TENNIS}),
+}
+
+
+def possible_sports(sport_name: str) -> frozenset[Sport] | None:
+    """Which of our four could be under this taxonomy sport, or None if unknown.
+
+    ``frozenset()`` means "positively none of ours" -- an out-of-scope sport.
+    ``None`` means "we cannot say", which callers must not read as "none".
+    """
+    key = normalize(sport_name)
+    if not key:
+        return None
+    if key in SPORT_FAMILY_MEMBERS:
+        return SPORT_FAMILY_MEMBERS[key]
+    if key in OUT_OF_SCOPE_SPORTS:
+        return frozenset()
+    return None
+
+
 #: Tour tokens that identify tennis when the live taxonomy is unavailable.
 #: Matched with word boundaries against the competition string.
 TENNIS_COMPETITION_TOKENS: tuple[str, ...] = ("atp", "wta", "itf")
