@@ -255,9 +255,20 @@ jobs:
             #
             # So the expectation is stated outright. An EMPTY value means "the
             # branch must not exist yet", which is the first run.
+            #
+            # --verify --quiet IS LOAD-BEARING, and its absence cost a real
+            # wager. A bare `git rev-parse <missing-ref>` ECHOES ITS ARGUMENT TO
+            # STDOUT before failing, so `expected` became the literal string
+            # "refs/remotes/origin/kalshi-router/MLB" and the push died with
+            # "cannot parse expected object name" (exit 129) -- after the
+            # importer had already returned a canonical bet id. The `|| echo ""`
+            # never helped: rev-parse had written to stdout before it ran.
+            #
+            # With --verify --quiet a missing ref prints NOTHING and exits 1,
+            # which is the empty value the line above describes.
             git -C "${work}" fetch -q --depth 1 origin \
               "+refs/heads/${branch}:refs/remotes/origin/${branch}" || true
-            expected="$(git -C "${work}" rev-parse "refs/remotes/origin/${branch}" 2>/dev/null || echo "")"
+            expected="$(git -C "${work}" rev-parse --verify --quiet "refs/remotes/origin/${branch}" || echo "")"
 
             # ONLY onto this router-owned branch: it is rebuilt from main every
             # run, so its previous tip is this job's own earlier output. The

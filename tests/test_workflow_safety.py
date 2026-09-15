@@ -7,6 +7,9 @@ fails CI rather than leaking the owner's betting activity.
 
 from __future__ import annotations
 
+import re
+import shlex
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -1218,3 +1221,236 @@ def test_the_inspection_clones_the_ledger_without_a_credential(backfill_inspect_
     assert "https://github.com/chmoses98/edge-finder-api" in backfill_inspect_text
     for pattern in ("x-access-token", "credential.helper", "extraheader"):
         assert pattern not in backfill_inspect_text
+
+
+# ------------------------------------------------- the push lease, executed
+#
+# The scheduled run of 2026-09-15T16:43Z reconstructed the wager, classified it
+# MLB, and the destination importer returned NEW with a canonical bet id -- and
+# then the delivery step exited 129 without pushing anything:
+#
+#   fatal: couldn't find remote ref refs/heads/kalshi-router/MLB
+#   error: cannot parse expected object name 'refs/remotes/origin/kalshi-router/MLB'
+#
+# The workflow computes the lease's expected value with a bare `git rev-parse`,
+# whose comment states that a missing branch yields an EMPTY value. It does not.
+# Without `--verify`, rev-parse ECHOES ITS ARGUMENT TO STDOUT before failing, so
+# `expected` became the literal ref name and the lease could not be parsed. The
+# `|| echo ""` never had a chance to run usefully.
+#
+# The first-run path -- branch absent -- was the one case never exercised, and
+# it is the only case that ever runs on a brand-new destination branch.
+#
+# These tests EXECUTE the committed shell rather than asserting on its text, so
+# they test the production line itself and not a copy of it that can drift.
+
+LEASE_EXPECTED_LINE = re.compile(r'^\s*(expected="\$\(git .*rev-parse.*\)")\s*$', re.M)
+
+RECOVER_WORKFLOW = ROOT / ".github/workflows/recover-wagers.yml"
+
+#: Every workflow that pushes to a destination under a lease. `recover-wagers`
+#: carried the identical broken line, and it is the path a controlled recovery
+#: would use -- so fixing only the workflow that happened to fail would have
+#: left the repair itself standing on the defect it was repairing.
+PUSHING_WORKFLOWS = (DELIVER_WORKFLOW, RECOVER_WORKFLOW)
+
+
+def expected_assignment(workflow: Path) -> str:
+    """A workflow's own `expected=...` line, lifted verbatim."""
+    match = LEASE_EXPECTED_LINE.search(workflow.read_text())
+    assert match, f"{workflow.name} no longer computes a lease expectation"
+    return match.group(1)
+
+
+def deliver_expected_assignment() -> str:
+    return expected_assignment(DELIVER_WORKFLOW)
+
+
+def shallow_destination_clone(tmp_path):
+    """A bare remote plus a genuinely SHALLOW, SINGLE-BRANCH clone of it.
+
+    Both properties are asserted rather than assumed. An earlier attempt at this
+    fixture produced an EMPTY clone -- the bare repo's HEAD pointed at a branch
+    that did not exist -- and an empty clone would have made the rejection come
+    from somewhere else entirely, turning a real bug into a false finding.
+    """
+    remote = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
+    # Without this the clone is empty and proves nothing.
+    subprocess.run(
+        ["git", "--git-dir", str(remote), "symbolic-ref", "HEAD", "refs/heads/main"],
+        check=True,
+    )
+
+    seed = tmp_path / "seed"
+    subprocess.run(["git", "init", "-q", str(seed)], check=True)
+    for key, value in (("user.email", "t@example.invalid"), ("user.name", "t")):
+        subprocess.run(["git", "-C", str(seed), "config", key, value], check=True)
+    (seed / "data").mkdir()
+    (seed / "data" / "bets.jsonl").write_text('{"seed": true}\n', encoding="utf-8")
+    subprocess.run(["git", "-C", str(seed), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(seed), "commit", "-qm", "seed"], check=True)
+    subprocess.run(["git", "-C", str(seed), "branch", "-M", "main"], check=True)
+    subprocess.run(
+        ["git", "-C", str(seed), "push", "-q", f"file://{remote}", "main"],
+        check=True, capture_output=True,
+    )
+
+    work = tmp_path / "work"
+    subprocess.run(
+        ["git", "clone", "-q", "--depth", "1", f"file://{remote}", str(work)], check=True
+    )
+    assert (work / ".git" / "shallow").exists(), "fixture is not a shallow clone"
+    refspec = subprocess.run(
+        ["git", "-C", str(work), "config", "--get", "remote.origin.fetch"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    assert refspec == "+refs/heads/main:refs/remotes/origin/main", (
+        f"fixture is not single-branch; refspec is {refspec!r}"
+    )
+    for key, value in (("user.email", "t@example.invalid"), ("user.name", "t")):
+        subprocess.run(["git", "-C", str(work), "config", key, value], check=True)
+    return remote, work
+
+
+@pytest.mark.parametrize(
+    "workflow", PUSHING_WORKFLOWS, ids=lambda path: path.name
+)
+def test_the_lease_expectation_is_empty_when_the_branch_does_not_exist(workflow, tmp_path):
+    """The first run, which is the run that failed in production.
+
+    Runs each workflow's own assignment against a real shallow clone whose
+    destination branch does not exist. An empty result is what the surrounding
+    code documents and requires; the ref name is what a bare rev-parse returns.
+    """
+    _remote, work = shallow_destination_clone(tmp_path)
+    branch = "kalshi-router/MLB"
+
+    subprocess.run(
+        ["git", "-C", str(work), "fetch", "-q", "--depth", "1", "origin",
+         f"+refs/heads/{branch}:refs/remotes/origin/{branch}"],
+        capture_output=True,
+    )
+    script = f'work={shlex.quote(str(work))}; branch={shlex.quote(branch)}\n' \
+             f'{expected_assignment(workflow)}\nprintf "%s" "${{expected}}"'
+    result = subprocess.run(
+        ["bash", "-c", script], capture_output=True, text=True, check=True
+    )
+
+    assert result.stdout == "", (
+        f"{workflow.name}: the lease expectation must be EMPTY for a branch that "
+        f"does not exist; got {result.stdout!r} -- git push cannot parse that as "
+        "an object name"
+    )
+
+
+def test_the_first_delivery_to_a_new_branch_actually_pushes(tmp_path):
+    """End to end: the exact failure, at the exact step, with a real push.
+
+    The assertion above pins the value; this pins the CONSEQUENCE. Production
+    did not fail on a variable, it failed on `git push` exiting 129 with the
+    wager already imported and nothing sent.
+    """
+    remote, work = shallow_destination_clone(tmp_path)
+    branch = "kalshi-router/MLB"
+
+    with (work / "data" / "bets.jsonl").open("a", encoding="utf-8") as handle:
+        handle.write('{"imported": true}\n')
+    subprocess.run(["git", "-C", str(work), "checkout", "-q", "-b", branch], check=True)
+    subprocess.run(["git", "-C", str(work), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(work), "commit", "-qm", "import"], check=True)
+    subprocess.run(
+        ["git", "-C", str(work), "fetch", "-q", "--depth", "1", "origin",
+         f"+refs/heads/{branch}:refs/remotes/origin/{branch}"],
+        capture_output=True,
+    )
+
+    script = (
+        f'set -euo pipefail\n'
+        f'work={shlex.quote(str(work))}; branch={shlex.quote(branch)}\n'
+        f'{deliver_expected_assignment()}\n'
+        f'git -C "${{work}}" push -q '
+        f'--force-with-lease="refs/heads/${{branch}}:${{expected}}" '
+        f'origin "HEAD:refs/heads/${{branch}}"'
+    )
+    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+
+    assert result.returncode == 0, (
+        f"the first delivery to a new branch failed (exit {result.returncode}): "
+        f"{result.stderr.strip()}"
+    )
+    landed = subprocess.run(
+        ["git", "--git-dir", str(remote), "for-each-ref", "--format=%(refname)"],
+        check=True, capture_output=True, text=True,
+    ).stdout
+    assert f"refs/heads/{branch}" in landed, "the branch never reached the remote"
+
+
+def test_the_lease_still_refuses_when_someone_else_moved_the_branch(tmp_path):
+    """The property the lease exists for, which the fix must not cost.
+
+    A fix that simply forced the push would make the first run pass and quietly
+    destroy a concurrent writer's commit. So a second clone pushes in between,
+    and the delivery push must be REJECTED.
+    """
+    remote, work = shallow_destination_clone(tmp_path)
+    branch = "kalshi-router/MLB"
+
+    # A first delivery, so the branch exists and the lease is non-empty.
+    subprocess.run(["git", "-C", str(work), "checkout", "-q", "-b", branch], check=True)
+    (work / "data" / "bets.jsonl").write_text('{"first": true}\n', encoding="utf-8")
+    subprocess.run(["git", "-C", str(work), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(work), "commit", "-qm", "first"], check=True)
+    subprocess.run(
+        ["git", "-C", str(work), "push", "-q", "origin", f"HEAD:refs/heads/{branch}"],
+        check=True, capture_output=True,
+    )
+
+    # A new run reads the lease...
+    later = tmp_path / "later"
+    subprocess.run(
+        ["git", "clone", "-q", "--depth", "1", f"file://{remote}", str(later)], check=True
+    )
+    for key, value in (("user.email", "t@example.invalid"), ("user.name", "t")):
+        subprocess.run(["git", "-C", str(later), "config", key, value], check=True)
+    subprocess.run(["git", "-C", str(later), "checkout", "-q", "-b", branch], check=True)
+    (later / "data" / "bets.jsonl").write_text('{"later": true}\n', encoding="utf-8")
+    subprocess.run(["git", "-C", str(later), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(later), "commit", "-qm", "later"], check=True)
+    subprocess.run(
+        ["git", "-C", str(later), "fetch", "-q", "--depth", "1", "origin",
+         f"+refs/heads/{branch}:refs/remotes/origin/{branch}"],
+        capture_output=True,
+    )
+
+    # ...and somebody else moves the branch before it pushes.
+    intruder = tmp_path / "intruder"
+    subprocess.run(
+        ["git", "clone", "-q", "--depth", "1", f"file://{remote}", str(intruder)], check=True
+    )
+    for key, value in (("user.email", "x@example.invalid"), ("user.name", "x")):
+        subprocess.run(["git", "-C", str(intruder), "config", key, value], check=True)
+    subprocess.run(["git", "-C", str(intruder), "checkout", "-q", "-b", branch], check=True)
+    (intruder / "data" / "bets.jsonl").write_text('{"intruder": true}\n', encoding="utf-8")
+    subprocess.run(["git", "-C", str(intruder), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(intruder), "commit", "-qm", "intruder"], check=True)
+    subprocess.run(
+        ["git", "-C", str(intruder), "push", "-q", "--force", f"file://{remote}",
+         f"HEAD:refs/heads/{branch}"],
+        check=True, capture_output=True,
+    )
+
+    script = (
+        f'set -euo pipefail\n'
+        f'work={shlex.quote(str(later))}; branch={shlex.quote(branch)}\n'
+        f'{deliver_expected_assignment()}\n'
+        f'git -C "${{work}}" push -q '
+        f'--force-with-lease="refs/heads/${{branch}}:${{expected}}" '
+        f'origin "HEAD:refs/heads/${{branch}}"'
+    )
+    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+
+    assert result.returncode != 0, (
+        "the lease accepted a push over a branch someone else had moved"
+    )
+    assert "stale info" in result.stderr, result.stderr
