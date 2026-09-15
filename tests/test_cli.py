@@ -625,3 +625,53 @@ def test_backfill_reports_the_orders_it_actually_walked(monkeypatch, local_env):
     assert code == cli.EXIT_OK, err
     assert "orders in the window: 3" in out, out
     assert "INCONSISTENT" not in out, out
+
+
+#: TWO orders on ONE unresolvable market. `AMB` in the audit scenario carries no
+#: competition at all, so it stays UNRESOLVED, and distinct order ids make these
+#: two orders rather than two fills of one.
+TWO_ORDERS_ONE_MARKET = [[
+    make_fill(11, ticker=market_for("AMB"), order_id="SYNTHORDER-A",
+              created_time="2026-09-12T18:00:00Z", fee_cost="0.0100"),
+    make_fill(12, ticker=market_for("AMB"), order_id="SYNTHORDER-B",
+              created_time="2026-09-13T18:00:00Z", fee_cost="0.0100"),
+]]
+
+
+def test_the_report_says_which_counts_are_orders_and_which_are_markets(monkeypatch, local_env):
+    """A live run printed `refused: 34` over reasons summing to 32.
+
+    Both numbers were right. Refusals are counted per ORDER and unresolved
+    reasons per distinct MARKET, because a market is classified once however
+    many orders were placed on it. Under one heading with no unit stated, the
+    only available reading was that the report could not add up -- which is the
+    same defect as the contradictory window count, and just as corrosive: a
+    report nobody can reconcile is not evidence, whatever its numbers.
+
+    Two orders, one unresolvable market. The asymmetry must be visible AND
+    explained.
+    """
+    install_fake_api(monkeypatch, TWO_ORDERS_ONE_MARKET)
+
+    code, out, err = run(["backfill", "--since", "2026-09-11T00:00:00Z"])
+
+    assert code == cli.EXIT_OK, err
+    assert "orders in the window: 2" in out, out
+    assert "sport unresolved: 2" in out, out
+    # ...and ONE market behind them. This pair of numbers IS the asymmetry:
+    # both are correct, and they differ because they count different things.
+    assert "ambiguous family without a league: 1" in out, out
+    # The heading has to say so, or the two numbers read as a contradiction.
+    assert "distinct MARKETS, not orders" in out, out
+
+
+def test_the_backfill_report_does_not_describe_its_window_as_post_cutover(monkeypatch, local_env):
+    """The backfill window ENDS at the cutover, so every order in it is
+    pre-cutover. The renderer is shared with the production path, which is why
+    it used to call these markets "post-cutover" in a report about history."""
+    install_fake_api(monkeypatch, TWO_ORDERS_ONE_MARKET)
+
+    code, out, err = run(["backfill", "--since", "2026-09-11T00:00:00Z"])
+
+    assert code == cli.EXIT_OK, err
+    assert "post-cutover markets were unresolved" not in out, out

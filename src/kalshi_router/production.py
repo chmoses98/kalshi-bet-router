@@ -415,7 +415,7 @@ class ProductionDiagnostics:
             f"  pre-cutover admitted by recovery: {self.pre_cutover_admitted}",
             f"  ELIGIBLE for delivery: {self.eligible}",
             "",
-            "  finality of post-cutover orders:",
+            "  finality of the orders considered:",
             f"    final, market closed: {self.final_market_closed}",
             f"    final, stabilized: {self.final_stable}",
             f"    pending, recent fill: {self.pending_recent_fill}",
@@ -436,7 +436,15 @@ class ProductionDiagnostics:
             f"{self.refused_reduction_not_representable}",
             "",
             "",
-            "  why post-cutover markets were unresolved:",
+            # UNIT CHANGE, and it is load-bearing. Every count above this
+            # line is ORDERS; these are distinct MARKET TICKERS, because a
+            # market is classified once however many orders were placed on it.
+            # A live run refused 34 orders under reasons summing to 32 -- two
+            # markets carried two orders each -- and with both under one
+            # heading and no unit stated, the only way to read that was as an
+            # arithmetic error in the report.
+            "  why those markets were unresolved "
+            "(distinct MARKETS, not orders -- one market can carry several):",
             f"    metadata lookup failed: {self.unresolved_metadata_lookup_failed}",
             f"    no metadata resolved: {self.unresolved_no_metadata}",
             f"    malformed event metadata: {self.unresolved_malformed_event_metadata}",
