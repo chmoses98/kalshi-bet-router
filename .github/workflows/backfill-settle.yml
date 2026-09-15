@@ -1,0 +1,273 @@
+# SETTLE the gap window's wagers, in the destinations that have no settlement
+# driver of their own.
+#
+# WHY MLB IS NOT HERE
+#   edge-finder-api settles its own bets: `scripts/edgelab/settle_markets.py`
+#   re-derives every outcome from the MLB Stats API, and
+#   `edgelab-postgame.yml` runs it. A settlement pushed there by this router
+#   would be a SECOND authority on the same fact, and the two would disagree the
+#   first time one of them was wrong. So the CLI requires its destinations to be
+#   named and this workflow names NFL and CFB.
+#
+# WHAT THE ROUTER MAY AND MAY NOT STATE
+#   A Kalshi settlement is per MARKET and per POSITION; a wager is one ORDER.
+#   A per-wager return is exact anyway, because the exchange publishes the
+#   market's settlement price per contract -- but a settlement FEE charged on a
+#   position covering two of the owner's orders cannot be split, and is refused
+#   with its reason rather than apportioned. See src/kalshi_router/settlement.py.
+#
+# SECURITY (this repository and both destinations are PUBLIC)
+#   * main branch only, dispatch only, never scheduled.
+#   * The payload carries market, side, payout and P&L. It goes to RUNNER_TEMP,
+#     is consumed by each destination's own importer, and dies with the runner.
+#     Only counts reach this log.
+#   * The token reaches git through a credential helper that reads it from the
+#     environment at push time: never in a URL, never in argv, never in
+#     .git/config.
+#   * The router never edits a ledger and never pushes to a destination's own
+#     branch. It proposes rows to that destination's importer and opens a pull
+#     request.
+#
+# Kalshi remains READ-ONLY. Nothing here creates, modifies or cancels an order.
+name: Backfill settlement (one-time historical catch-up)
+
+on:
+  workflow_dispatch:
+    inputs:
+      since:
+        description: "Window start (RFC3339). The end is always the cutover."
+        required: false
+        type: string
+        default: "2026-09-11T00:00:00Z"
+      cfb_season:
+        description: "Which season's CFB ledger these settle. No default, on purpose."
+        required: true
+        type: string
+      dry_run:
+        description: "Import locally and discard without pushing"
+        required: false
+        type: boolean
+        default: true
+      acknowledgement:
+        description: "To push, type: I have decided to import pre-cutover history"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backfill-settle
+  cancel-in-progress: false
+
+jobs:
+  settle:
+    name: Settle the gap window
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Refuse to run credentialed code from an untrusted ref
+        run: |
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::error::This credentialed workflow may only run from refs/heads/main (got ${GITHUB_REF})."
+            exit 1
+          fi
+
+      - name: Refuse to push without an explicit acknowledgement
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          ACKNOWLEDGEMENT: ${{ inputs.acknowledgement }}
+          CFB_SEASON: ${{ inputs.cfb_season }}
+        run: |
+          set -euo pipefail
+
+          case "${DRY_RUN}" in
+            true|false) ;;
+            *)
+              echo "::error::dry_run must be exactly 'true' or 'false' (got '${DRY_RUN}')."
+              exit 1 ;;
+          esac
+
+          case "${CFB_SEASON}" in
+            [0-9][0-9][0-9][0-9]) ;;
+            *)
+              echo "::error::cfb_season must be a four-digit year (got '${CFB_SEASON}')."
+              exit 1 ;;
+          esac
+
+          if [ "${DRY_RUN}" = "false" ] && \
+             [ "${ACKNOWLEDGEMENT}" != "I have decided to import pre-cutover history" ]; then
+            echo "::error::Writing settlements downstream is not reversible by this workflow."
+            echo "Re-dispatch with the acknowledgement phrase typed exactly."
+            exit 1
+          fi
+          echo "dry run: ${DRY_RUN}"
+
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install router
+        run: python -m pip install --disable-pip-version-check --quiet .
+
+      - name: Attribute settlements and build the payloads
+        env:
+          KALSHI_API_KEY_ID: ${{ secrets.KALSHI_API_KEY_ID }}
+          KALSHI_PRIVATE_KEY: ${{ secrets.KALSHI_PRIVATE_KEY }}
+          SINCE: ${{ inputs.since }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/settlements"
+          # The destinations are NAMED. MLB is absent deliberately -- see the
+          # header. The CLI refuses to run with none, so this cannot silently
+          # become "everywhere".
+          python -m kalshi_router.cli settle \
+            --since "${SINCE:-2026-09-11T00:00:00Z}" \
+            --destination NFL \
+            --destination CFB \
+            --out-dir "${RUNNER_TEMP}/settlements"
+
+      - name: Deliver each destination through its own importer
+        env:
+          DOWNSTREAM_REPO_TOKEN: ${{ secrets.DOWNSTREAM_REPO_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          CFB_SEASON: ${{ inputs.cfb_season }}
+        run: |
+          set -euo pipefail
+
+          shopt -s nullglob
+          payloads=("${RUNNER_TEMP}"/settlements/*-settlements.json)
+          if [ ${#payloads[@]} -eq 0 ]; then
+            echo "no payload: nothing in the gap window has settled for these destinations."
+            exit 0
+          fi
+
+          failures=0
+          for payload in "${payloads[@]}"; do
+            sport="$(basename "${payload}" -settlements.json)"
+
+            case "${sport}" in
+              NFL) repo="chmoses98/nfl-edge-finder"; base="handicap-data" ;;
+              CFB) repo="chmoses98/cfb-edge-finder"; base="accounting-data" ;;
+              *)
+                echo "::error::${sport} has no configured settlement destination."
+                failures=$((failures + 1))
+                continue ;;
+            esac
+
+            echo "=== ${sport} -> ${repo} (${base}) ==="
+
+            work="${RUNNER_TEMP}/dest-${sport}"
+            rm -rf "${work}"
+            git clone --quiet --depth 1 --branch "${base}" \
+              "https://github.com/${repo}" "${work}"
+
+            git -C "${work}" config credential.helper \
+              '!f() { echo "username=x-access-token"; echo "password=${DOWNSTREAM_REPO_TOKEN}"; }; f'
+            git -C "${work}" config user.name "kalshi-bet-router"
+            git -C "${work}" config user.email "noreply@users.noreply.github.com"
+            echo "  destination ${base}: $(git -C "${work}" rev-parse HEAD)"
+
+            # The importer lives on `main`; the ledger lives on the data branch.
+            code="${RUNNER_TEMP}/code-${sport}"
+            rm -rf "${code}"
+            git clone --quiet --depth 1 "https://github.com/${repo}" "${code}"
+
+            import_status=0
+            case "${sport}" in
+              NFL)
+                python "${code}/scripts/handicap/import_routed_settlements.py" \
+                  --payload "${payload}" \
+                  --handicap-root "${work}" \
+                  || import_status=$?
+                ;;
+              CFB)
+                python "${code}/scripts/import_routed_settlements.py" \
+                  --payload "${payload}" \
+                  --base-dir "${work}" \
+                  --season "${CFB_SEASON}" \
+                  || import_status=$?
+                ;;
+            esac
+
+            # A refused settlement must not cost the settlements that were
+            # accepted, for the same reason a refused wager must not: both
+            # importers screen per row, and the accepted rows are already in the
+            # working tree. The failure is COUNTED and the job still exits
+            # non-zero.
+            if [ "${import_status}" -ne 0 ]; then
+              echo "::error::${sport}: the destination importer refused at least one settlement."
+              failures=$((failures + 1))
+            fi
+
+            if [ -z "$(git -C "${work}" status --porcelain)" ]; then
+              echo "  no ledger change -- every settlement was already recorded (no-op)."
+              continue
+            fi
+
+            if [ "${DRY_RUN}" = "true" ]; then
+              echo "  DRY RUN: ledger changed, nothing pushed."
+              git -C "${work}" --no-pager diff --stat
+              continue
+            fi
+
+            branch="kalshi-router/settle-${sport}"
+
+            git -C "${work}" checkout -q -b "${branch}"
+            git -C "${work}" add -A
+
+            staged="$(git -C "${work}" diff --cached --name-only)"
+            case "${sport}" in
+              CFB) allowed='^settlements/' ;;
+              *)   allowed='^data/wager_settlements/' ;;
+            esac
+            unexpected="$(printf '%s\n' "${staged}" | grep -v "${allowed}" || true)"
+            if [ -n "${unexpected}" ]; then
+              echo "::error::${sport}: the import touched files outside the settlement ledger -- refusing to commit them:"
+              printf '%s\n' "${unexpected}"
+              failures=$((failures + 1))
+              continue
+            fi
+
+            git -C "${work}" commit -q \
+              -m "Record the Kalshi gap window's settlements via kalshi-bet-router (${sport})"
+
+            git -C "${work}" fetch -q --depth 1 origin \
+              "+refs/heads/${branch}:refs/remotes/origin/${branch}" || true
+            expected="$(git -C "${work}" rev-parse --verify --quiet "refs/remotes/origin/${branch}" || echo "")"
+
+            git -C "${work}" push -q \
+              --force-with-lease="refs/heads/${branch}:${expected}" \
+              origin "HEAD:refs/heads/${branch}"
+            echo "  pushed ${branch}"
+            echo "  destination commit: $(git -C "${work}" rev-parse HEAD)"
+
+            pr_body="${RUNNER_TEMP}/pr-${sport}.json"
+            pr_status="$(curl --silent --show-error --write-out '%{http_code}' \
+              --output "${pr_body}" \
+              -X POST \
+              -H "Authorization: Bearer ${DOWNSTREAM_REPO_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${repo}/pulls" \
+              -d "{\"title\":\"Record the Kalshi gap window's settlements (${sport})\",\"head\":\"${branch}\",\"base\":\"${base}\",\"body\":\"Settlements attributed by kalshi-bet-router and written through this repository's own importer. A figure the router could not establish from exchange evidence is null with its reason recorded, never zero. Counts are in the router's run log; the rows are in the diff.\"}")"
+
+            case "${pr_status}" in
+              201) echo "  opened a pull request" ;;
+              422) echo "  pull request already open for ${branch}" ;;
+              *)
+                echo "::error::${sport}: could not open a pull request (HTTP ${pr_status}). The settlements are on ${branch} but are NOT recorded."
+                failures=$((failures + 1))
+                continue ;;
+            esac
+          done
+
+          echo ""
+          echo "destinations that failed: ${failures}"
+          if [ "${failures}" -ne 0 ]; then
+            exit 1
+          fi

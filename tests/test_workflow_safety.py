@@ -237,6 +237,9 @@ def test_only_credentialed_workflows_name_the_downstream_secret():
         # The one-time historical catch-up. Added deliberately for the same
         # reason, and it failed here first too.
         "backfill-deliver.yml",
+        # The settlement half of that catch-up. Also added only after this test
+        # went red for it.
+        "backfill-settle.yml",
     }
     assert set(workflows_referencing(DOWNSTREAM_SECRET)) <= allowed
 
@@ -1681,3 +1684,126 @@ def test_a_refusal_still_fails_the_job(backfill_text):
     assert refusal, "the refusal branch is gone"
     following = "\n".join(lines[refusal[0]:refusal[0] + 6])
     assert "failures=$((failures + 1))" in following, following
+
+
+# ============ The settlement half of the catch-up ===========================
+
+BACKFILL_SETTLE = ROOT / ".github/workflows/backfill-settle.yml"
+
+
+@pytest.fixture(scope="module")
+def settle() -> dict:
+    return load(BACKFILL_SETTLE)
+
+
+@pytest.fixture(scope="module")
+def settle_text() -> str:
+    return strip_comments(BACKFILL_SETTLE.read_text())
+
+
+def test_the_settlement_pass_is_never_scheduled(settle):
+    assert set(triggers(settle)) == {"workflow_dispatch"}
+
+
+def test_the_settlement_pass_defaults_to_a_dry_run(settle):
+    default = triggers(settle)["workflow_dispatch"]["inputs"]["dry_run"]["default"]
+    assert default in (True, "true"), f"dry_run defaults to {default!r}"
+
+
+def test_the_settlement_pass_requires_the_same_typed_acknowledgement(settle_text):
+    assert "I have decided to import pre-cutover history" in settle_text
+    assert "not reversible" in settle_text
+
+
+def test_the_settlement_pass_refuses_a_ref_other_than_main(settle_text):
+    assert "refs/heads/main" in settle_text
+    assert "exit 1" in settle_text
+
+
+def test_the_settlement_pass_holds_no_write_permission_here(settle):
+    assert settle["permissions"] == {"contents": "read"}
+
+
+def test_the_settlement_pass_is_never_cancelled_in_flight(settle):
+    assert settle["concurrency"]["cancel-in-progress"] is False
+
+
+def test_the_settlement_pass_uploads_no_artifact(settle_text):
+    assert "upload-artifact" not in settle_text
+
+
+def test_mlb_is_not_a_settlement_destination(settle_text):
+    """edge-finder-api settles its own bets: settle_markets.py re-derives every
+    outcome from the MLB Stats API. A settlement pushed there by this router
+    would be a SECOND authority on the same fact, and the two would disagree the
+    first time one of them was wrong.
+
+    Checked on the DELIVERY LOOP's routing table rather than on the whole file,
+    because the header explains at length why MLB is absent and a substring
+    search would find it there.
+    """
+    routed = set(re.findall(r"^\s*(MLB|NFL|CFB)\) repo=", settle_text, re.M))
+
+    assert routed == {"NFL", "CFB"}, routed
+    assert "--destination NFL" in settle_text
+    assert "--destination CFB" in settle_text
+    assert "--destination MLB" not in settle_text
+
+
+def test_the_settlement_pass_writes_only_to_the_settlement_ledger(settle_text):
+    """A settlement import that touched a WAGER file would be rewriting a record
+    of money that already moved, which both destinations forbid."""
+    assert "^settlements/" in settle_text
+    assert "^data/wager_settlements/" in settle_text
+    assert "outside the settlement ledger" in settle_text
+
+
+def test_the_settlement_pass_never_pushes_to_a_destinations_own_branch(settle_text):
+    joined = settle_text.replace("\\\n", " ")
+    pushes = [line for line in joined.splitlines() if "git" in line and " push" in line]
+    assert pushes, "the settlement pass never pushes"
+    for line in pushes:
+        assert 'HEAD:refs/heads/${branch}' in line, line
+        assert "--force " not in line
+
+    assignments = [line.strip() for line in joined.splitlines() if line.strip().startswith("branch=")]
+    assert assignments, "the settlement pass sets no branch"
+    for line in assignments:
+        assert line.startswith('branch="kalshi-router/'), line
+        for unstable in ("$RANDOM", "date +%s", "GITHUB_RUN_ID", "rev-parse", "$(git"):
+            assert unstable not in line, line
+
+
+def test_a_settlement_pass_that_cannot_open_a_pull_request_is_a_FAILURE(settle_text):
+    assert "/pulls" in settle_text
+    assert "are NOT recorded" in settle_text
+    assert "422)" in settle_text
+
+
+def test_a_refused_settlement_does_not_cost_the_ones_that_succeeded(settle_text):
+    """Same rule as the wager delivery, for the same reason: both importers
+    screen per row, and the accepted rows are already in the working tree."""
+    lines = settle_text.splitlines()
+    refusal = [i for i, line in enumerate(lines) if "refused at least one settlement" in line]
+    assert refusal, "the refusal branch is gone"
+    branch = "\n".join(lines[refusal[0]:refusal[0] + 4])
+    assert "failures=$((failures + 1))" in branch, branch
+    assert "continue" not in branch, branch
+
+
+def test_the_settlement_window_cannot_be_widened(settle_text):
+    joined = settle_text.replace("\\\n", " ")
+    invocations = [line for line in joined.splitlines() if "kalshi_router.cli settle" in line]
+    assert invocations, "the pass never runs the settle command"
+    for line in invocations:
+        assert "--since" in line
+        for widening in ("--until", "--end", "--cutover", "--include-pre-cutover"):
+            assert widening not in line, line
+
+
+def test_the_settlement_pass_never_prints_the_payload(settle_text):
+    assert "--show-sensitive-details" not in settle_text
+    mentions = [line.strip() for line in settle_text.splitlines() if "${payload}" in line]
+    assert mentions
+    for line in mentions:
+        assert not line.startswith(("echo", "cat", "printf", "tee")), line
