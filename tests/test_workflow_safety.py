@@ -1626,3 +1626,27 @@ def test_the_catch_up_cannot_widen_its_own_window(backfill_text):
         assert "--since" in line
         for widening in ("--until", "--end", "--cutover", "--include-pre-cutover"):
             assert widening not in line, f"{widening} would move the window's end: {line}"
+
+
+def test_an_unreadable_ledger_is_never_read_as_an_empty_one(backfill_text):
+    """"NOT THE LEDGER" AND "THE LEDGER IS EMPTY" PRODUCE THE SAME NUMBER.
+
+    Only one of them is safe to act on. Zero existing rows is exactly the input
+    that makes every wager in the window MISSING_IMPORTABLE, so a renamed
+    directory, a wrong branch or a clone that landed somewhere else would
+    duplicate a ledger on a run whose log said "0 rows" and looked correct.
+
+    Each destination therefore proves the checkout IS its ledger before any
+    absence is allowed to mean "nothing written yet".
+    """
+    assert "does not look like the handicap ledger" in backfill_text
+    assert "it is not the ledger" in backfill_text
+    assert "refusing to read it as empty" in backfill_text
+
+
+def test_each_destinations_existing_row_count_reaches_the_log(backfill_text):
+    """Three numbers a human can sanity-check before authorising a push. A
+    delivery whose reconciliation was formed against a ledger nobody looked at
+    is a delivery nobody can check."""
+    for sport in ("MLB", "NFL", "CFB"):
+        assert f"{sport} ledger rows" in backfill_text

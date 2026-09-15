@@ -146,7 +146,13 @@ jobs:
           git clone --quiet --depth 1 \
             https://github.com/chmoses98/edge-finder-api "${RUNNER_TEMP}/mlb-ledger"
           mlb="${RUNNER_TEMP}/mlb-ledger/data/edgelab/bets/bets.jsonl"
-          test -f "${mlb}"
+          # An absent MLB ledger is never "no wagers yet": this file has held
+          # the owner's bets for months, so its absence means the clone or the
+          # path is wrong, and reading it as empty would re-import everything.
+          test -f "${mlb}" || {
+            echo "::error::the MLB ledger is missing from the clone; refusing to read it as empty."
+            exit 1
+          }
           echo "MLB ledger rows: $(wc -l < "${mlb}")"
           echo "MLB_LEDGER=${mlb}" >> "${GITHUB_ENV}"
 
@@ -157,9 +163,32 @@ jobs:
           git clone --quiet --depth 1 --branch handicap-data \
             https://github.com/chmoses98/nfl-edge-finder "${RUNNER_TEMP}/nfl-ledger"
           nfl="${RUNNER_TEMP}/nfl.jsonl"
-          python - "${RUNNER_TEMP}/nfl-ledger/data/imported_wagers" "${nfl}" <<'PYEOF'
+          python - "${RUNNER_TEMP}/nfl-ledger" "${nfl}" <<'PYEOF'
           import json, os, sys
-          root, out = sys.argv[1], sys.argv[2]
+          checkout, out = sys.argv[1], sys.argv[2]
+
+          # "NOT THE LEDGER" AND "THE LEDGER IS EMPTY" PRODUCE THE SAME NUMBER,
+          # AND ONLY ONE OF THEM IS SAFE TO ACT ON.
+          #
+          # os.walk over a path that does not exist yields nothing and raises
+          # nothing. So a renamed directory, a wrong branch or a clone that
+          # landed somewhere else all read as zero existing rows -- and zero
+          # existing rows is exactly the input that makes every wager in the
+          # window MISSING_IMPORTABLE. The ledger would be duplicated by a run
+          # whose log said "0 rows" and looked correct.
+          #
+          # The checkout is therefore proved to BE the handicap ledger first.
+          # Only then is an absent record directory read as what it actually
+          # is: a kind that has never been written to.
+          if not os.path.isdir(os.path.join(checkout, "data")):
+              sys.exit(f"{checkout} does not look like the handicap ledger: no data/")
+
+          root = os.path.join(checkout, "data", "imported_wagers")
+          if not os.path.isdir(root):
+              print("NFL ledger rows: 0 (the imported_wagers kind has no records yet)")
+              open(out, "w", encoding="utf-8").close()
+              raise SystemExit(0)
+
           rows = []
           for directory, _subdirs, names in os.walk(root):
               for name in sorted(names):
@@ -176,10 +205,13 @@ jobs:
           # --- CFB: one JSONL per season on accounting-data ---------------
           git clone --quiet --depth 1 --branch accounting-data \
             https://github.com/chmoses98/cfb-edge-finder "${RUNNER_TEMP}/cfb-ledger"
+          # Same distinction as NFL: prove this IS the wager ledger before an
+          # absent season file is allowed to mean "no wagers yet".
+          test -d "${RUNNER_TEMP}/cfb-ledger/wagers" || {
+            echo "::error::the accounting-data checkout has no wagers/ directory; it is not the ledger."
+            exit 1
+          }
           cfb="${RUNNER_TEMP}/cfb-ledger/wagers/${CFB_SEASON}.jsonl"
-          # A season with no wagers yet has no file. That is genuinely empty
-          # rather than unreadable, and the branch's own existence is what was
-          # checked above.
           touch "${cfb}"
           echo "CFB ledger rows: $(wc -l < "${cfb}")"
           echo "CFB_LEDGER=${cfb}" >> "${GITHUB_ENV}"
