@@ -1044,3 +1044,88 @@ def test_the_receipts_block_survives_an_empty_receipts_file(path, tmp_path):
     )
 
     assert "rows: 0" in result.stdout
+
+
+# ============ the credential helper, executed rather than described ==========
+#
+# The whole credential posture rests on one claim: the token reaches git
+# through a helper that reads it from the ENVIRONMENT at push time, so it is
+# never in a URL, never in argv, and never written into .git/config.
+#
+# Every other test here checks that by absence -- no "://$TOKEN", no
+# "--password". Absence is necessary and proves nothing about whether the
+# mechanism WORKS. A helper with a shell typo satisfies every one of those
+# tests and fails to authenticate on the first real wager.
+#
+# So these run it.
+
+
+def _credential_helper(path):
+    """The helper string exactly as the workflow configures it."""
+    import re
+
+    for job in (load(path).get("jobs") or {}).values():
+        for step in job.get("steps") or []:
+            script = step.get("run")
+            if not isinstance(script, str) or "credential.helper" not in script:
+                continue
+            match = re.search(r"credential\.helper\s*\\?\s*\n?\s*'(!.*?)'", script, re.S)
+            if match:
+                return match.group(1)
+    return None
+
+
+@pytest.mark.parametrize("path", _health_workflows(), ids=lambda p: p.name)
+def test_the_credential_helper_actually_produces_a_credential(path, monkeypatch):
+    """Run it the way git does: a '!'-prefixed helper is handed to the shell
+    with the operation appended."""
+    import subprocess
+
+    helper = _credential_helper(path)
+    assert helper is not None, f"{path.name} configures no credential helper"
+
+    result = subprocess.run(
+        ["sh", "-c", f"{helper[1:]} get"],
+        input="protocol=https\nhost=github.com\n\n",
+        capture_output=True,
+        text=True,
+        env={"DOWNSTREAM_REPO_TOKEN": "TOKEN-UNDER-TEST", "PATH": "/usr/bin:/bin"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "username=x-access-token" in result.stdout
+    assert "password=TOKEN-UNDER-TEST" in result.stdout
+
+
+@pytest.mark.parametrize("path", _health_workflows(), ids=lambda p: p.name)
+def test_the_helper_reads_the_token_at_invocation_not_at_configuration(path, tmp_path):
+    """Configure it into a REAL repository and check what lands on disk.
+
+    This is the claim that matters: .git/config must hold the variable NAME,
+    never its value. A helper written with double quotes in the workflow would
+    expand at configuration time and write the secret into a file.
+    """
+    import subprocess
+
+    helper = _credential_helper(path)
+    repo = tmp_path / "r"
+    repo.mkdir()
+    env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "DOWNSTREAM_REPO_TOKEN": "TOKEN-UNDER-TEST"}
+
+    subprocess.run(["git", "init", "-q", str(repo)], check=True, env=env)
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "credential.helper", helper],
+        check=True, env=env,
+    )
+
+    on_disk = (repo / ".git" / "config").read_text()
+    assert "TOKEN-UNDER-TEST" not in on_disk, "the token VALUE was written to .git/config"
+    assert "DOWNSTREAM_REPO_TOKEN" in on_disk, "the variable name should be what is stored"
+
+    # ...and git still resolves a real credential from it.
+    filled = subprocess.run(
+        ["git", "-C", str(repo), "credential", "fill"],
+        input="protocol=https\nhost=github.com\n\n",
+        capture_output=True, text=True, env=env,
+    )
+    assert "password=TOKEN-UNDER-TEST" in filled.stdout, filled.stderr
