@@ -1113,23 +1113,68 @@ def test_only_out_of_scope_claimants_resolve_to_nothing():
     assert verdict.sport is not Sport.MLB
 
 
-def test_a_foreign_baseball_league_is_still_refused_not_called_mlb():
+@pytest.mark.parametrize(
+    "competition", ["Japan NPB", "Korea KBO", "Mexico LMB", "CFL"]
+)
+def test_a_foreign_league_is_still_refused_not_called_one_of_ours(competition):
     """The outcome that would actually be harmful.
 
-    An NPB market must never land in an MLB ledger. Its competition is
-    `japan npb`, which no direct rule maps, and Baseball is an ambiguous family
-    -- so it is refused rather than resolved. Narrowing the collision gate must
-    not change that, and this asserts it directly rather than trusting it.
+    An NPB, KBO or LMB market must never land in an MLB ledger, and a CFL game
+    must never land in an NFL one. None of these names maps to a direct rule,
+    and Baseball and Football are both ambiguous families -- so each is refused
+    rather than resolved. Narrowing the collision gate must not change that,
+    and it is asserted directly rather than trusted.
     """
     taxonomy = _contested({
-        "Baseball": ["Pro Baseball", "Japan NPB"],
+        "Baseball": ["Pro Baseball", "Japan NPB", "Korea KBO", "Mexico LMB"],
+        "Football": ["Pro Football", "CFL", "NCAA Football"],
         "Hockey": ["Pro Baseball"],
     })
-    verdict = classify_market(context(competition="Japan NPB"), taxonomy=taxonomy)
+    verdict = classify_market(context(competition=competition), taxonomy=taxonomy)
 
     assert verdict.sport is Sport.UNRESOLVED, (
-        "a Japanese league game resolved to one of our four"
+        f"{competition} resolved to {verdict.sport}, one of our four"
     )
+
+
+def test_an_in_scope_claimant_that_does_not_hold_the_direct_answer_refuses():
+    """"One claimant is in scope somewhere" is NOT enough.
+
+    The direct rule says NFL. The claimants are Baseball and Hockey: exactly one
+    of them (Baseball) is technically in scope, and Hockey holds none of our
+    four -- so a check that only counted in-scope claimants would stand the gate
+    aside and return NFL. But the catalogue says nothing whatsoever in support
+    of NFL here; Baseball holds MLB. Returning NFL would be returning an answer
+    the exchange does not back, reached through the bypass rather than around
+    it, which is the exact failure the gate exists to prevent.
+
+    So the bypass requires the taxonomy to AFFIRM the specific direct answer,
+    not merely to have someone in scope.
+    """
+    taxonomy = _contested({
+        "Baseball": ["Pro Football"],
+        "Hockey": ["Pro Football"],
+    })
+    verdict = classify_market(context(competition="Pro Football"), taxonomy=taxonomy)
+
+    assert verdict.sport is Sport.UNRESOLVED
+    assert verdict.unresolved_reason is UnresolvedReason.COMPETITION_AMBIGUOUS
+
+
+def test_a_contested_competition_with_no_direct_answer_refuses():
+    """Nothing to affirm.
+
+    Without a direct answer there is no specific league for the catalogue to
+    support, so the bypass has no question to ask and the refusal stands.
+    """
+    taxonomy = _contested({
+        "Baseball": ["Some New Series"],
+        "Hockey": ["Some New Series"],
+    })
+    verdict = classify_market(context(competition="Some New Series"), taxonomy=taxonomy)
+
+    assert verdict.sport is Sport.UNRESOLVED
+    assert verdict.unresolved_reason is UnresolvedReason.COMPETITION_AMBIGUOUS
 
 
 def test_the_gate_really_consults_the_claimant_check(monkeypatch):
@@ -1151,7 +1196,7 @@ def test_the_gate_really_consults_the_claimant_check(monkeypatch):
     ).sport is Sport.MLB
 
     monkeypatch.setattr(
-        classify_module, "_only_one_claimant_could_hold_our_sports",
+        classify_module, "_taxonomy_affirms_the_direct_answer",
         lambda *_args, **_kwargs: False,
     )
     verdict = classify_market(context(competition="Pro Baseball"), taxonomy=taxonomy)
