@@ -34,6 +34,11 @@ on:
         description: "Cap the metadata sweep (accounting still replays every fill). Blank = no cap"
         required: false
         default: ""
+      production:
+        description: "Apply the production filter: which post-cutover orders would be delivered, and why the rest would not"
+        required: false
+        type: boolean
+        default: false
       shadow_wagers:
         description: "Build the canonical wager rows a router WOULD send, and send none of them"
         required: false
@@ -85,6 +90,7 @@ jobs:
           FULL_HISTORY: ${{ inputs.full_history }}
           MAX_CLASSIFY: ${{ inputs.max_classify_markets }}
           SHADOW_WAGERS: ${{ inputs.shadow_wagers }}
+          PRODUCTION_FILTER: ${{ inputs.production }}
         run: |
           set -euo pipefail
           FLAGS=""
@@ -93,6 +99,9 @@ jobs:
           fi
           if [ "${FULL_HISTORY}" = "true" ]; then
             FLAGS="${FLAGS} --full-history"
+          fi
+          if [ "${PRODUCTION_FILTER}" = "true" ]; then
+            FLAGS="${FLAGS} --production"
           fi
           if [ "${SHADOW_WAGERS}" = "true" ]; then
             FLAGS="${FLAGS} --shadow-wagers"

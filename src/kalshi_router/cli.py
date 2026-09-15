@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
+from decimal import Decimal
 import sys
 
 from .audit import AuditResult, run_audit
@@ -80,6 +82,15 @@ def build_parser() -> argparse.ArgumentParser:
             "fill; only the metadata sweep is bounded, because it costs several "
             "requests per market. Unclassified markets are reported separately "
             "and are never counted as unresolved."
+        ),
+    )
+    audit.add_argument(
+        "--production",
+        action="store_true",
+        help=(
+            "Apply the production filter: which post-cutover orders would be "
+            "delivered, and why the rest would not. Reports counts; delivers "
+            "nothing."
         ),
     )
     audit.add_argument(
@@ -179,6 +190,8 @@ def main(argv: list[str] | None = None, stdout=None, stderr=None) -> int:
             reconcile=args.reconcile,
             full_history=args.full_history,
             shadow_wagers=args.shadow_wagers,
+            production=args.production,
+            now=Decimal(int(time.time())) if args.production else None,
             max_classify_markets=args.max_classify_markets,
         )
     except KalshiRouterError as exc:
@@ -195,6 +208,9 @@ def main(argv: list[str] | None = None, stdout=None, stderr=None) -> int:
         payload.update({f"history_{k}": v for k, v in result.history.as_dict().items()})
         payload.update({f"wager_{k}": v for k, v in result.wagers.as_dict().items()})
         payload.update({f"finality_{k}": v for k, v in result.finality.as_dict().items()})
+        payload.update(
+            {f"production_{k}": v for k, v in result.production.as_dict().items()}
+        )
         payload.update(
             {
                 f"settlement_coverage_{k}": v
@@ -216,6 +232,9 @@ def main(argv: list[str] | None = None, stdout=None, stderr=None) -> int:
         print(result.history.render(), file=out)
         print("", file=out)
         print(result.finality.render(), file=out)
+        if args.production:
+            print("", file=out)
+            print(result.production.render(), file=out)
         if args.shadow_wagers:
             print("", file=out)
             print(result.wagers.render(), file=out)

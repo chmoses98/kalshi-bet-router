@@ -255,3 +255,219 @@ class ProductionWager:
     last_execution_time: Decimal
     fill_count: int
     finality: OrderFinality
+
+
+# ------------------------------------------------ the production filter itself
+
+@dataclass
+class ProductionDiagnostics:
+    """Counts only. The health signal a scheduled run publishes.
+
+    Three outcomes have to stay distinguishable, because they call for
+    completely different responses: a HEALTHY NO-OP (nothing new, nothing
+    wrong), a DEFERRAL (something is pending and will resolve itself), and a
+    FAILURE (something is wrong and will not).
+    """
+
+    orders_considered: int = 0
+    eligible: int = 0
+
+    refused_before_cutover: int = 0
+    refused_order_not_final: int = 0
+    refused_no_execution_price: int = 0
+    refused_fees_incomplete: int = 0
+    refused_market_not_classified: int = 0
+    refused_sport_unresolved: int = 0
+    refused_no_destination_importer: int = 0
+    refused_game_date_not_established: int = 0
+    refused_reduction_not_representable: int = 0
+
+    #: Post-cutover orders, before any other gate. This is the number that says
+    #: whether the system has anything at all to do -- zero means a healthy
+    #: no-op, and every refusal below it is a deferral or a defect.
+    orders_after_cutover: int = 0
+
+    #: Which finality verdict post-cutover orders received.
+    final_market_closed: int = 0
+    final_stable: int = 0
+    pending_recent_fill: int = 0
+    finality_unknown: int = 0
+
+    def as_dict(self) -> dict[str, int]:
+        return dict(vars(self))
+
+    @property
+    def refusals_total(self) -> int:
+        return sum(v for k, v in vars(self).items() if k.startswith("refused_"))
+
+    @property
+    def is_healthy_no_op(self) -> bool:
+        """Nothing to do, and nothing wrong with that.
+
+        Distinct from a deferral: a post-cutover order held back by a gate is
+        the system working, but it is not nothing.
+        """
+        return self.orders_after_cutover == 0
+
+    def render(self) -> str:
+        lines = [
+            "production filter (counts only; nothing delivered by this report):",
+            f"  orders considered: {self.orders_considered}",
+            f"  after the production cutover: {self.orders_after_cutover}",
+            f"  ELIGIBLE for delivery: {self.eligible}",
+            "",
+            "  finality of post-cutover orders:",
+            f"    final, market closed: {self.final_market_closed}",
+            f"    final, stabilized: {self.final_stable}",
+            f"    pending, recent fill: {self.pending_recent_fill}",
+            f"    unknown: {self.finality_unknown}",
+            "",
+            f"  refused: {self.refusals_total}",
+            f"    before the cutover (history, not an error): "
+            f"{self.refused_before_cutover}",
+            f"    order not final: {self.refused_order_not_final}",
+            f"    no execution price: {self.refused_no_execution_price}",
+            f"    fees incomplete: {self.refused_fees_incomplete}",
+            f"    market not classified: {self.refused_market_not_classified}",
+            f"    sport unresolved: {self.refused_sport_unresolved}",
+            f"    no destination importer: {self.refused_no_destination_importer}",
+            f"    game date not established: "
+            f"{self.refused_game_date_not_established}",
+            f"    reduction not representable: "
+            f"{self.refused_reduction_not_representable}",
+            "",
+            f"  HEALTHY NO-OP: {self.is_healthy_no_op}",
+        ]
+        return "\n".join(lines)
+
+
+_REFUSAL_COUNTERS = {
+    ProductionRefusal.BEFORE_CUTOVER: "refused_before_cutover",
+    ProductionRefusal.ORDER_NOT_FINAL: "refused_order_not_final",
+    ProductionRefusal.NO_EXECUTION_PRICE: "refused_no_execution_price",
+    ProductionRefusal.FEES_INCOMPLETE: "refused_fees_incomplete",
+    ProductionRefusal.MARKET_NOT_CLASSIFIED: "refused_market_not_classified",
+    ProductionRefusal.SPORT_UNRESOLVED: "refused_sport_unresolved",
+    ProductionRefusal.NO_DESTINATION_IMPORTER: "refused_no_destination_importer",
+    ProductionRefusal.GAME_DATE_NOT_ESTABLISHED: "refused_game_date_not_established",
+    ProductionRefusal.REDUCTION_NOT_REPRESENTABLE: "refused_reduction_not_representable",
+}
+
+_FINALITY_COUNTERS = {
+    OrderFinality.FINAL_MARKET_CLOSED: "final_market_closed",
+    OrderFinality.FINAL_STABLE: "final_stable",
+    OrderFinality.PENDING_RECENT_FILL: "pending_recent_fill",
+    OrderFinality.UNKNOWN: "finality_unknown",
+}
+
+
+def evaluate_order(
+    order: OrderExecution,
+    classification_sport: str | None,
+    game_date: str | None,
+    market_status: str | None,
+    now: Decimal,
+    destinations: frozenset[str],
+    allow_stabilization: bool = False,
+) -> tuple[ProductionWager | None, ProductionRefusal | None, OrderFinality | None]:
+    """Apply every gate to one order, cheapest and most decisive first.
+
+    The ordering is deliberate. The cutover is checked before anything else
+    because it is free and it rejects almost everything -- and because a
+    pre-cutover order is not a failure of any later gate, so reporting it as one
+    would make the history look broken.
+
+    ``classification_sport`` is the sport's name or ``None`` when the market was
+    never classified; the caller distinguishes "not attempted" from "attempted
+    and unresolved" by passing ``"UNRESOLVED"`` for the latter.
+    """
+    if not is_after_cutover(order):
+        return None, ProductionRefusal.BEFORE_CUTOVER, None
+
+    finality = assess_finality(order, now, market_status, allow_stabilization)
+    if finality not in FINAL_VERDICTS:
+        return None, ProductionRefusal.ORDER_NOT_FINAL, finality
+
+    # Economics before destination: a wager with no price cannot be fixed by
+    # finding somewhere to put it.
+    if order.vwap_price is None:
+        return None, ProductionRefusal.NO_EXECUTION_PRICE, finality
+    if order.total_fee is None:
+        return None, ProductionRefusal.FEES_INCOMPLETE, finality
+
+    if classification_sport is None:
+        return None, ProductionRefusal.MARKET_NOT_CLASSIFIED, finality
+    if classification_sport in ("UNRESOLVED", "OTHER"):
+        return None, ProductionRefusal.SPORT_UNRESOLVED, finality
+    if classification_sport not in destinations:
+        return None, ProductionRefusal.NO_DESTINATION_IMPORTER, finality
+
+    if not game_date:
+        return None, ProductionRefusal.GAME_DATE_NOT_ESTABLISHED, finality
+
+    long_yes = order.outcome_side.value == "yes"
+    contract_price = order.vwap_price if long_yes else Decimal(1) - order.vwap_price
+    contracts = order.total_quantity
+    stake = contract_price * contracts + order.total_fee
+
+    return (
+        ProductionWager(
+            source_key=production_source_key(
+                order.subaccount_number, order.ticker, order.order_id
+            ),
+            market_ticker=order.ticker,
+            sport=classification_sport,
+            game_date=game_date,
+            side="YES" if long_yes else "NO",
+            contracts=contracts,
+            vwap_price=contract_price,
+            total_fees=order.total_fee,
+            stake=stake,
+            first_execution_time=order.first_execution_time,
+            last_execution_time=order.last_execution_time,
+            fill_count=order.fill_count,
+            finality=finality,
+        ),
+        None,
+        finality,
+    )
+
+
+def evaluate_production(
+    orders,
+    sports: dict[str, str],
+    game_dates: dict[str, str],
+    market_statuses: dict[str, str],
+    now: Decimal,
+    destinations: frozenset[str],
+    allow_stabilization: bool = False,
+) -> tuple[list[ProductionWager], ProductionDiagnostics]:
+    """Filter every order down to the ones safe to deliver, and count the rest."""
+    diagnostics = ProductionDiagnostics()
+    eligible: list[ProductionWager] = []
+
+    for order in orders:
+        diagnostics.orders_considered += 1
+        wager, refusal, finality = evaluate_order(
+            order,
+            sports.get(order.ticker),
+            game_dates.get(order.ticker),
+            market_statuses.get(order.ticker),
+            now,
+            destinations,
+            allow_stabilization,
+        )
+        if refusal is not ProductionRefusal.BEFORE_CUTOVER:
+            diagnostics.orders_after_cutover += 1
+        if finality is not None:
+            name = _FINALITY_COUNTERS[finality]
+            setattr(diagnostics, name, getattr(diagnostics, name) + 1)
+        if refusal is not None:
+            counter = _REFUSAL_COUNTERS[refusal]
+            setattr(diagnostics, counter, getattr(diagnostics, counter) + 1)
+            continue
+        assert wager is not None
+        eligible.append(wager)
+        diagnostics.eligible += 1
+
+    return eligible, diagnostics
