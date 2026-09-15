@@ -750,7 +750,11 @@ def test_malformed_metadata_error_never_echoes_the_value():
 # Nothing here changes a verdict, and the last test proves it.
 # ---------------------------------------------------------------------------
 
-from kalshi_router.classify import measure_competition_collisions
+from kalshi_router.classify import (
+    describe_competition_collisions,
+    measure_competition_collisions,
+    render_collision_details,
+)
 from kalshi_router.taxonomy import SportTaxonomy
 
 
@@ -909,3 +913,53 @@ def test_the_real_ambiguous_taxonomy_measures_as_a_conflict():
 
     assert structure.collisions == 1
     assert structure.conflicting_routable_sports == 1
+
+
+def test_a_collision_is_named_so_the_conclusion_can_be_checked():
+    """"One collision, nominal" is not a checkable claim.
+
+    The counts cannot say WHICH competition collided or which sport it narrows
+    to, so a reader looking for one sport can read a nominal collision as being
+    about that sport when it is about another. Naming it is what stops the
+    count standing in for an answer it does not contain.
+    """
+    details = describe_competition_collisions(
+        _taxonomy({"pro baseball": {"baseball", "football"}})
+    )
+
+    (detail,) = details
+    assert detail.competition == "pro baseball"
+    assert detail.claimant_sports == ("baseball", "football")
+    # Baseball narrows to MLB, Football to CFB/NFL. Both sides are shown.
+    assert detail.narrows_to == ("MLB", "CFB/NFL")
+
+
+def test_naming_collisions_leaves_the_counts_only_object_alone():
+    """The names are deliberately NOT on CollisionStructure.
+
+    That object is asserted counts-only and its as_dict() feeds the JSON audit
+    payload. Putting names on it would have meant relaxing a privacy guard in
+    order to print more, which is backwards.
+    """
+    taxonomy = _taxonomy({"pro baseball": {"baseball", "football"}})
+    structure = measure_competition_collisions(taxonomy)
+
+    for name, value in structure.as_dict().items():
+        assert isinstance(value, int), f"{name} is {type(value).__name__}"
+    assert "pro baseball" not in structure.render().lower()
+    # ...while the separate description does name it.
+    assert "pro baseball" in render_collision_details(
+        describe_competition_collisions(taxonomy)
+    )
+
+
+def test_describing_collisions_changes_no_verdict():
+    """Same promise the measurement makes, asserted for the describer too."""
+    before = classify_market(
+        context(competition="Shared Competition"), taxonomy=AMBIGUOUS_TAXONOMY
+    )
+    describe_competition_collisions(AMBIGUOUS_TAXONOMY)
+    after = classify_market(
+        context(competition="Shared Competition"), taxonomy=AMBIGUOUS_TAXONOMY
+    )
+    assert after.sport is before.sport is Sport.UNRESOLVED

@@ -420,7 +420,11 @@ def _run_series_probe(client, out, err) -> int:
     because a table the classifier treats as authoritative should not be
     written by the same run that decided it wanted more entries.
     """
-    from .classify import measure_competition_collisions
+    from .classify import (
+        describe_competition_collisions,
+        measure_competition_collisions,
+        render_collision_details,
+    )
     from .series_probe import MLB_LEDGER_CANDIDATES, probe_series
     from .sports import Sport
     from .taxonomy import parse_filters_by_sport
@@ -455,6 +459,11 @@ def _run_series_probe(client, out, err) -> int:
           f"{taxonomy.collision_count} collisions", file=out)
     print("", file=out)
     print(measure_competition_collisions(taxonomy).render(), file=out)
+    # The counts say what SHAPE the collisions are; this says which they are.
+    # Without it "one nominal collision" is a claim nobody can check, and a
+    # reader looking for one sport can read it as being about that sport.
+    print("", file=out)
+    print(render_collision_details(describe_competition_collisions(taxonomy)), file=out)
     return EXIT_OK
 
 
