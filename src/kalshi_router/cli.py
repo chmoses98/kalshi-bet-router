@@ -323,8 +323,10 @@ def _run_series_probe(client, out, err) -> int:
     because a table the classifier treats as authoritative should not be
     written by the same run that decided it wanted more entries.
     """
+    from .classify import measure_competition_collisions
     from .series_probe import MLB_LEDGER_CANDIDATES, probe_series
     from .sports import Sport
+    from .taxonomy import parse_filters_by_sport
 
     candidates = {t: Sport.MLB for t in MLB_LEDGER_CANDIDATES}
     try:
@@ -334,6 +336,28 @@ def _run_series_probe(client, out, err) -> int:
         return EXIT_API
 
     print(report.render(), file=out)
+
+    # The OTHER lever on these markets, measured in the same run because it
+    # costs one request. The series registry and the taxonomy ambiguity gate
+    # are the only two things standing between these wagers and a
+    # classification, and a decision about either needs both numbers.
+    #
+    # CollisionStructure has been built for a while and never actually run
+    # against Kalshi's live taxonomy, so "the collisions are real" has been an
+    # assumption rather than a measurement.
+    try:
+        taxonomy = parse_filters_by_sport(client.get_filters_by_sport())
+    except KalshiRouterError as exc:
+        print("", file=out)
+        print(f"taxonomy unavailable: {type(exc).__name__}", file=out)
+        return EXIT_OK
+
+    print("", file=out)
+    print(f"taxonomy: {taxonomy.sport_count} sports, "
+          f"{taxonomy.competition_count} unambiguous competitions, "
+          f"{taxonomy.collision_count} collisions", file=out)
+    print("", file=out)
+    print(measure_competition_collisions(taxonomy).render(), file=out)
     return EXIT_OK
 
 
