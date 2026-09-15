@@ -1,0 +1,80 @@
+# Phase 6: does the router's view of history agree with the ledger that exists?
+#
+# THIS IS VALIDATION, NOT BACKFILL. Nothing is written, delivered or proposed.
+# The job replays the account's complete fill history, builds the wagers a
+# router WOULD have produced, and compares them to the MLB ledger's existing
+# rows -- which were assembled independently, by the owner's own records.
+#
+# SECURITY NOTES (this repository is public):
+#   * NO DOWNSTREAM WRITE CREDENTIAL. This job has no reason to write anywhere,
+#     so it is not given the ability to. (The secret is not named even in this
+#     comment: the allowlist test that keeps a new workflow from quietly
+#     acquiring write access matches on raw text, and a comment that named it
+#     would have to be excused -- excusing it once is how the guard erodes.)
+#   * The destination ledger is fetched over a PUBLIC, unauthenticated clone.
+#   * The comparison happens IN MEMORY, inside the process that already holds
+#     the shadow wagers. Only counts are printed -- the LedgerComparison type
+#     has no field that can hold a ticker, a stake or a date, and a test
+#     asserts every field is an int.
+name: Historical shadow comparison
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: historical-shadow-compare
+  cancel-in-progress: false
+
+jobs:
+  compare:
+    name: Compare the router's history against the ledger
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Refuse to run credentialed code from an untrusted ref
+        run: |
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::error::This credentialed workflow may only run from refs/heads/main (got ${GITHUB_REF})."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install router
+        run: python -m pip install --disable-pip-version-check --quiet .
+
+      - name: Fetch the destination ledger (public, unauthenticated)
+        run: |
+          set -euo pipefail
+          # A blobless shallow clone: the ledger is the only file wanted, and
+          # this job must not need a credential to read a public repository.
+          git clone --quiet --depth 1 \
+            https://github.com/chmoses98/edge-finder-api "${RUNNER_TEMP}/mlb"
+          ledger="${RUNNER_TEMP}/mlb/data/edgelab/bets/bets.jsonl"
+          test -f "${ledger}"
+          echo "ledger rows on disk: $(wc -l < "${ledger}")"
+          echo "MLB_LEDGER=${ledger}" >> "${GITHUB_ENV}"
+
+      - name: Replay the history and compare
+        env:
+          KALSHI_API_KEY_ID: ${{ secrets.KALSHI_API_KEY_ID }}
+          KALSHI_PRIVATE_KEY: ${{ secrets.KALSHI_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          # --full-history because a comparison run against a truncated walk
+          # would report the truncation as disagreement.
+          python -m kalshi_router.cli audit \
+            --full-history \
+            --reconcile \
+            --shadow-wagers \
+            --compare-ledger "${MLB_LEDGER}" \
+            --compare-ledger-sport MLB

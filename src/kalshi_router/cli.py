@@ -171,6 +171,23 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     audit.add_argument(
+        "--compare-ledger",
+        default=None,
+        metavar="PATH",
+        help=(
+            "PHASE 6 VALIDATION, NOT BACKFILL. Compare the shadow wagers "
+            "against an existing destination ledger (JSONL) and report how "
+            "they agree. Requires --shadow-wagers. Nothing is written, sent or "
+            "proposed; the comparison happens in memory and only counts are "
+            "printed."
+        ),
+    )
+    audit.add_argument(
+        "--compare-ledger-sport",
+        default="MLB",
+        help="which sport's rows to read from the compared ledger (default MLB)",
+    )
+    audit.add_argument(
         "--full-history",
         action="store_true",
         help=(
@@ -264,6 +281,18 @@ def main(argv: list[str] | None = None, stdout=None, stderr=None) -> int:
     err = stderr if stderr is not None else sys.stderr
     args = build_parser().parse_args(argv)
 
+    if getattr(args, "compare_ledger", None) and not args.shadow_wagers:
+        # Failing here rather than silently comparing an empty set: a run that
+        # printed "0 matched, 457 ledger only" because no wagers were built
+        # would read as a catastrophic disagreement instead of as a missing
+        # flag, and someone would act on it.
+        print(
+            "--compare-ledger requires --shadow-wagers: there is nothing to "
+            "compare the ledger against otherwise.",
+            file=err,
+        )
+        return EXIT_CONFIG
+
     if args.show_sensitive_details:
         try:
             assert_sensitive_output_allowed()
@@ -292,6 +321,8 @@ def main(argv: list[str] | None = None, stdout=None, stderr=None) -> int:
             reconcile=args.reconcile,
             full_history=args.full_history,
             shadow_wagers=args.shadow_wagers,
+            compare_ledger_path=args.compare_ledger,
+            compare_ledger_sport=args.compare_ledger_sport,
             production=args.production,
             now=Decimal(int(time.time())) if args.production else None,
             max_classify_markets=args.max_classify_markets,
@@ -309,6 +340,10 @@ def main(argv: list[str] | None = None, stdout=None, stderr=None) -> int:
         payload.update({f"schema_{k}": v for k, v in result.coverage.as_dict().items()})
         payload.update({f"history_{k}": v for k, v in result.history.as_dict().items()})
         payload.update({f"wager_{k}": v for k, v in result.wagers.as_dict().items()})
+        if result.ledger_comparison is not None:
+            payload.update(
+                {f"ledger_{k}": v for k, v in result.ledger_comparison.as_dict().items()}
+            )
         payload.update({f"finality_{k}": v for k, v in result.finality.as_dict().items()})
         payload.update(
             {f"production_{k}": v for k, v in result.production.as_dict().items()}
@@ -340,6 +375,9 @@ def main(argv: list[str] | None = None, stdout=None, stderr=None) -> int:
         if args.shadow_wagers:
             print("", file=out)
             print(result.wagers.render(), file=out)
+        if result.ledger_comparison is not None:
+            print("", file=out)
+            print(result.ledger_comparison.render(), file=out)
         if result.reconciliation is not None:
             print("", file=out)
             print(result.settlement_coverage.render(), file=out)

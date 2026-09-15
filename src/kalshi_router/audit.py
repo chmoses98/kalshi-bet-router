@@ -53,6 +53,7 @@ from .safety import safe_schema_name
 from .schema_probe import SchemaCoverage, probe_fills
 from .sports import REPORT_ORDER, Sport
 from .taxonomy import SportTaxonomy, parse_filters_by_sport
+from .ledger_compare import LedgerComparison, compare_to_ledger, read_ledger
 from .wager import WagerDiagnostics, build_shadow_wagers
 from .timeaxis import parse_rfc3339_seconds
 
@@ -103,6 +104,9 @@ class AuditResult:
     )
     #: What a router WOULD emit. Built in memory, sent nowhere.
     wagers: WagerDiagnostics = field(default_factory=WagerDiagnostics)
+    #: Phase 6: how the shadow wagers compare to the ledger that already
+    #: exists. None unless a ledger was supplied. Counts only.
+    ledger_comparison: LedgerComparison | None = None
     #: How long real orders take to finish filling -- what sets the
     #: stabilization window rather than an intuition about it.
     finality: FinalityEvidence = field(default_factory=FinalityEvidence)
@@ -182,6 +186,8 @@ def run_audit(
     full_history: bool = False,
     max_classify_markets: int | None = None,
     shadow_wagers: bool = False,
+    compare_ledger_path: str | None = None,
+    compare_ledger_sport: str = "MLB",
     production: bool = False,
     now: "Decimal | None" = None,
     allow_stabilization: bool = False,
@@ -436,10 +442,19 @@ def run_audit(
     # refusals are the output worth having -- they say what routing would cost
     # in accuracy today, before it can cost it.
     wager_diagnostics = WagerDiagnostics()
+    ledger_comparison = None
     if shadow_wagers and replay is not None:
-        _, wager_diagnostics = build_shadow_wagers(
+        built, wager_diagnostics = build_shadow_wagers(
             replay.episodes, classifications, contexts
         )
+        # Phase 6: validation, never backfill. The built wagers are compared
+        # HERE, inside the process that already holds them, so that only counts
+        # cross the boundary -- `built` carries tickers, stakes and payouts and
+        # is dropped when this scope ends.
+        if compare_ledger_path is not None:
+            ledger_comparison = compare_to_ledger(
+                built, read_ledger(compare_ledger_path), sport=compare_ledger_sport
+            )
 
     # The production path classifies ONLY post-cutover markets. Research
     # classification is bounded because it costs several metadata requests per
@@ -462,6 +477,7 @@ def run_audit(
     return AuditResult(
         report=report,
         wagers=wager_diagnostics,
+        ledger_comparison=ledger_comparison,
         finality=finality_evidence,
         production=production_diagnostics,
         production_wagers=tuple(production_wagers),
