@@ -374,6 +374,7 @@ def _subcommand_argvs(tmp_path):
         "audit": [],
         "deliver": ["--out-dir", str(tmp_path / "payloads")],
         "series-probe": [],
+        "backfill": ["--since", "2026-09-11T00:00:00Z"],
     }
     return required
 
@@ -560,3 +561,41 @@ def test_deliver_without_the_flag_never_requests_pre_cutover(tmp_path):
         ["deliver", "--out-dir", str(tmp_path / "payloads")]
     )
     assert args.include_pre_cutover is None
+
+
+# ---------------------------------------------------------------------------
+# The backfill command cannot be pointed at production's range.
+# ---------------------------------------------------------------------------
+
+
+def test_backfill_refuses_a_window_that_does_not_precede_the_cutover(
+    monkeypatch, local_env
+):
+    install_fake_api(monkeypatch, SAMPLE)
+
+    code, out, err = run(["backfill", "--since", "2026-09-20T00:00:00Z"])
+
+    assert code == cli.EXIT_CONFIG
+    assert "precede" in err
+
+
+def test_backfill_has_no_flag_for_the_window_end(tmp_path):
+    """The end is the cutover structurally. A settable end is the one way this
+    command could quietly become a second production path."""
+    parser = cli.build_parser()
+    args = parser.parse_args(["backfill", "--since", "2026-09-11T00:00:00Z"])
+
+    assert not hasattr(args, "until")
+    assert not hasattr(args, "end")
+    assert not hasattr(args, "through")
+
+
+def test_backfill_rejects_a_malformed_ledger_spec(monkeypatch, local_env):
+    install_fake_api(monkeypatch, SAMPLE)
+
+    code, _out, err = run(
+        ["backfill", "--since", "2026-09-11T00:00:00Z", "--ledger", "MLB"]
+    )
+
+    assert code == cli.EXIT_CONFIG
+    assert "SPORT=PATH" in err

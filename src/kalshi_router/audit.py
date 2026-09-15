@@ -201,6 +201,7 @@ def run_audit(
     now: "Decimal | None" = None,
     allow_stabilization: bool = False,
     include_pre_cutover: bool = False,
+    backfill_window=None,
 ) -> AuditResult:
     """Run one complete Phase 0.1 audit.
 
@@ -473,7 +474,17 @@ def run_audit(
     # resolve every one of them and never has to skip a candidate for budget.
     production_diagnostics = ProductionDiagnostics()
     production_wagers: list = []
-    if production and replay is not None:
+    if backfill_window is not None and replay is not None:
+        # The historical catch-up path. Separate from the production branch
+        # below rather than another flag on it: the one that can reach
+        # backwards should not be reachable by adding a parameter to the one
+        # that runs every fifteen minutes.
+        production_wagers, production_diagnostics, _in_window = evaluate_window(
+            client, resolver, replay, taxonomy,
+            now if now is not None else Decimal(0),
+            backfill_window,
+        )
+    elif production and replay is not None:
         production_wagers, production_diagnostics = _evaluate_production(
             client,
             resolver,
@@ -683,6 +694,69 @@ def _probe_settlement_archive(
     rows = payload.get("settlements")
     if isinstance(rows, list):
         coverage.archive_first_page_rows = len(rows)
+
+
+def evaluate_window(client, resolver, replay, taxonomy, now, window):
+    """Apply the production gates to a BOUNDED PRE-CUTOVER window.
+
+    Deliberately a separate entry point rather than another flag on the
+    production evaluator. The two answer different questions -- "what is new"
+    and "what did we miss" -- and the one that can reach backwards should not
+    be reachable by adding a parameter to the one that runs every fifteen
+    minutes.
+
+    The window's end is the cutover structurally (see BackfillWindow), so this
+    cannot be pointed at production's range however it is called.
+    """
+    from .classify import classify_market
+    from .destination import DESTINATION_REPOS
+    from .production import evaluate_production
+    from .wager import resolve_game_date
+
+    candidates = [o for o in replay.orders.values() if window.contains(o)]
+
+    sports: dict[str, str] = {}
+    game_dates: dict[str, str] = {}
+    statuses: dict[str, str] = {}
+    unresolved_reasons: dict[str, int] = {}
+    for ticker in sorted({o.ticker for o in candidates}):
+        context = resolver.resolve(ticker)
+        try:
+            classification = classify_market(context, taxonomy=taxonomy)
+        except KalshiRouterError:
+            continue
+        if classification.sport.value == "UNRESOLVED":
+            reason = classification.unresolved_reason
+            key = reason.value if reason is not None else None
+            unresolved_reasons[key] = unresolved_reasons.get(key, 0) + 1
+        sports[ticker] = classification.sport.value
+        date, _source = resolve_game_date(context)
+        if date:
+            game_dates[ticker] = date
+        raw_status = (context.market or {}).get("status")
+        if isinstance(raw_status, str) and raw_status.strip():
+            statuses[ticker] = raw_status
+
+    # Every sport is admitted here, not just those with an importer: a wager
+    # for a sport with no destination must be REPORTED as
+    # UNSUPPORTED_DESTINATION by reconciliation, which it cannot be if the
+    # filter discards it first.
+    destinations = frozenset(sport.value for sport in Sport if sport.value not in ("OTHER", "UNRESOLVED"))
+
+    wagers, diagnostics = evaluate_production(
+        candidates,
+        sports,
+        game_dates,
+        statuses,
+        now,
+        destinations,
+        allow_stabilization=True,
+        include_pre_cutover=True,
+    )
+    for key, count in unresolved_reasons.items():
+        field = UNRESOLVED_COUNTERS.get(key, "unresolved_reason_unavailable")
+        setattr(diagnostics, field, getattr(diagnostics, field) + count)
+    return wagers, diagnostics, len(candidates)
 
 
 def _evaluate_production(
