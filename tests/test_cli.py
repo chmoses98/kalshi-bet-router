@@ -475,7 +475,7 @@ def test_compare_ledger_reports_counts_and_names_no_market(monkeypatch, local_en
     ledger.write_text(
         json.dumps(
             {
-                "marketTicker": market_for("MLB"),
+                "marketTicker": IMPORTABLE_MARKET,
                 "side": "YES",
                 "stake": 5.0,
                 "entryPrice": 0.5,
@@ -729,3 +729,148 @@ def test_the_series_probe_lists_what_else_lives_under_our_sports(monkeypatch, lo
     assert code == cli.EXIT_OK, err
     assert "competitions the catalogue files under our sports" in out, out
     assert "npb" in out, out
+
+
+# The backfill still writes NOTHING unless asked, and writes only what
+# reconciliation said may be written.
+
+#: An order this backfill would actually write, which took THREE corrections to
+#: build and every one of them was a gate doing its job:
+#:
+#:   * no fee on the fill        -> "fees incomplete", refused;
+#:   * event ticker `...-SYNTH01` -> "game date not established", refused;
+#:   * no competition metadata    -> "market not classified", refused.
+#:
+#: A fixture that skipped any of them would have produced an empty payload, and
+#: a test asserting "nothing was written" would have passed for a reason that
+#: has nothing to do with what it measures.
+IMPORTABLE_EVENT = "KXMLBGAME-26SEP12NYYBOS"
+IMPORTABLE_MARKET = f"{IMPORTABLE_EVENT}-NYY"
+
+
+def importable_metadata() -> dict:
+    """The market resolves to MLB on Kalshi's own competition evidence, and its
+    event ticker carries the contest's date."""
+    from .synthetic import make_event, make_event_metadata, make_market, make_series
+
+    return {
+        IMPORTABLE_MARKET: make_market(IMPORTABLE_MARKET, IMPORTABLE_EVENT),
+        IMPORTABLE_EVENT: make_event(IMPORTABLE_EVENT, "KXMLBGAME"),
+        f"{IMPORTABLE_EVENT}/metadata": make_event_metadata("Pro Baseball", "Game"),
+        "KXMLBGAME": make_series("KXMLBGAME", category="Sports", tags=["Baseball"]),
+    }
+
+
+IMPORTABLE_WINDOW = [[
+    make_fill(21, ticker=IMPORTABLE_MARKET, order_id="SYNTHORDER-P",
+              created_time="2026-09-12T18:00:00Z", fee_cost="0.0100"),
+    make_fill(22, ticker=IMPORTABLE_MARKET, order_id="SYNTHORDER-Q",
+              created_time="2026-09-13T18:00:00Z", fee_cost="0.0100"),
+]]
+
+
+def _empty_ledger(tmp_path):
+    path = tmp_path / "bets.jsonl"
+    path.write_text("", encoding="utf-8")
+    return path
+
+
+def _importable_count(report: str) -> int:
+    for line in report.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("MISSING_IMPORTABLE"):
+            return int(stripped.rsplit(":", 1)[1])
+    raise AssertionError(f"the report printed no MISSING_IMPORTABLE count:\n{report}")
+
+
+def test_backfill_writes_no_payload_unless_a_directory_is_asked_for(monkeypatch, local_env, tmp_path):
+    """Inspection stays the default. A command that produced a deliverable
+    payload as a side effect of being run would make "let me just look" the most
+    dangerous thing in the system."""
+    install_fake_api(monkeypatch, IMPORTABLE_WINDOW, metadata=importable_metadata())
+
+    code, out, err = run([
+        "backfill", "--since", "2026-09-11T00:00:00Z",
+        "--ledger", f"MLB={_empty_ledger(tmp_path)}",
+    ])
+
+    assert code == cli.EXIT_OK, err
+    assert _importable_count(out) > 0, "the fixture proves nothing if nothing was importable"
+    assert "payloads written" not in out
+    assert not (tmp_path / "MLB.json").exists()
+
+
+def test_the_payload_holds_exactly_what_the_report_said_was_importable(monkeypatch, local_env, tmp_path):
+    """The file and the log have to agree.
+
+    Asserted against the number the REPORT printed rather than against a number
+    chosen here, so a wiring change that writes a different set fails even if
+    the fixture changes size.
+    """
+    import json
+
+    install_fake_api(monkeypatch, IMPORTABLE_WINDOW, metadata=importable_metadata())
+    out_dir = tmp_path / "payloads"
+
+    code, out, err = run([
+        "backfill", "--since", "2026-09-11T00:00:00Z",
+        "--ledger", f"MLB={_empty_ledger(tmp_path)}",
+        "--out-dir", str(out_dir),
+    ])
+
+    assert code == cli.EXIT_OK, err
+    expected = _importable_count(out)
+    assert expected > 0
+    payload = json.loads((out_dir / "MLB.json").read_text())
+    assert payload["importBatchId"] == (
+        "kalshi-gap-backfill-2026-09-12-through-production-cutover-v1"
+    )
+    assert len(payload["rows"]) == expected
+
+
+def test_a_verdict_that_is_not_importable_writes_nothing(monkeypatch, local_env, tmp_path):
+    """The ledger already holds this market and side at a wildly different
+    stake, so every wager reconciles to CONFLICT -- present, disagreeing, never
+    overwritten. A conflict that produced a payload row would resolve a
+    disagreement by writing over it."""
+    install_fake_api(monkeypatch, IMPORTABLE_WINDOW, metadata=importable_metadata())
+    ledger = tmp_path / "bets.jsonl"
+    ledger.write_text(json.dumps({
+        "sourceBetKey": "hand-entered-2026-09-12",
+        "marketTicker": IMPORTABLE_MARKET,
+        "side": "YES",
+        "stake": 9999.00,
+        "entryPrice": 0.99,
+    }) + "\n", encoding="utf-8")
+    out_dir = tmp_path / "payloads"
+
+    code, out, err = run([
+        "backfill", "--since", "2026-09-11T00:00:00Z",
+        "--ledger", f"MLB={ledger}",
+        "--out-dir", str(out_dir),
+    ])
+
+    assert code == cli.EXIT_OK, err
+    assert _importable_count(out) == 0
+    assert "CONFLICT (refused, never overwritten): 2" in out, out
+    assert not (out_dir / "MLB.json").exists()
+
+
+def test_the_backfill_payload_rows_never_reach_the_log(monkeypatch, local_env, tmp_path):
+    """The payload carries market, side, stake, contracts, price and fees, and
+    this repository's Actions logs are public. Counts reach the log; rows reach
+    a file the runner throws away."""
+    install_fake_api(monkeypatch, IMPORTABLE_WINDOW, metadata=importable_metadata())
+    out_dir = tmp_path / "payloads"
+
+    code, out, err = run([
+        "backfill", "--since", "2026-09-11T00:00:00Z",
+        "--ledger", f"MLB={_empty_ledger(tmp_path)}",
+        "--out-dir", str(out_dir),
+    ])
+
+    assert code == cli.EXIT_OK, err
+    written = (out_dir / "MLB.json").read_text()
+    assert "sourceBetKey" in written, "the fixture must actually contain what is being kept out of the log"
+    for sensitive in ("sourceBetKey", "entryPrice", "executionEconomics"):
+        assert sensitive not in out, out

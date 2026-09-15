@@ -841,10 +841,29 @@ def to_cfb_import_row(wager: ProductionWager, import_batch_id: str) -> dict:
     }
 
 
+def to_mlb_import_row(wager: ProductionWager, import_batch_id: str) -> dict:
+    """MLB's row, behind the same signature the other two destinations use.
+
+    The batch label is NOT repeated on the row. MLB's importer reads
+    ``importBatchId`` from the payload envelope and stamps it on every row
+    itself -- it is part of the identity hash it computes -- so writing a second
+    copy here would create two values that can disagree about what one row
+    belongs to. NFL and CFB have no envelope, which is why they carry it.
+
+    The argument is still required and still checked, because a caller that has
+    no batch id to give has no business building a row: the envelope it would
+    end up in is the thing MLB's identity depends on.
+    """
+    if not isinstance(import_batch_id, str) or not import_batch_id.strip():
+        raise ValueError("an import batch id is required to build an MLB row")
+    return to_import_row(wager)
+
+
 #: Which emitter speaks each destination's language. A sport absent from this
 #: map has no payload shape and must be refused rather than sent in some other
 #: sport's vocabulary.
 ROW_BUILDERS = {
+    "MLB": to_mlb_import_row,
     "NFL": to_nfl_import_row,
     "CFB": to_cfb_import_row,
 }

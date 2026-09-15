@@ -81,7 +81,43 @@ class DeliveryPlan:
 
 
 def write_payloads(wagers, out_dir: str) -> dict[str, int]:
-    """Write one importer payload per destination, and return counts only.
+    """Write one PRODUCTION importer payload per destination. Counts only.
+
+    Production routing is gated on :data:`DESTINATION_REPOS`, which is the set
+    of sports the scheduled delivery workflow knows how to push to. A wager for
+    any other sport should have been refused long before here.
+    """
+    return _write_payloads(
+        wagers,
+        out_dir,
+        import_batch_id=ROUTER_IMPORT_BATCH_ID,
+        allowed_sports=_sport_names(),
+        why="delivery",
+    )
+
+
+def write_backfill_payloads(wagers, out_dir: str, import_batch_id: str, allowed_sports) -> dict[str, int]:
+    """Write one HISTORICAL importer payload per destination. Counts only.
+
+    Deliberately NOT gated on :data:`DESTINATION_REPOS`. That map is what the
+    every-15-minutes production job is willing to push to, and widening it would
+    change what production routes -- a much larger decision than catching up on
+    a bounded window in the past. The gate here is the set of destinations the
+    caller actually supplied a ledger for, which is the same set reconciliation
+    formed its verdicts against. Writing to a destination whose existing rows
+    were never read is how a backfill duplicates a ledger.
+    """
+    return _write_payloads(
+        wagers,
+        out_dir,
+        import_batch_id=import_batch_id,
+        allowed_sports=frozenset(allowed_sports),
+        why="backfill delivery",
+    )
+
+
+def _write_payloads(wagers, out_dir: str, *, import_batch_id: str, allowed_sports, why: str) -> dict[str, int]:
+    """One importer payload per destination, each in that destination's words.
 
     The payload is the sensitive artefact of this whole system -- it carries
     market, side, stake, contracts, price, fees. It goes to a FILE, never to
@@ -93,25 +129,38 @@ def write_payloads(wagers, out_dir: str) -> dict[str, int]:
     import json
     import os
 
-    from .production import to_import_row
+    from .production import ROW_BUILDERS
 
-    grouped: dict[str, list[dict]] = {}
+    if not isinstance(import_batch_id, str) or not import_batch_id.strip():
+        raise ValueError("a payload needs an import batch id; the destination's row identity depends on it")
+
+    grouped: dict[str, list] = {}
     for wager in wagers:
-        if wager.sport not in _sport_names():
+        if wager.sport not in allowed_sports:
             raise ValueError(
-                "a wager reached delivery for a sport with no destination "
+                f"a wager reached {why} for a sport with no destination "
                 "importer; it should have been refused earlier"
             )
-        grouped.setdefault(wager.sport, []).append(to_import_row(wager))
+        if wager.sport not in ROW_BUILDERS:
+            # Reaching here means a sport was declared deliverable without
+            # anyone writing its row shape. Sending it in another sport's
+            # vocabulary would land a wager with no price.
+            raise ValueError(
+                f"{wager.sport} has no payload shape; a row cannot be built for it"
+            )
+        grouped.setdefault(wager.sport, []).append(wager)
 
     os.makedirs(out_dir, exist_ok=True)
     counts: dict[str, int] = {}
-    for sport, rows in sorted(grouped.items()):
-        # Sorted by source key so the same set of wagers always produces a
-        # byte-identical payload: a diffable payload is what lets a human
-        # confirm that a second run really did propose nothing new.
-        rows.sort(key=lambda row: row["sourceBetKey"])
-        payload = {"importBatchId": ROUTER_IMPORT_BATCH_ID, "rows": rows}
+    for sport, sport_wagers in sorted(grouped.items()):
+        # Sorted by the ROUTER's own source key rather than by a field of the
+        # emitted row: every destination spells that field differently, and the
+        # ordering must not depend on which one this is. The same set of wagers
+        # therefore always produces a byte-identical payload, which is what lets
+        # a human confirm that a second run really did propose nothing new.
+        sport_wagers.sort(key=lambda wager: wager.source_key)
+        rows = [ROW_BUILDERS[sport](wager, import_batch_id) for wager in sport_wagers]
+        payload = {"importBatchId": import_batch_id, "rows": rows}
         path = os.path.join(out_dir, f"{sport}.json")
         with open(path, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2, sort_keys=True)
