@@ -457,3 +457,153 @@ def test_fields_belonging_to_a_closed_position_are_left_null():
     # feeType would need taker/maker resolved across every fill of the order,
     # which the aggregate does not carry, so it is not guessed at MIXED.
     assert economics.get("feeType") is None
+
+
+# ------------------------------------------- the NFL and CFB payload shapes
+#
+# THE THREE DESTINATIONS DO NOT SPEAK THE SAME LANGUAGE, and assuming they did
+# is how the MLB economics silently became null. The MLB ledger is camelCase
+# with the economics nested; the NFL kind is snake_case and calls the
+# quantity-weighted price `actual_price`; the CFB ledger is also snake_case but
+# calls the same number `execution_price`. Each gets a row built against ITS
+# schema, and these tests pin the differences rather than trusting them.
+
+from kalshi_router.production import to_cfb_import_row, to_nfl_import_row  # noqa: E402
+
+BACKFILL_BATCH = "kalshi-gap-backfill-2026-09-12-through-production-cutover-v1"
+
+
+def _wager(sport="NFL", ticker="KXNFLGAME-26SEP14KCBUF-KC"):
+    return ProductionWager(
+        source_key=production_source_key(_SECRET_SUBACCOUNT, ticker, _SECRET_ORDER_ID),
+        market_ticker=ticker,
+        sport=sport,
+        game_date="2026-09-14",
+        side="YES",
+        contracts=Decimal(40),
+        vwap_price=Decimal("0.61"),
+        total_fees=Decimal("0.28"),
+        stake=Decimal("24.68"),
+        first_execution_time=Decimal(1789418411),
+        last_execution_time=Decimal(1789418500),
+        fill_count=3,
+        finality=OrderFinality.FINAL_MARKET_CLOSED,
+    )
+
+
+def test_the_destinations_use_different_names_for_the_same_price():
+    """The one difference most likely to be missed by assuming a shared shape."""
+    nfl = to_nfl_import_row(_wager(), BACKFILL_BATCH)
+    cfb = to_cfb_import_row(_wager("CFB"), BACKFILL_BATCH)
+
+    assert nfl["actual_price"] == 0.61
+    assert "execution_price" not in nfl
+    assert cfb["execution_price"] == 0.61
+    assert "actual_price" not in cfb
+
+
+def test_neither_row_mints_a_destination_identity():
+    """The router does not name records in other people's ledgers.
+
+    It omits MLB's `betId` for this reason; `imported_wager_id` and `wager_id`
+    are the same kind of thing. Each destination derives its own from
+    `source_bet_key`, which is what keeps a re-import a no-op rather than a
+    second record under a new name.
+    """
+    nfl = to_nfl_import_row(_wager(), BACKFILL_BATCH)
+    cfb = to_cfb_import_row(_wager("CFB"), BACKFILL_BATCH)
+
+    assert "imported_wager_id" not in nfl
+    assert "wager_id" not in cfb
+    for row in (nfl, cfb):
+        assert "schema_version" not in row
+
+
+def test_the_nfl_row_does_not_guess_a_season_or_week():
+    """NFL requires both, and this router has no business deciding them.
+
+    Turning a date into an NFL week means consulting the NFL calendar. That is
+    the destination's knowledge, and `nfl_edge.data.nfl_calendar` resolves both
+    from the real schedule at import time. A week inferred here from a date
+    would be a guess wearing a fact's clothes -- and the `contracts` field that
+    landed null in the MLB ledger is the standing reminder of what that costs.
+    """
+    row = to_nfl_import_row(_wager(), BACKFILL_BATCH)
+
+    assert "season" not in row
+    assert "week" not in row
+
+
+def test_both_rows_carry_receipt_provenance_and_claim_no_model_backing():
+    for row in (to_nfl_import_row(_wager(), BACKFILL_BATCH),
+                to_cfb_import_row(_wager("CFB"), BACKFILL_BATCH)):
+        assert row["entry_method"] == "IMPORTED_RECEIPT"
+        for field in ("recommendation_id", "model_evaluation_id",
+                      "model_fair_probability", "model_supported",
+                      "edge", "expected_value", "projection_id"):
+            assert field not in row
+
+
+def test_both_rows_carry_the_exchange_reported_fee_as_actual():
+    """`fees_are_estimated` is what separates an exchange fee from a modelled
+    one, and both destinations refuse a profit figure derived from an estimate."""
+    nfl = to_nfl_import_row(_wager(), BACKFILL_BATCH)
+    cfb = to_cfb_import_row(_wager("CFB"), BACKFILL_BATCH)
+
+    for row in (nfl, cfb):
+        assert row["fees_paid"] == 0.28
+        assert row["fees_are_estimated"] is False
+    assert nfl["fee_state"] == "ACTUAL_API_FILL"
+
+
+def test_the_executed_at_instant_is_utc_and_comes_from_the_first_fill():
+    """An order spans its fills; the execution began at the first one."""
+    row = to_nfl_import_row(_wager(), BACKFILL_BATCH)
+
+    assert row["executed_at"] == "2026-09-14T20:40:11Z"
+    assert row["executed_at"].endswith("Z")
+
+
+def test_neither_row_leaks_a_raw_account_identifier():
+    blob = _json.dumps([to_nfl_import_row(_wager(), BACKFILL_BATCH),
+                        to_cfb_import_row(_wager("CFB"), BACKFILL_BATCH)])
+
+    assert _SECRET_ORDER_ID not in blob
+    assert str(_SECRET_SUBACCOUNT) not in blob
+
+
+# ------------------------------------------------- rendering an instant back
+
+from kalshi_router.timeaxis import seconds_to_rfc3339  # noqa: E402
+
+
+def test_an_instant_round_trips_through_both_directions():
+    """`seconds_to_rfc3339` is the inverse of `parse_rfc3339_seconds`.
+
+    Both destinations record `executed_at` as a string while this package
+    carries every instant as exact epoch seconds, so the conversion has to be
+    exact for the whole seconds a destination actually stores.
+    """
+    original = "2026-09-14T20:40:11Z"
+
+    assert seconds_to_rfc3339(parse_rfc3339_seconds(original)) == original
+
+
+def test_sub_second_precision_truncates_rather_than_rounding_forward():
+    """The destinations record seconds, so the remainder has nowhere to go.
+
+    Truncating is the direction that cannot move an execution into a later
+    second than the one it happened in -- rounding a fill at .734 up would
+    report it a second after it occurred.
+    """
+    assert seconds_to_rfc3339(parse_rfc3339_seconds("2026-09-14T20:40:11.734Z")) == (
+        "2026-09-14T20:40:11Z"
+    )
+
+
+def test_an_unreadable_instant_is_none_rather_than_the_epoch():
+    """Consistent with every other function on this axis: a timestamp that
+    cannot be read is not "now" and is not 1970. A destination that requires
+    the field should refuse the row rather than receive a fabricated instant."""
+    assert seconds_to_rfc3339(None) is None
+    assert seconds_to_rfc3339(parse_rfc3339_seconds("not a timestamp")) is None
