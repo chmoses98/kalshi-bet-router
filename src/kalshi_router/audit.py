@@ -26,6 +26,11 @@ from .client import KalshiReadOnlyClient, WalkStats
 from .coverage import SettlementCoverage, build_settlement_coverage
 from .errors import HttpStatusError, KalshiRouterError, SchemaError
 from .finality import FinalityEvidence, measure_finality
+from .production import (
+    ProductionDiagnostics,
+    evaluate_production,
+    is_after_cutover,
+)
 from .history import HistoryEvidence
 from .metadata import MetadataResolver
 from .milestones import MilestoneIndex, build_milestone_index
@@ -101,6 +106,8 @@ class AuditResult:
     #: How long real orders take to finish filling -- what sets the
     #: stabilization window rather than an intuition about it.
     finality: FinalityEvidence = field(default_factory=FinalityEvidence)
+    #: Which orders would actually be delivered, and why the rest would not.
+    production: ProductionDiagnostics = field(default_factory=ProductionDiagnostics)
     details: tuple[SensitiveDetail, ...] = ()
     _classifications: dict[str, Classification] = field(default_factory=dict, repr=False)
 
@@ -172,6 +179,8 @@ def run_audit(
     full_history: bool = False,
     max_classify_markets: int | None = None,
     shadow_wagers: bool = False,
+    production: bool = False,
+    now: "Decimal | None" = None,
 ) -> AuditResult:
     """Run one complete Phase 0.1 audit.
 
@@ -428,6 +437,17 @@ def run_audit(
             replay.episodes, classifications, contexts
         )
 
+    # The production path classifies ONLY post-cutover markets. Research
+    # classification is bounded because it costs several metadata requests per
+    # market and a full history touches ~1700 of them; production touches the
+    # handful the owner has bet on since the cutover, so it can afford to
+    # resolve every one of them and never has to skip a candidate for budget.
+    production_diagnostics = ProductionDiagnostics()
+    if production and replay is not None:
+        production_diagnostics = _evaluate_production(
+            client, resolver, replay, taxonomy, now
+        )
+
     finality_evidence = (
         measure_finality(replay.orders.values())
         if replay is not None
@@ -438,6 +458,7 @@ def run_audit(
         report=report,
         wagers=wager_diagnostics,
         finality=finality_evidence,
+        production=production_diagnostics,
         accounting=accounting,
         coverage=coverage,
         history=history_evidence,
@@ -622,6 +643,50 @@ def _probe_settlement_archive(
     rows = payload.get("settlements")
     if isinstance(rows, list):
         coverage.archive_first_page_rows = len(rows)
+
+
+def _evaluate_production(client, resolver, replay, taxonomy, now):
+    """Apply the production filter, resolving metadata only where it matters.
+
+    Every gate but the cutover needs metadata, and the cutover needs none -- so
+    the post-cutover set is computed first and nothing else is fetched for the
+    thousands of historical orders that will be refused anyway.
+    """
+    from decimal import Decimal
+
+    from .classify import classify_market
+    from .destination import DESTINATION_REPOS
+    from .wager import resolve_game_date
+
+    candidates = [o for o in replay.orders.values() if is_after_cutover(o)]
+
+    sports: dict[str, str] = {}
+    game_dates: dict[str, str] = {}
+    statuses: dict[str, str] = {}
+    for ticker in sorted({o.ticker for o in candidates}):
+        context = resolver.resolve(ticker)
+        try:
+            classification = classify_market(context, taxonomy=taxonomy)
+        except KalshiRouterError:
+            continue
+        sports[ticker] = classification.sport.value
+        date, _source = resolve_game_date(context)
+        if date:
+            game_dates[ticker] = date
+        raw_status = (context.market or {}).get("status")
+        if isinstance(raw_status, str) and raw_status.strip():
+            statuses[ticker] = raw_status
+
+    destinations = frozenset(sport.value for sport in DESTINATION_REPOS)
+    _wagers, diagnostics = evaluate_production(
+        replay.orders.values(),
+        sports,
+        game_dates,
+        statuses,
+        now if now is not None else Decimal(0),
+        destinations,
+    )
+    return diagnostics
 
 
 def _classification_order(tickers: list[str], replay) -> list[str]:
