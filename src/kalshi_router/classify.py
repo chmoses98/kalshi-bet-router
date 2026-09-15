@@ -346,6 +346,29 @@ def derive_series_ticker(context: MarketContext) -> tuple[str | None, str]:
 
 # ------------------------------------------------------------- level verdicts
 
+def _only_one_claimant_could_hold_our_sports(taxonomy, competition) -> bool:
+    """True when exactly one claimant sport could hold any of our four, and
+    every other claimant provably holds none.
+
+    Returns False -- keeping the refusal -- whenever ANY claimant is unknown to
+    us, however many in-scope claimants there are. An unknown sport might hold
+    one of our leagues, and treating it as harmless is the substitution the gate
+    exists to stop.
+    """
+    claimants = getattr(taxonomy, "ambiguous_claimants", {}).get(normalize(competition))
+    if not claimants:
+        return False
+
+    in_scope = 0
+    for name in claimants:
+        members = possible_sports(name)
+        if members is None:
+            return False          # unknown: we cannot call it harmless
+        if members:
+            in_scope += 1
+    return in_scope == 1
+
+
 def _competition_verdict(
     context: MarketContext,
     taxonomy: "SportTaxonomy | None",
@@ -369,10 +392,24 @@ def _competition_verdict(
     # A competition claimed by several sports in Kalshi's own taxonomy cannot be
     # resolved by anyone -- not even by our direct rules, which would otherwise
     # quietly disagree with the exchange's catalogue.
+    #
+    # EXCEPT when every extra claimant provably holds none of our four. The live
+    # catalogue files "Pro Baseball" under Baseball AND under Hockey, and
+    # `possible_sports("hockey")` is the EMPTY SET -- not None. This module
+    # already draws that distinction: empty means "positively none of ours",
+    # None means "we cannot say". A claimant that positively cannot contain any
+    # of our leagues contributes no disagreement about WHICH of our leagues this
+    # is, so refusing on its account refuses on nothing at all.
+    #
+    # Deliberately narrow. Two IN-SCOPE claimants still refuse, because Baseball
+    # and Football really could mean different leagues. An UNKNOWN claimant
+    # still refuses, because "we cannot say" is not "none of ours", and reading
+    # it as such is precisely the substitution this gate exists to prevent.
     if taxonomy is not None and taxonomy.is_ambiguous_competition(competition):
-        return Verdict(EvidenceLevel.L2_SPORT_TAXONOMY, None,
-                       "competition is claimed by more than one sport",
-                       UnresolvedReason.COMPETITION_AMBIGUOUS)
+        if not _only_one_claimant_could_hold_our_sports(taxonomy, competition):
+            return Verdict(EvidenceLevel.L2_SPORT_TAXONOMY, None,
+                           "competition is claimed by more than one sport",
+                           UnresolvedReason.COMPETITION_AMBIGUOUS)
 
     direct = sport_from_competition(competition)
     if direct is not None:
