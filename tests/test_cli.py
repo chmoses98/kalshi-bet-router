@@ -373,6 +373,7 @@ def _subcommand_argvs(tmp_path):
     required = {
         "audit": [],
         "deliver": ["--out-dir", str(tmp_path / "payloads")],
+        "series-probe": [],
     }
     return required
 
