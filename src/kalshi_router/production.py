@@ -1,0 +1,257 @@
+"""The production wager: what gets delivered, and every gate it must pass.
+
+Phases 3-5. This module answers three questions the research phases deliberately
+left open, and answers them in a way that fails closed on each.
+
+**What is one wager?** The submitted ORDER, not the fill and not the position
+episode. A fill is an execution detail -- one order can produce many, at
+several prices -- and an episode is an exposure lifecycle that can span several
+decisions. The order is the decision boundary: one thing the owner submitted.
+Two order ids are two submissions, and they are never merged on a time
+threshold, because "within thirty seconds" is a guess about intent wearing the
+costume of a rule.
+
+**Which wager is this?** A deterministic opaque source key derived only from
+immutable exchange evidence. No clock, no run id, no random value, no position
+in a batch -- anything that varies between runs would give the same wager two
+identities and duplicate it.
+
+**When is an order safe to import?** Only when no further fill can change it.
+Importing a half-filled order corrupts its contract count, its VWAP and its
+fee total, and the correction is worse than the delay.
+
+Nothing here writes anywhere. Delivery is :mod:`kalshi_router.destination`.
+"""
+
+from __future__ import annotations
+
+import hashlib
+from dataclasses import dataclass
+from decimal import Decimal
+from enum import Enum
+
+from .accounting.execution import OrderExecution
+from .timeaxis import parse_rfc3339_seconds
+
+# --------------------------------------------------------------- source identity
+
+#: Version prefix on every source key. Bumping it deliberately re-identifies
+#: every wager, which is a migration and must never happen by accident -- so it
+#: is a literal in source control rather than anything derived.
+SOURCE_KEY_VERSION = "kalshi:v1"
+
+#: Domain separation for the digest. Without it, a digest computed here could
+#: collide with one computed elsewhere over the same fields for another purpose.
+_DIGEST_DOMAIN = "kalshi-bet-router/source-key/v1"
+
+
+def production_source_key(
+    subaccount_number: int | None, ticker: str, order_id: str
+) -> str:
+    """A stable opaque identity for one submitted order.
+
+    Three fields, all immutable exchange evidence:
+
+    * the **subaccount**, because two subaccounts holding the same market are
+      two independent positions and must never share an identity;
+    * the **market ticker**, so an order id that somehow repeated across markets
+      could not collapse two wagers into one;
+    * the **order id**, which is what actually distinguishes one submission.
+
+    The result is opaque on purpose. The downstream ledger is public and does
+    not need Kalshi's internal order id to identify a row -- it needs a value
+    that is the same every time this order is seen and different for every other
+    order. A digest is both, and discloses neither.
+
+    Deliberately absent: the current time, the workflow run id, a random value,
+    and the wager's position in a batch. Each of those would give the same order
+    a new identity on the next run, and the next run would import it again.
+    """
+    if not ticker or not order_id:
+        raise ValueError("a source key needs both a market and an order")
+    account = "default" if subaccount_number is None else str(subaccount_number)
+    # LENGTH-PREFIXED, not separator-joined. A separator is only unambiguous
+    # while no component can contain it, and "a ticker will never contain this
+    # byte" is an assumption rather than a guarantee -- the first draft used
+    # \x1f and a test forged a collision between ("A", "B\x1fC") and
+    # ("A\x1fB", "C") immediately. Prefixing each field with its own byte
+    # length makes the encoding injective for every possible input.
+    material = "".join(
+        f"{len(field.encode('utf-8'))}:{field}"
+        for field in (_DIGEST_DOMAIN, account, ticker, order_id)
+    )
+    digest = hashlib.sha256(material.encode("utf-8")).hexdigest()
+    return f"{SOURCE_KEY_VERSION}:{digest}"
+
+
+# ------------------------------------------------------------ production cutover
+
+#: The moment production recording begins, as a fixed instant.
+#:
+#: Everything at or before this is HISTORY: validation material, never
+#: automatically imported, because the downstream ledgers already contain
+#: manually entered wagers and a blind backfill would duplicate them.
+#:
+#: This is a literal, not a derived value, and that is the whole point. A
+#: cutover of "the last successful run" moves every time a run fails, silently
+#: widening or narrowing what gets imported; a cutover of "24 hours ago" moves
+#: continuously. Either would make the set of imported wagers depend on when the
+#: system happened to run rather than on what the owner actually did.
+PRODUCTION_CUTOVER_ISO = "2026-09-15T00:00:00Z"
+
+
+def production_cutover_seconds() -> Decimal:
+    """The cutover on the shared epoch-second axis."""
+    parsed = parse_rfc3339_seconds(PRODUCTION_CUTOVER_ISO)
+    if parsed is None:  # pragma: no cover - the constant is checked by a test
+        raise ValueError("PRODUCTION_CUTOVER_ISO is not a readable timestamp")
+    return parsed
+
+
+def is_after_cutover(order: OrderExecution) -> bool:
+    """Whether this order was SUBMITTED after production began.
+
+    Measured on the order's **first** execution, not its last. The first fill is
+    when the decision met the market; a late fill on an old order does not make
+    it a new wager, and keying on the last one would let a pre-cutover order
+    drift across the line and be imported as though it were new.
+    """
+    return order.first_execution_time > production_cutover_seconds()
+
+
+# -------------------------------------------------------------- order finality
+
+class OrderFinality(str, Enum):
+    """Whether an order can still change.
+
+    An order that can still receive a fill has a provisional contract count, a
+    provisional VWAP and a provisional fee total. Importing one means either
+    publishing a wrong number or teaching the destination to accept corrections
+    to canonical rows -- and the second is a far larger commitment than waiting.
+    """
+
+    #: The market is no longer open, so no further fill is possible. This is the
+    #: exchange saying so, not an inference.
+    FINAL_MARKET_CLOSED = "final_market_closed"
+    #: The market is still open, but this order's last fill is older than the
+    #: stabilization window and the window is supported by measured behaviour.
+    FINAL_STABLE = "final_stable"
+    #: A fill landed recently enough that another could still follow.
+    PENDING_RECENT_FILL = "pending_recent_fill"
+    #: Market status could not be established and the window does not apply.
+    #: Fail closed: unknown finality is never final.
+    UNKNOWN = "unknown"
+
+
+#: Market statuses in which no further fill is possible.
+CLOSED_MARKET_STATUSES = frozenset(
+    {"closed", "settled", "finalized", "determined", "expired"}
+)
+
+#: How long an order must go without a new fill before an OPEN market's order is
+#: treated as complete.
+#:
+#: This number is not a guess: :mod:`kalshi_router.finality` measures the
+#: observed first-to-last fill span of every order in the account's history, and
+#: the audit reports the distribution. The window is set far above the observed
+#: maximum, so a "stable" verdict describes behaviour this account has actually
+#: exhibited rather than behaviour that seems plausible.
+STABILIZATION_SECONDS = Decimal(900)  # 15 minutes
+
+
+def assess_finality(
+    order: OrderExecution,
+    now: Decimal,
+    market_status: str | None,
+    allow_stabilization: bool = False,
+) -> OrderFinality:
+    """Decide whether this order is safe to import.
+
+    ``market_status`` comes from ``GET /markets/{ticker}``, which is read-only
+    and already on the client's allowlist. Note what is NOT used: Kalshi's order
+    endpoint. ``GET /portfolio/orders/{id}`` would answer this directly, but that
+    path is the same one that creates and cancels orders, and this project's
+    allowlist refuses the whole prefix. A test pins that refusal. Answering the
+    question from market status and fill timing keeps the trading surface
+    unreachable by construction rather than by care.
+
+    ``allow_stabilization`` is off by default, so the only finality granted
+    without configuration is the authoritative one.
+    """
+    if market_status is not None:
+        if market_status.strip().lower() in CLOSED_MARKET_STATUSES:
+            return OrderFinality.FINAL_MARKET_CLOSED
+
+    if not allow_stabilization:
+        return OrderFinality.UNKNOWN
+
+    if now - order.last_execution_time >= STABILIZATION_SECONDS:
+        return OrderFinality.FINAL_STABLE
+    return OrderFinality.PENDING_RECENT_FILL
+
+
+#: The finality verdicts that permit an import.
+FINAL_VERDICTS = frozenset(
+    {OrderFinality.FINAL_MARKET_CLOSED, OrderFinality.FINAL_STABLE}
+)
+
+
+# ------------------------------------------------------------- production gates
+
+class ProductionRefusal(str, Enum):
+    """Why an order was not auto-imported.
+
+    Every value names a gate that did not pass. A refusal is the normal,
+    expected outcome for most orders -- historical ones especially -- and it is
+    never an error. What it must never be is silent.
+    """
+
+    #: Submitted at or before the cutover. History is validation material, not
+    #: import material: the destination ledgers already hold manually entered
+    #: wagers, and a blind backfill would duplicate them.
+    BEFORE_CUTOVER = "before_cutover"
+    #: The order could still receive another fill, so its contract count, VWAP
+    #: and fee total are all provisional.
+    ORDER_NOT_FINAL = "order_not_final"
+    #: A fill in this order carried no price, so there is no VWAP to state.
+    NO_EXECUTION_PRICE = "no_execution_price"
+    #: A fill in this order carried no fee, so the total would be a floor rather
+    #: than a total. Never reconstructed from the fee schedule.
+    FEES_INCOMPLETE = "fees_incomplete"
+    #: The market was never classified -- outside a bounded run's sweep.
+    MARKET_NOT_CLASSIFIED = "market_not_classified"
+    #: Classification ran and could not name the sport authoritatively.
+    SPORT_UNRESOLVED = "sport_unresolved"
+    #: The sport is known and its repository cannot accept a canonical wager.
+    NO_DESTINATION_IMPORTER = "no_destination_importer"
+    #: The destination requires a contest date this evidence cannot establish.
+    GAME_DATE_NOT_ESTABLISHED = "game_date_not_established"
+    #: A sell/reduction, which is not an original wager and has no agreed
+    #: downstream representation yet.
+    REDUCTION_NOT_REPRESENTABLE = "reduction_not_representable"
+
+
+@dataclass(frozen=True)
+class ProductionWager:
+    """One submitted order, ready for delivery.
+
+    SENSITIVE: carries a ticker, a quantity, a price and a fee. Never rendered;
+    only counted. What reaches the destination is the row, and what reaches a
+    public log is a count.
+    """
+
+    source_key: str
+    market_ticker: str
+    sport: str
+    game_date: str
+    side: str
+    contracts: Decimal
+    #: Quantity-weighted across every fill of this order. Never an arithmetic
+    #: mean: an unevenly filled order's mean price is not its cost.
+    vwap_price: Decimal
+    total_fees: Decimal
+    stake: Decimal
+    first_execution_time: Decimal
+    last_execution_time: Decimal
+    fill_count: int
+    finality: OrderFinality

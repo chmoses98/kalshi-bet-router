@@ -25,6 +25,7 @@ from .classify import (
 from .client import KalshiReadOnlyClient, WalkStats
 from .coverage import SettlementCoverage, build_settlement_coverage
 from .errors import HttpStatusError, KalshiRouterError, SchemaError
+from .finality import FinalityEvidence, measure_finality
 from .history import HistoryEvidence
 from .metadata import MetadataResolver
 from .milestones import MilestoneIndex, build_milestone_index
@@ -97,6 +98,9 @@ class AuditResult:
     )
     #: What a router WOULD emit. Built in memory, sent nowhere.
     wagers: WagerDiagnostics = field(default_factory=WagerDiagnostics)
+    #: How long real orders take to finish filling -- what sets the
+    #: stabilization window rather than an intuition about it.
+    finality: FinalityEvidence = field(default_factory=FinalityEvidence)
     details: tuple[SensitiveDetail, ...] = ()
     _classifications: dict[str, Classification] = field(default_factory=dict, repr=False)
 
@@ -424,9 +428,16 @@ def run_audit(
             replay.episodes, classifications, contexts
         )
 
+    finality_evidence = (
+        measure_finality(replay.orders.values())
+        if replay is not None
+        else FinalityEvidence()
+    )
+
     return AuditResult(
         report=report,
         wagers=wager_diagnostics,
+        finality=finality_evidence,
         accounting=accounting,
         coverage=coverage,
         history=history_evidence,
