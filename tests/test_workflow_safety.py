@@ -234,6 +234,9 @@ def test_only_credentialed_workflows_name_the_downstream_secret():
         # Phase 12 recovery. Added here deliberately -- this test failed the
         # moment the workflow was written, which is the point of the allowlist.
         "recover-wagers.yml",
+        # The one-time historical catch-up. Added deliberately for the same
+        # reason, and it failed here first too.
+        "backfill-deliver.yml",
     }
     assert set(workflows_referencing(DOWNSTREAM_SECRET)) <= allowed
 
@@ -1454,3 +1457,172 @@ def test_the_lease_still_refuses_when_someone_else_moved_the_branch(tmp_path):
         "the lease accepted a push over a branch someone else had moved"
     )
     assert "stale info" in result.stderr, result.stderr
+
+
+# ============ The one-time historical catch-up ==============================
+#
+# `backfill-inspect.yml` answers "what did we miss" and holds no write
+# credential. This is the workflow that acts on that answer, and the properties
+# below are what keep a catch-up from becoming a second production path.
+
+BACKFILL_DELIVER = ROOT / ".github/workflows/backfill-deliver.yml"
+
+
+@pytest.fixture(scope="module")
+def backfill() -> dict:
+    return load(BACKFILL_DELIVER)
+
+
+@pytest.fixture(scope="module")
+def backfill_text() -> str:
+    return strip_comments(BACKFILL_DELIVER.read_text())
+
+
+def test_the_catch_up_is_never_scheduled(backfill):
+    """A one-time catch-up on a timer is not one-time.
+
+    The inspection workflow is safe to re-run; this one writes history into
+    three public ledgers.
+    """
+    assert set(triggers(backfill)) == {"workflow_dispatch"}
+
+
+def test_the_catch_up_defaults_to_a_dry_run(backfill):
+    default = triggers(backfill)["workflow_dispatch"]["inputs"]["dry_run"]["default"]
+    assert default in (True, "true"), f"dry_run defaults to {default!r}"
+
+
+def test_pushing_requires_a_typed_acknowledgement(backfill_text):
+    """Not a checkbox. The phrase has to be typed, because the act it authorises
+    -- writing the owner's betting history into three public repositories -- is
+    not one this workflow can undo."""
+    assert "I have decided to import pre-cutover history" in backfill_text
+    assert "not reversible" in backfill_text
+
+
+def test_the_acknowledgement_is_only_required_for_a_real_push(backfill_text):
+    """A dry run must stay easy, or nobody will do one before the real thing."""
+    assert '[ "${DRY_RUN}" = "false" ]' in backfill_text
+
+
+def test_an_unreadable_dry_run_value_is_refused_by_the_catch_up(backfill_text):
+    """Empty must never fall through a `!= "true"` test and read as 'push'."""
+    assert "dry_run must be exactly" in backfill_text
+
+
+def test_the_cfb_season_must_be_a_year_because_it_names_a_file(backfill_text):
+    """`wagers/<season>.jsonl`. A non-numeric value would put real wagers in a
+    file no report reads."""
+    assert "[0-9][0-9][0-9][0-9]" in backfill_text
+    assert "four-digit year" in backfill_text
+
+
+def test_the_catch_up_refuses_a_ref_other_than_main(backfill_text):
+    assert "refs/heads/main" in backfill_text
+    assert "exit 1" in backfill_text
+
+
+def test_the_catch_up_holds_no_write_permission_on_this_repository(backfill):
+    assert backfill["permissions"] == {"contents": "read"}
+
+
+def test_the_catch_up_is_never_cancelled_in_flight(backfill):
+    """Cancellation between a destination's commit and this job's receipt would
+    leave canonical wagers written with no record here that they were."""
+    assert backfill["concurrency"]["cancel-in-progress"] is False
+
+
+def test_the_catch_up_uploads_no_artifact(backfill_text):
+    assert "upload-artifact" not in backfill_text
+
+
+def test_the_catch_up_never_puts_the_credential_in_a_url_or_argv(backfill_text):
+    """The token reaches git through a helper that reads it from the
+    environment at push time."""
+    assert "x-access-token:${DOWNSTREAM_REPO_TOKEN}" not in backfill_text
+    assert "credential.helper" in backfill_text
+    for clone in re.findall(r"git clone[^\n]*", backfill_text):
+        assert "TOKEN" not in clone, clone
+
+
+def test_the_catch_up_reads_every_destination_it_writes_to(backfill_text):
+    """A destination whose existing rows were never read must not be written
+    to: that is precisely how a backfill duplicates a ledger. Every sport the
+    delivery loop knows how to push to must also appear as a --ledger."""
+    written = set(re.findall(r"^\s*(MLB|NFL|CFB)\) repo=", backfill_text, re.M))
+    read = set(re.findall(r'--ledger "(MLB|NFL|CFB)=', backfill_text))
+    assert written, "the delivery loop routes nothing"
+    assert written == read, f"written {sorted(written)} but read {sorted(read)}"
+
+
+def test_the_catch_up_runs_each_destinations_own_importer(backfill_text):
+    """Never a hand-written ledger edit. Bypassing the importer would bypass
+    its duplicate detection and its validation, which are the properties that
+    make a re-run safe."""
+    for importer in ("scripts/edgelab/import_bet_batch.py",
+                     "scripts/handicap/import_routed_wagers.py",
+                     "scripts/import_routed_wagers.py"):
+        assert importer in backfill_text
+
+
+def test_the_catch_up_never_pushes_to_a_destinations_own_branch(backfill_text):
+    """The router proposes; the owner merges. This matters more here than in
+    production, because two of the three destinations keep their ledger on a
+    data branch that a bad push would corrupt directly."""
+    joined = backfill_text.replace("\\\n", " ")
+    pushes = [line for line in joined.splitlines() if "git" in line and " push" in line]
+    assert pushes, "the catch-up never pushes"
+    for line in pushes:
+        assert 'HEAD:refs/heads/${branch}' in line, line
+        assert "--force " not in line, "force-with-lease, never bare force"
+
+    assignments = [line.strip() for line in joined.splitlines() if line.strip().startswith("branch=")]
+    assert assignments, "the catch-up sets no branch"
+    for line in assignments:
+        assert line.startswith('branch="kalshi-router/'), line
+        for unstable in ("$RANDOM", "date +%s", "GITHUB_RUN_ID", "rev-parse", "$(git"):
+            assert unstable not in line, f"branch name depends on {unstable}: {line}"
+
+
+def test_a_catch_up_that_cannot_open_a_pull_request_is_a_FAILURE(backfill_text):
+    assert "/pulls" in backfill_text
+    assert "are NOT recorded" in backfill_text
+    assert "422)" in backfill_text
+
+
+def test_one_destinations_failure_does_not_roll_back_another(backfill_text):
+    assert "failures=$((failures + 1))" in backfill_text
+    assert "continue" in backfill_text
+
+
+def test_a_sport_with_nowhere_to_go_is_a_failure_not_a_silent_skip(backfill_text):
+    """A wager this router reconstructed and then dropped is the one outcome
+    that looks like success and is not."""
+    assert "has no configured destination repository" in backfill_text
+
+
+def test_the_catch_up_never_prints_the_payload(backfill_text):
+    """Only counts reach a public Actions log, and the payload carries market,
+    side, contracts, price, stake and fees for every wager in the window."""
+    assert "--show-sensitive-details" not in backfill_text
+
+    mentions = [line.strip() for line in backfill_text.splitlines() if "${payload}" in line]
+    assert mentions, "the payload is never used; this test would prove nothing"
+    for line in mentions:
+        assert not line.startswith(("echo", "cat", "printf", "tee")), line
+
+
+def test_the_catch_up_cannot_widen_its_own_window(backfill_text):
+    """The end is PRODUCTION_CUTOVER_ISO structurally, inside BackfillWindow.
+
+    Checked as "the only window argument passed is --since" rather than as
+    "no input is named end", because the second would pass just as happily
+    against a workflow that hard-coded a later cutover on the command line.
+    """
+    joined = backfill_text.replace("\\\n", " ")
+    invocations = [line for line in joined.splitlines() if "kalshi_router.cli backfill" in line]
+    assert invocations, "the catch-up never runs the backfill command"
+    for line in invocations:
+        assert "--since" in line
+        for widening in ("--until", "--end", "--cutover", "--include-pre-cutover"):
+            assert widening not in line, f"{widening} would move the window's end: {line}"
