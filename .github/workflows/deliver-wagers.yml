@@ -1,0 +1,176 @@
+# Phase 9: deliver eligible wagers to their destination ledger.
+#
+# SECURITY NOTES (this repository is public):
+#   * Manual dispatch only for now, main branch only. A schedule is added after
+#     the first real delivery proves the path end to end.
+#   * This job holds BOTH credentials -- Kalshi read access to build the payload
+#     and DOWNSTREAM_REPO_TOKEN to deliver it. That is unavoidable and is why it
+#     is one job: passing a payload between jobs means an artifact, and the
+#     payload is the owner's betting activity.
+#   * The PAYLOAD IS NEVER PRINTED and never uploaded. It is written to
+#     RUNNER_TEMP, consumed by the destination's own importer, and discarded
+#     with the runner. Only counts reach this log.
+#   * The router NEVER edits a ledger file. It hands a payload to the
+#     destination's importer and commits only what that importer produced --
+#     bypassing it would bypass its duplicate detection, ticker resolution and
+#     validation, which are the properties that make a re-run safe.
+#   * The token is supplied to git through a credential helper that reads it
+#     from the environment at push time, so it never appears in a URL, in argv,
+#     or in .git/config.
+name: Deliver wagers downstream
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build and import locally, then discard without pushing"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  # Never cancel a delivery in flight: cancellation between the destination's
+  # commit and this job's receipt would leave a canonical wager written with no
+  # record here that it was.
+  group: deliver-wagers
+  cancel-in-progress: false
+
+jobs:
+  deliver:
+    name: Deliver eligible wagers
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Refuse to run credentialed code from an untrusted ref
+        run: |
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::error::This credentialed workflow may only run from refs/heads/main (got ${GITHUB_REF})."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install router
+        run: python -m pip install --disable-pip-version-check --quiet .
+
+      - name: Build the delivery payload
+        env:
+          KALSHI_API_KEY_ID: ${{ secrets.KALSHI_API_KEY_ID }}
+          KALSHI_PRIVATE_KEY: ${{ secrets.KALSHI_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/payloads"
+          # --allow-stabilization is enabled on measured evidence: every one of
+          # the 1755 orders in this account's history finished filling within a
+          # single second, against a 900-second window.
+          python -m kalshi_router.cli deliver \
+            --out-dir "${RUNNER_TEMP}/payloads" \
+            --allow-stabilization
+
+      - name: Deliver each destination
+        env:
+          DOWNSTREAM_REPO_TOKEN: ${{ secrets.DOWNSTREAM_REPO_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+
+          shopt -s nullglob
+          payloads=("${RUNNER_TEMP}"/payloads/*.json)
+          if [ ${#payloads[@]} -eq 0 ]; then
+            echo "HEALTHY NO-OP: nothing eligible for delivery."
+            exit 0
+          fi
+
+          # Per-destination, so one failing sport cannot roll back another's
+          # success. Each destination reports its own outcome.
+          failures=0
+          for payload in "${payloads[@]}"; do
+            sport="$(basename "${payload}" .json)"
+            case "${sport}" in
+              MLB) repo="chmoses98/edge-finder-api" ;;
+              *)
+                echo "::error::${sport} has no configured destination repository."
+                failures=$((failures + 1))
+                continue
+                ;;
+            esac
+
+            echo "=== ${sport} -> ${repo} ==="
+            work="${RUNNER_TEMP}/dest-${sport}"
+            rm -rf "${work}"
+            git clone --quiet --depth 1 "https://github.com/${repo}" "${work}"
+
+            # The token reaches git through a helper that reads it from the
+            # environment when a push happens. It is not in the URL, not in
+            # argv, and not written into .git/config.
+            git -C "${work}" config credential.helper \
+              '!f() { echo "username=x-access-token"; echo "password=${DOWNSTREAM_REPO_TOKEN}"; }; f'
+            git -C "${work}" config user.name "kalshi-bet-router"
+            git -C "${work}" config user.email "noreply@users.noreply.github.com"
+
+            base_sha="$(git -C "${work}" rev-parse HEAD)"
+            echo "destination main: ${base_sha}"
+
+            # The destination's OWN importer. Never a hand-written ledger edit.
+            receipts="${RUNNER_TEMP}/receipts-${sport}.json"
+            import_status=0
+            ( cd "${work}" && python scripts/edgelab/import_bet_batch.py \
+                --file "${payload}" --receipts-out "${receipts}" >/dev/null ) || import_status=$?
+
+            # Receipts carry the canonical bet id and the duplicate verdict.
+            # Counts and verdicts only -- never the stake or the ticker.
+            python - "${receipts}" <<'PYEOF'
+          import json, sys
+          rows = json.load(open(sys.argv[1]))
+          verdicts = {}
+          for row in rows:
+              verdicts[row.get("duplicateStatus")] = verdicts.get(row.get("duplicateStatus"), 0) + 1
+          print(f"  rows: {len(rows)}")
+          for verdict, count in sorted(verdicts.items(), key=lambda kv: str(kv[0])):
+              print(f"    {verdict}: {count}")
+          print(f"  canonical bet ids returned: {sum(1 for r in rows if r.get('betId'))}")
+          print(f"  failed rows: {sum(1 for r in rows if not r.get('success'))}")
+          PYEOF
+
+            if [ "${import_status}" -ne 0 ]; then
+              echo "::error::${sport}: the destination importer refused at least one row."
+              failures=$((failures + 1))
+              continue
+            fi
+
+            if [ -z "$(git -C "${work}" status --porcelain)" ]; then
+              echo "  no ledger change -- every row was already imported (no-op)."
+              continue
+            fi
+
+            if [ "${DRY_RUN}" = "true" ]; then
+              echo "  DRY RUN: ledger changed, nothing pushed."
+              git -C "${work}" --no-pager diff --stat
+              continue
+            fi
+
+            # Deterministic branch name: a retry finds the existing branch
+            # instead of opening a second pull request for the same wagers.
+            branch="kalshi-router/${sport}-$(git -C "${work}" rev-parse --short HEAD)"
+            git -C "${work}" checkout -q -b "${branch}"
+            git -C "${work}" add -A
+            git -C "${work}" commit -q -m "Import Kalshi wagers via kalshi-bet-router (${sport})"
+            git -C "${work}" push -q --set-upstream origin "${branch}"
+            echo "  pushed ${branch}"
+            echo "  destination commit: $(git -C "${work}" rev-parse HEAD)"
+          done
+
+          echo ""
+          echo "destinations that failed: ${failures}"
+          if [ "${failures}" -ne 0 ]; then
+            exit 1
+          fi

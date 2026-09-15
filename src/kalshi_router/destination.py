@@ -80,6 +80,58 @@ class DeliveryPlan:
         ])
 
 
+def write_payloads(wagers, out_dir: str) -> dict[str, int]:
+    """Write one importer payload per destination, and return counts only.
+
+    The payload is the sensitive artefact of this whole system -- it carries
+    market, side, stake, contracts, price, fees. It goes to a FILE, never to
+    stdout and never to a log, because the only place it is allowed to arrive is
+    the destination ledger the owner chose to publish.
+
+    Returns ``{sport: row count}``. That mapping is safe to print.
+    """
+    import json
+    import os
+
+    from .production import to_import_row
+
+    grouped: dict[str, list[dict]] = {}
+    for wager in wagers:
+        if wager.sport not in _sport_names():
+            raise ValueError(
+                "a wager reached delivery for a sport with no destination "
+                "importer; it should have been refused earlier"
+            )
+        grouped.setdefault(wager.sport, []).append(to_import_row(wager))
+
+    os.makedirs(out_dir, exist_ok=True)
+    counts: dict[str, int] = {}
+    for sport, rows in sorted(grouped.items()):
+        # Sorted by source key so the same set of wagers always produces a
+        # byte-identical payload: a diffable payload is what lets a human
+        # confirm that a second run really did propose nothing new.
+        rows.sort(key=lambda row: row["sourceBetKey"])
+        payload = {"importBatchId": ROUTER_IMPORT_BATCH_ID, "rows": rows}
+        path = os.path.join(out_dir, f"{sport}.json")
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+        counts[sport] = len(rows)
+    return counts
+
+
+def _sport_names() -> frozenset[str]:
+    return frozenset(sport.value for sport in DESTINATION_REPOS)
+
+
+def destination_repo_for(sport_name: str) -> str | None:
+    """The repository a sport's wagers go to, by name."""
+    for sport, repo in DESTINATION_REPOS.items():
+        if sport.value == sport_name:
+            return repo
+    return None
+
+
 def build_batch(wagers: list[ShadowWager]) -> dict[str, Any]:
     """Assemble one importer payload.
 

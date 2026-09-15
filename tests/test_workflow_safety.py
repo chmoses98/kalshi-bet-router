@@ -225,7 +225,7 @@ def test_only_credentialed_workflows_name_the_downstream_secret():
 
     Adding a delivery workflow is a deliberate act; this test makes it one.
     """
-    allowed = {"downstream-credential-probe.yml"}
+    allowed = {"downstream-credential-probe.yml", "deliver-wagers.yml"}
     assert set(workflows_referencing(DOWNSTREAM_SECRET)) <= allowed
 
 
@@ -308,3 +308,109 @@ def test_the_probe_reads_permissions_structurally_not_by_substring(probe_text):
     """
     assert "jq -r '.permissions.push" in probe_text
     assert "grep" not in probe_text
+
+
+# ================== the delivery workflow: the credentialed boundary ==========
+
+DELIVER_WORKFLOW = ROOT / ".github/workflows/deliver-wagers.yml"
+
+
+@pytest.fixture(scope="module")
+def deliver() -> dict:
+    return load(DELIVER_WORKFLOW)
+
+
+@pytest.fixture(scope="module")
+def deliver_text() -> str:
+    return strip_comments(DELIVER_WORKFLOW.read_text())
+
+
+def test_delivery_never_runs_on_a_pull_request(deliver):
+    events = triggers(deliver)
+    assert "pull_request" not in events
+    assert "pull_request_target" not in events
+
+
+def test_delivery_refuses_a_ref_other_than_main(deliver_text):
+    assert "refs/heads/main" in deliver_text
+
+
+def test_delivery_holds_no_write_permission_on_this_repository(deliver):
+    # The downstream token writes downstream. GITHUB_TOKEN stays read.
+    assert deliver["permissions"] == {"contents": "read"}
+
+
+def test_delivery_never_cancels_itself_in_flight(deliver):
+    """Cancellation between the destination's commit and this job's receipt
+    would leave a canonical wager written with no record here that it was."""
+    assert deliver["concurrency"]["cancel-in-progress"] is False
+
+
+def test_delivery_uploads_no_artifact(deliver):
+    """The payload is the owner's betting activity. An artifact publishes it."""
+    for step in steps(deliver):
+        assert "upload-artifact" not in (step.get("uses") or "")
+
+
+def test_delivery_never_puts_the_credential_in_a_url_or_argv(deliver_text):
+    assert "set -x" not in deliver_text
+    for leak in (
+        "://${DOWNSTREAM_REPO_TOKEN}",
+        "x-access-token:${DOWNSTREAM_REPO_TOKEN}",
+        "@github.com",
+        "--password",
+        "extraheader",
+    ):
+        assert leak not in deliver_text
+    # The helper reads the token from the environment when a push happens.
+    assert "credential.helper" in deliver_text
+
+
+def test_delivery_writes_the_payload_outside_the_repository(deliver_text):
+    """RUNNER_TEMP, never the workspace -- a payload in the workspace is one
+    `git add -A` away from being committed into this public repository."""
+    assert "${RUNNER_TEMP}/payloads" in deliver_text
+    assert "--out-dir" in deliver_text
+
+
+def test_delivery_never_prints_the_payload(deliver_text):
+    for leak in ("cat ${payload}", 'cat "${payload}"', "cat $payload"):
+        assert leak not in deliver_text
+
+
+def test_delivery_runs_the_destinations_own_importer(deliver_text):
+    """Bypassing it would bypass duplicate detection, ticker resolution and
+    validation -- the properties that make a re-run safe."""
+    assert "scripts/edgelab/import_bet_batch.py" in deliver_text
+    assert "--receipts-out" in deliver_text
+    # Never a hand-written ledger edit.
+    assert "bets.jsonl" not in deliver_text
+
+
+def test_delivery_defaults_to_a_dry_run(deliver):
+    """Running it with no arguments must not push anything.
+
+    (The first draft of this test asserted `x is False or True`, which is a
+    tautology and asserted nothing at all.)
+    """
+    events = triggers(deliver)
+    default = events["workflow_dispatch"]["inputs"]["dry_run"]["default"]
+    assert default in (True, "true"), f"dry_run defaults to {default!r}"
+
+
+def test_delivery_uses_a_deterministic_branch_name(deliver_text):
+    """A retry must find the existing branch rather than open a second pull
+    request for wagers that were already delivered."""
+    assert "kalshi-router/${sport}-$(git -C \"${work}\" rev-parse --short HEAD)" in deliver_text
+    for nondeterministic in ("$RANDOM", "date +%s", "${GITHUB_RUN_ID}"):
+        assert nondeterministic not in deliver_text
+
+
+def test_delivery_keeps_one_sports_failure_from_rolling_back_another(deliver_text):
+    # Per-destination loop with a failure counter, not an all-or-nothing abort.
+    assert "failures=$((failures + 1))" in deliver_text
+    assert "continue" in deliver_text
+
+
+def test_the_audit_workflow_still_never_receives_the_downstream_credential():
+    assert DOWNSTREAM_SECRET not in AUDIT_WORKFLOW.read_text()
