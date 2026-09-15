@@ -197,3 +197,135 @@ def test_the_rendered_output_names_no_ticker_key_amount_or_date():
     text = d.render()
     for token in ("SECRETORDER", "KXSECRET", "2026-09-20", "0.56", "kalshi:v1:", "$"):
         assert token not in text
+
+
+# ---------------------------------------------------------------------------
+# Phase 12: pre-cutover recovery. Off at every layer unless explicitly asked.
+# ---------------------------------------------------------------------------
+
+
+def test_include_pre_cutover_defaults_to_false_at_every_layer():
+    """A caller that has never heard of this flag must get the safe behaviour.
+
+    Discovered from the signatures rather than restated, so a new function in
+    the chain that defaults it to True fails here.
+    """
+    import inspect
+
+    from kalshi_router import audit, production
+
+    for func in (
+        production.evaluate_order,
+        production.evaluate_production,
+        audit.run_audit,
+        audit._evaluate_production,
+    ):
+        parameter = inspect.signature(func).parameters["include_pre_cutover"]
+        assert parameter.default is False, f"{func.__name__} defaults to {parameter.default!r}"
+
+
+def test_every_unresolved_reason_has_a_counter():
+    """A reason with no counter would silently vanish into 'reason unavailable'.
+
+    Enumerated from the classifier's own enum, so a reason added there fails
+    here rather than being quietly uncounted.
+    """
+    from kalshi_router.classify import UnresolvedReason
+    from kalshi_router.production import UNRESOLVED_COUNTERS, ProductionDiagnostics
+
+    diagnostics = ProductionDiagnostics()
+    for reason in UnresolvedReason:
+        assert reason.value in UNRESOLVED_COUNTERS, reason
+        assert hasattr(diagnostics, UNRESOLVED_COUNTERS[reason.value])
+
+
+def test_the_unresolved_counters_are_all_distinct():
+    """Two reasons sharing a counter would double-count one and hide the other."""
+    from kalshi_router.production import UNRESOLVED_COUNTERS
+
+    assert len(set(UNRESOLVED_COUNTERS.values())) == len(UNRESOLVED_COUNTERS)
+
+
+def test_the_diagnostics_stay_structurally_counts_only():
+    """Every field an int, including the new ones. Checked, not assumed."""
+    from kalshi_router.production import ProductionDiagnostics
+
+    for name, value in ProductionDiagnostics().as_dict().items():
+        assert isinstance(value, int), f"{name} is {type(value).__name__}"
+
+
+def test_a_pre_cutover_order_is_refused_by_default():
+    wager, refusal, finality = evaluate_order(
+        order(when=BEFORE), "MLB", "2026-09-01", "settled", NOW, MLB
+    )
+    assert wager is None
+    assert refusal is ProductionRefusal.BEFORE_CUTOVER
+    # No finality verdict: the gate ran before finality was even assessed.
+    assert finality is None
+
+
+def test_a_recovery_run_admits_a_pre_cutover_order_and_says_it_did():
+    wagers, diagnostics = evaluate_production(
+        [order(when=BEFORE)],
+        {"KXMLBGAME-26SEP20SFLAD-SF": "MLB"},
+        {"KXMLBGAME-26SEP20SFLAD-SF": "2026-09-01"},
+        {"KXMLBGAME-26SEP20SFLAD-SF": "settled"},
+        NOW,
+        MLB,
+        include_pre_cutover=True,
+    )
+
+    assert len(wagers) == 1
+    assert diagnostics.eligible == 1
+    assert diagnostics.refused_before_cutover == 0
+    # The report must not let history pass as new activity.
+    assert diagnostics.pre_cutover_admitted == 1
+
+
+def test_a_normal_run_never_admits_pre_cutover_history():
+    _wagers, diagnostics = evaluate_production(
+        [order(when=BEFORE)],
+        {"KXMLBGAME-26SEP20SFLAD-SF": "MLB"},
+        {"KXMLBGAME-26SEP20SFLAD-SF": "2026-09-01"},
+        {"KXMLBGAME-26SEP20SFLAD-SF": "settled"},
+        NOW,
+        MLB,
+    )
+
+    assert diagnostics.pre_cutover_admitted == 0
+    assert diagnostics.refused_before_cutover == 1
+    assert diagnostics.eligible == 0
+
+
+def test_a_recovery_run_still_applies_every_other_gate():
+    """Admitting history is not a bypass. An unresolved sport still refuses."""
+    _wagers, diagnostics = evaluate_production(
+        [order(when=BEFORE)],
+        {"KXMLBGAME-26SEP20SFLAD-SF": "UNRESOLVED"},
+        {"KXMLBGAME-26SEP20SFLAD-SF": "2026-09-01"},
+        {"KXMLBGAME-26SEP20SFLAD-SF": "settled"},
+        NOW,
+        MLB,
+        include_pre_cutover=True,
+    )
+
+    assert diagnostics.eligible == 0
+    assert diagnostics.refused_sport_unresolved == 1
+    assert diagnostics.pre_cutover_admitted == 1
+
+
+def test_the_source_key_of_a_recovered_order_is_unchanged_by_the_flag():
+    """Recovery must land on the SAME canonical bet id as a normal delivery.
+
+    If the key moved, a recovery run would duplicate every wager it re-sent
+    instead of being answered DUPLICATE_NOOP.
+    """
+    normal, _r, _f = evaluate_order(
+        order(when=AFTER), "MLB", "2026-09-20", "settled", NOW, MLB
+    )
+    recovered, _r2, _f2 = evaluate_order(
+        order(when=AFTER), "MLB", "2026-09-20", "settled", NOW, MLB,
+        include_pre_cutover=True,
+    )
+    assert normal is not None and recovered is not None
+    assert normal.source_key == recovered.source_key

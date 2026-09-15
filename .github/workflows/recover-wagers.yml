@@ -1,38 +1,27 @@
-# Phase 9: deliver eligible wagers to their destination ledger.
+# Phase 12: recovery. Re-deliver after an outage, and -- only if the owner says
+# so in words -- import pre-cutover history.
 #
-# SECURITY NOTES (this repository is public):
-#   * Scheduled and manually dispatchable, main branch only.
-#   * This job holds BOTH credentials -- Kalshi read access to build the payload
-#     and DOWNSTREAM_REPO_TOKEN to deliver it. That is unavoidable and is why it
-#     is one job: passing a payload between jobs means an artifact, and the
-#     payload is the owner's betting activity.
-#   * The PAYLOAD IS NEVER PRINTED and never uploaded. It is written to
-#     RUNNER_TEMP, consumed by the destination's own importer, and discarded
-#     with the runner. Only counts reach this log.
-#   * The router NEVER edits a ledger file. It hands a payload to the
-#     destination's importer and commits only what that importer produced --
-#     bypassing it would bypass its duplicate detection, ticker resolution and
-#     validation, which are the properties that make a re-run safe.
-#   * The token is supplied to git through a credential helper that reads it
-#     from the environment at push time, so it never appears in a URL, in argv,
-#     or in .git/config.
-name: Deliver wagers downstream
+# WHY THIS IS A SEPARATE WORKFLOW FROM THE SCHEDULED ONE
+#   The scheduled delivery must never be able to import history. Keeping the
+#   pre-cutover input out of that workflow entirely is stronger than defaulting
+#   it off there: an input that does not exist cannot be set by a mistyped
+#   dispatch, and a test asserts the scheduled workflow does not name it.
+#
+# WHY RE-RUNNING IS SAFE
+#   The source key is derived from (subaccount, ticker, order id) alone -- no
+#   time, no run id, no batch position. So a wager already delivered lands on
+#   the same betId, and the destination's importer answers DUPLICATE_NOOP and
+#   writes nothing. Measured against the real importer, not assumed: a first
+#   import took the ledger 457 -> 458, a byte-identical re-import left it at
+#   458 with the same betId, and the same key with a changed stake was refused
+#   as CONFLICT with nothing written.
+#
+# SECURITY: identical posture to the scheduled delivery -- payload to
+# RUNNER_TEMP, never printed, never uploaded; the credential reaches git only
+# through a helper that reads it from the environment at push time.
+name: Recover wagers
 
 on:
-  # PHASE 10: THE CADENCE IS CHOSEN FROM A MEASUREMENT, NOT FROM A PREFERENCE.
-  #
-  # Run 2 of this workflow walked the account's complete order history --
-  # 1756 orders -- and finished the payload build in 5 minutes 19 seconds.
-  # So a 5-minute cadence would start each run before the previous one
-  # finished, and with cancel-in-progress: false (which is not negotiable,
-  # see below) they would queue without bound.
-  #
-  # 15 minutes gives roughly 3x headroom over the measured run. A wager is
-  # recorded within a quarter of an hour of its market closing, and the queue
-  # cannot grow. If the walk ever gets materially faster, the cadence can move
-  # down -- but it moves on a new measurement, not on an intuition.
-  schedule:
-    - cron: "*/15 * * * *"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -40,27 +29,32 @@ on:
         required: false
         type: boolean
         default: true
+      include_pre_cutover:
+        description: >-
+          RECOVERY ONLY. To import orders from BEFORE the production cutover,
+          type exactly: I have decided to import pre-cutover history
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
 
 concurrency:
-  # Never cancel a delivery in flight: cancellation between the destination's
-  # commit and this job's receipt would leave a canonical wager written with no
-  # record here that it was.
+  # Shares the delivery group: a recovery run and a scheduled delivery must
+  # never build payloads from the same account at the same time, and neither
+  # may be cancelled mid-delivery.
   group: deliver-wagers
   cancel-in-progress: false
 
 jobs:
-  deliver:
-    name: Deliver eligible wagers
+  recover:
+    name: Recover and deliver
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - name: Refuse to run credentialed code from an untrusted ref
         run: |
-          # A scheduled run is always on the default branch; this guards the
-          # dispatch path, where a ref can be chosen.
           if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
             echo "::error::This credentialed workflow may only run from refs/heads/main (got ${GITHUB_REF})."
             exit 1
@@ -77,31 +71,36 @@ jobs:
       - name: Install router
         run: python -m pip install --disable-pip-version-check --quiet .
 
-      - name: Build the delivery payload
+      - name: Build the recovery payload
         env:
           KALSHI_API_KEY_ID: ${{ secrets.KALSHI_API_KEY_ID }}
           KALSHI_PRIVATE_KEY: ${{ secrets.KALSHI_PRIVATE_KEY }}
+          INCLUDE_PRE_CUTOVER: ${{ inputs.include_pre_cutover }}
         run: |
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/payloads"
-          # --allow-stabilization is enabled on measured evidence: every one of
-          # the 1755 orders in this account's history finished filling within a
-          # single second, against a 900-second window.
-          python -m kalshi_router.cli deliver \
-            --out-dir "${RUNNER_TEMP}/payloads" \
-            --allow-stabilization
+
+          args=(--out-dir "${RUNNER_TEMP}/payloads" --allow-stabilization)
+          if [ -n "${INCLUDE_PRE_CUTOVER}" ]; then
+            # The CLI checks the phrase itself and refuses anything else, so a
+            # typo fails loudly here rather than quietly doing the normal thing.
+            echo "::warning::Pre-cutover history requested. This run may import wagers the destination already holds."
+            args+=(--include-pre-cutover "${INCLUDE_PRE_CUTOVER}")
+          else
+            echo "pre-cutover history: NOT requested (the normal case)."
+          fi
+
+          python -m kalshi_router.cli deliver "${args[@]}"
 
       - name: Deliver each destination
         env:
           DOWNSTREAM_REPO_TOKEN: ${{ secrets.DOWNSTREAM_REPO_TOKEN }}
-          # A scheduled run has no inputs, so `inputs.dry_run` is empty there.
-          # Empty must NEVER be read as "go ahead and push" by falling through a
-          # `!= "true"` test, so the scheduled value is stated explicitly here
-          # and anything unreadable is refused below.
-          DRY_RUN: ${{ github.event_name == 'schedule' && 'false' || inputs.dry_run }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
 
+          # Fail closed on an unreadable choice. An empty DRY_RUN must never be
+          # read as "go ahead and push" by falling through a != "true" test.
           case "${DRY_RUN}" in
             true|false) ;;
             *)
@@ -113,12 +112,10 @@ jobs:
           shopt -s nullglob
           payloads=("${RUNNER_TEMP}"/payloads/*.json)
           if [ ${#payloads[@]} -eq 0 ]; then
-            echo "HEALTHY NO-OP: nothing eligible for delivery."
+            echo "HEALTHY NO-OP: nothing eligible for recovery."
             exit 0
           fi
 
-          # Per-destination, so one failing sport cannot roll back another's
-          # success. Each destination reports its own outcome.
           failures=0
           for payload in "${payloads[@]}"; do
             sport="$(basename "${payload}" .json)"
@@ -136,25 +133,18 @@ jobs:
             rm -rf "${work}"
             git clone --quiet --depth 1 "https://github.com/${repo}" "${work}"
 
-            # The token reaches git through a helper that reads it from the
-            # environment when a push happens. It is not in the URL, not in
-            # argv, and not written into .git/config.
             git -C "${work}" config credential.helper \
               '!f() { echo "username=x-access-token"; echo "password=${DOWNSTREAM_REPO_TOKEN}"; }; f'
             git -C "${work}" config user.name "kalshi-bet-router"
             git -C "${work}" config user.email "noreply@users.noreply.github.com"
 
-            base_sha="$(git -C "${work}" rev-parse HEAD)"
-            echo "destination main: ${base_sha}"
-
-            # The destination's OWN importer. Never a hand-written ledger edit.
+            # The importer's stdout carries the receipts, which name markets and
+            # stakes. It goes to /dev/null; its stderr is counts only.
             receipts="${RUNNER_TEMP}/receipts-${sport}.json"
             import_status=0
             ( cd "${work}" && python scripts/edgelab/import_bet_batch.py \
                 --file "${payload}" --receipts-out "${receipts}" >/dev/null ) || import_status=$?
 
-            # Receipts carry the canonical bet id and the duplicate verdict.
-            # Counts and verdicts only -- never the stake or the ticker.
             python - "${receipts}" <<'PYEOF'
           import json, sys
           rows = json.load(open(sys.argv[1]))
@@ -185,12 +175,10 @@ jobs:
               continue
             fi
 
-            # Deterministic branch name: a retry finds the existing branch
-            # instead of opening a second pull request for the same wagers.
-            branch="kalshi-router/${sport}-$(git -C "${work}" rev-parse --short HEAD)"
+            branch="kalshi-router/recover-${sport}-$(git -C "${work}" rev-parse --short HEAD)"
             git -C "${work}" checkout -q -b "${branch}"
             git -C "${work}" add -A
-            git -C "${work}" commit -q -m "Import Kalshi wagers via kalshi-bet-router (${sport})"
+            git -C "${work}" commit -q -m "Recover Kalshi wagers via kalshi-bet-router (${sport})"
             git -C "${work}" push -q --set-upstream origin "${branch}"
             echo "  pushed ${branch}"
             echo "  destination commit: $(git -C "${work}" rev-parse HEAD)"

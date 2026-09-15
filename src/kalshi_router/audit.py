@@ -27,6 +27,7 @@ from .coverage import SettlementCoverage, build_settlement_coverage
 from .errors import HttpStatusError, KalshiRouterError, SchemaError
 from .finality import FinalityEvidence, measure_finality
 from .production import (
+    UNRESOLVED_COUNTERS,
     ProductionDiagnostics,
     evaluate_production,
     is_after_cutover,
@@ -191,6 +192,7 @@ def run_audit(
     production: bool = False,
     now: "Decimal | None" = None,
     allow_stabilization: bool = False,
+    include_pre_cutover: bool = False,
 ) -> AuditResult:
     """Run one complete Phase 0.1 audit.
 
@@ -465,7 +467,13 @@ def run_audit(
     production_wagers: list = []
     if production and replay is not None:
         production_wagers, production_diagnostics = _evaluate_production(
-            client, resolver, replay, taxonomy, now, allow_stabilization
+            client,
+            resolver,
+            replay,
+            taxonomy,
+            now,
+            allow_stabilization,
+            include_pre_cutover,
         )
 
     finality_evidence = (
@@ -667,7 +675,10 @@ def _probe_settlement_archive(
         coverage.archive_first_page_rows = len(rows)
 
 
-def _evaluate_production(client, resolver, replay, taxonomy, now, allow_stabilization=False):
+def _evaluate_production(
+    client, resolver, replay, taxonomy, now, allow_stabilization=False,
+    include_pre_cutover=False,
+):
     """Apply the production filter, resolving metadata only where it matters.
 
     Every gate but the cutover needs metadata, and the cutover needs none -- so
@@ -680,17 +691,32 @@ def _evaluate_production(client, resolver, replay, taxonomy, now, allow_stabiliz
     from .destination import DESTINATION_REPOS
     from .wager import resolve_game_date
 
-    candidates = [o for o in replay.orders.values() if is_after_cutover(o)]
+    # A recovery run has to resolve metadata for the historical orders too --
+    # they are candidates now. This is the expensive path, and it is why
+    # recovery is dispatch-only and never scheduled.
+    candidates = [
+        o
+        for o in replay.orders.values()
+        if include_pre_cutover or is_after_cutover(o)
+    ]
 
     sports: dict[str, str] = {}
     game_dates: dict[str, str] = {}
     statuses: dict[str, str] = {}
+    # WHY a market could not be classified, counted per MARKET rather than per
+    # order: two orders on one unclassifiable market are one taxonomy problem,
+    # not two, and counting them twice would overstate the gap.
+    unresolved_reasons: dict[str, int] = {}
     for ticker in sorted({o.ticker for o in candidates}):
         context = resolver.resolve(ticker)
         try:
             classification = classify_market(context, taxonomy=taxonomy)
         except KalshiRouterError:
             continue
+        if classification.sport.value == "UNRESOLVED":
+            reason = classification.unresolved_reason
+            key = reason.value if reason is not None else None
+            unresolved_reasons[key] = unresolved_reasons.get(key, 0) + 1
         sports[ticker] = classification.sport.value
         date, _source = resolve_game_date(context)
         if date:
@@ -700,7 +726,7 @@ def _evaluate_production(client, resolver, replay, taxonomy, now, allow_stabiliz
             statuses[ticker] = raw_status
 
     destinations = frozenset(sport.value for sport in DESTINATION_REPOS)
-    return evaluate_production(
+    wagers, diagnostics = evaluate_production(
         replay.orders.values(),
         sports,
         game_dates,
@@ -708,7 +734,17 @@ def _evaluate_production(client, resolver, replay, taxonomy, now, allow_stabiliz
         now if now is not None else Decimal(0),
         destinations,
         allow_stabilization,
+        include_pre_cutover,
     )
+
+    # Attached after the filter runs: the filter counts REFUSALS, which are per
+    # order, while these count MARKETS. Keeping them separate means the two
+    # numbers can legitimately differ and neither is quietly derived from the
+    # other.
+    for key, count in unresolved_reasons.items():
+        field = UNRESOLVED_COUNTERS.get(key, "unresolved_reason_unavailable")
+        setattr(diagnostics, field, getattr(diagnostics, field) + count)
+    return wagers, diagnostics
 
 
 def _classification_order(tickers: list[str], replay) -> list[str]:

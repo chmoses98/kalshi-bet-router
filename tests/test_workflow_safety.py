@@ -225,7 +225,13 @@ def test_only_credentialed_workflows_name_the_downstream_secret():
 
     Adding a delivery workflow is a deliberate act; this test makes it one.
     """
-    allowed = {"downstream-credential-probe.yml", "deliver-wagers.yml"}
+    allowed = {
+        "downstream-credential-probe.yml",
+        "deliver-wagers.yml",
+        # Phase 12 recovery. Added here deliberately -- this test failed the
+        # moment the workflow was written, which is the point of the allowlist.
+        "recover-wagers.yml",
+    }
     assert set(workflows_referencing(DOWNSTREAM_SECRET)) <= allowed
 
 
@@ -514,3 +520,129 @@ def test_no_kalshi_workflow_uploads_an_artifact(path):
 def test_every_kalshi_workflow_refuses_to_run_off_main(path):
     """A credentialed workflow must not be runnable from an arbitrary ref."""
     assert "refs/heads/main" in path.read_text()
+
+
+# ============ Phase 10: the schedule, and Phase 12: recovery =================
+
+RECOVER_WORKFLOW = ROOT / ".github/workflows/recover-wagers.yml"
+
+
+@pytest.fixture(scope="module")
+def recover() -> dict:
+    return load(RECOVER_WORKFLOW)
+
+
+@pytest.fixture(scope="module")
+def recover_text() -> str:
+    return strip_comments(RECOVER_WORKFLOW.read_text())
+
+
+# ---- the cadence -----------------------------------------------------------
+
+
+def test_the_delivery_runs_on_a_schedule_within_the_five_to_fifteen_minute_band(deliver):
+    crons = [entry["cron"] for entry in triggers(deliver)["schedule"]]
+    assert crons == ["*/15 * * * *"], crons
+
+
+def test_the_cadence_leaves_headroom_over_the_measured_run(deliver):
+    """Run 2 built the payload in 5m19s over 1756 orders.
+
+    A cadence at or under that would start each run before the previous one
+    finished, and with cancel-in-progress: false they would queue without
+    bound. This asserts the relationship, so a future cadence change has to
+    confront the measurement rather than step over it.
+    """
+    MEASURED_PAYLOAD_BUILD_SECONDS = 319
+    cron = triggers(deliver)["schedule"][0]["cron"]
+    minutes = int(cron.split()[0].removeprefix("*/"))
+    assert minutes * 60 >= 2 * MEASURED_PAYLOAD_BUILD_SECONDS
+
+
+def test_the_delivery_is_still_dispatchable_by_hand(deliver):
+    assert "workflow_dispatch" in triggers(deliver)
+
+
+def test_a_delivery_in_flight_is_never_cancelled(deliver):
+    """Cancellation between the destination's commit and this job's receipt
+    would leave a canonical wager written with no record here that it was."""
+    assert deliver["concurrency"]["cancel-in-progress"] is False
+
+
+def test_recovery_and_delivery_share_a_concurrency_group(deliver, recover):
+    """Two runs building payloads from one account at once is not a thing that
+    should be possible."""
+    assert recover["concurrency"]["group"] == deliver["concurrency"]["group"]
+    assert recover["concurrency"]["cancel-in-progress"] is False
+
+
+# ---- an empty dry-run choice must never mean "push" ------------------------
+
+
+def test_a_scheduled_run_states_its_dry_run_value_explicitly(deliver_text):
+    """`inputs.dry_run` is EMPTY on a schedule. Relying on `!= "true"` to mean
+    "deliver" would make the live/dry choice depend on an absent value."""
+    assert "github.event_name == 'schedule'" in deliver_text
+
+
+@pytest.mark.parametrize("text_fixture", ["deliver_text", "recover_text"])
+def test_an_unreadable_dry_run_value_is_refused(text_fixture, request):
+    text = request.getfixturevalue(text_fixture)
+    assert "DRY_RUN must be exactly" in text
+    assert "true|false)" in text
+
+
+# ---- recovery -------------------------------------------------------------
+
+
+def test_recovery_is_never_scheduled(recover):
+    """History must not be importable by a clock."""
+    assert set(triggers(recover)) == {"workflow_dispatch"}
+
+
+def test_recovery_defaults_to_a_dry_run(recover):
+    default = triggers(recover)["workflow_dispatch"]["inputs"]["dry_run"]["default"]
+    assert default in (True, "true"), f"dry_run defaults to {default!r}"
+
+
+def test_pre_cutover_defaults_to_off_and_is_a_phrase_not_a_checkbox(recover):
+    """A checkbox is one stray click. A phrase has to be typed."""
+    field = triggers(recover)["workflow_dispatch"]["inputs"]["include_pre_cutover"]
+    assert field["default"] == ""
+    assert field["type"] == "string"
+
+
+def test_the_scheduled_delivery_cannot_import_pre_cutover_history(deliver_text):
+    """Not merely defaulted off there -- ABSENT. An input that does not exist
+    cannot be set by a mistyped dispatch."""
+    assert "include_pre_cutover" not in deliver_text
+    assert "include-pre-cutover" not in deliver_text
+
+
+def test_recovery_refuses_a_ref_other_than_main(recover_text):
+    assert "refs/heads/main" in recover_text
+
+
+def test_recovery_holds_read_only_repository_permissions(recover):
+    assert recover["permissions"] == {"contents": "read"}
+
+
+def test_recovery_never_puts_the_credential_in_a_url_or_argv(recover_text):
+    for pattern in ("://${DOWNSTREAM_REPO_TOKEN}", "x-access-token:${DOWNSTREAM_REPO_TOKEN}",
+                    "@github.com", "--password", "extraheader"):
+        assert pattern not in recover_text
+    assert "credential.helper" in recover_text
+
+
+def test_recovery_sends_the_importers_receipts_to_dev_null(recover_text):
+    """The receipts JSON carries marketTicker, stake and entryPrice on STDOUT.
+
+    Measured against the real importer: stdout is the receipts, stderr is the
+    one-line count. Only the count may reach a public log.
+    """
+    assert "--receipts-out" in recover_text
+    assert ">/dev/null" in recover_text
+
+
+def test_recovery_uploads_no_artifact(recover_text):
+    assert "upload-artifact" not in recover_text
