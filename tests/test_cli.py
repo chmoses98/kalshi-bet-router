@@ -25,9 +25,13 @@ def local_env(monkeypatch, fake_private_key_pem):
     monkeypatch.setenv("KALSHI_PRIVATE_KEY", fake_private_key_pem)
 
 
-def install_fake_api(monkeypatch, pages, metadata=None):
+def install_fake_api(monkeypatch, pages, metadata=None, taxonomy=None):
     """Replace the client's transport so no network call is ever made."""
-    handler = paged_fills_handler(pages, metadata if metadata is not None else build_metadata())
+    handler = paged_fills_handler(
+        pages,
+        metadata if metadata is not None else build_metadata(),
+        taxonomy=taxonomy,
+    )
 
     def factory(signer, config):
         return KalshiReadOnlyClient(
@@ -675,3 +679,33 @@ def test_the_backfill_report_does_not_describe_its_window_as_post_cutover(monkey
 
     assert code == cli.EXIT_OK, err
     assert "post-cutover markets were unresolved" not in out, out
+
+
+def test_the_series_probe_names_the_collisions_it_counts(monkeypatch, local_env):
+    """The probe's counts and its names must both reach the log.
+
+    Removing the naming call left every other CLI test passing -- the same
+    untested-wiring shape as the `deliver` prologue crash and the window count
+    that printed zero. The measurement being correct is not the property that
+    matters here; the property is that its answer is READABLE by the person who
+    has to act on it.
+    """
+    from .synthetic import make_taxonomy
+
+    install_fake_api(
+        monkeypatch,
+        [[]],
+        taxonomy=make_taxonomy({
+            "Baseball": ["Pro Baseball"],
+            "Football": ["Pro Baseball"],
+        }),
+    )
+
+    code, out, err = run(["series-probe"])
+
+    assert code == cli.EXIT_OK, err
+    # the count...
+    assert "collisions: 1" in out, out
+    # ...and which one it is.
+    assert "competition 'pro baseball'" in out, out
+    assert "claimed by: baseball, football" in out, out

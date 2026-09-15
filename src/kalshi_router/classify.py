@@ -719,6 +719,86 @@ class CollisionStructure:
         ])
 
 
+@dataclass(frozen=True)
+class CollisionDetail:
+    """One collision, named -- for the human-readable probe only.
+
+    KEPT OUT OF ``CollisionStructure`` ON PURPOSE. That object is asserted to be
+    structurally counts-only, and its ``as_dict()`` feeds the JSON audit
+    payload. Adding names to it would have broken both, and the fix would have
+    been to relax a privacy guard in order to print more -- which is backwards.
+    So the names live here, in a separate value that only the probe's text
+    output consumes.
+
+    What is named is PUBLIC CATALOGUE DATA: a competition name and the sport
+    headings it appears under, from ``GET /search/filters_by_sport``. That is
+    the exchange's own catalogue, the same class of fact the series probe
+    already prints as ``observed:``. Nothing here comes from the owner's
+    account -- no ticker, no order, no count of anything he did. The counts-only
+    rule exists to protect HIS data; a public competition name is not his data.
+
+    It has to be named to be acted on. "One collision, nominal" cannot be
+    checked by anyone, and cannot say WHICH sport it narrows to -- so a reader
+    hoping for one sport can read it as being about that sport when it is
+    about another. Naming it is what stops the count standing in for an answer
+    it does not contain.
+    """
+
+    competition: str
+    claimant_sports: tuple[str, ...]
+    #: What each claimant narrows to, positionally matching claimant_sports.
+    narrows_to: tuple[str, ...]
+    #: What the direct competition rule would answer, if anything.
+    direct_rule_says: str | None
+    #: Whether a claimant could contain that answer; None when unknowable.
+    claimants_could_contain_it: bool | None
+
+
+def describe_competition_collisions(taxonomy) -> tuple[CollisionDetail, ...]:
+    """Name each collision. Changes no verdict, exactly as the measurement does not."""
+    if taxonomy is None:
+        return ()
+    details: list[CollisionDetail] = []
+    for competition, claimants in sorted(
+        getattr(taxonomy, "ambiguous_claimants", {}).items()
+    ):
+        claimant_names = tuple(sorted(claimants))
+        narrowed = [possible_sports(name) for name in claimant_names]
+        known = all(members is not None for members in narrowed)
+        possible = frozenset().union(*narrowed) if known and narrowed else frozenset()
+
+        direct = sport_from_competition(competition)
+        routable = direct in ROUTABLE_SPORTS and direct is not None
+        details.append(CollisionDetail(
+            competition=competition,
+            claimant_sports=claimant_names,
+            narrows_to=tuple(
+                "unknown" if members is None
+                else ("/".join(sorted(sport.value for sport in members)) or "none of ours")
+                for members in narrowed
+            ),
+            direct_rule_says=direct.value if routable else None,
+            claimants_could_contain_it=(direct in possible) if (routable and known) else None,
+        ))
+    return tuple(details)
+
+
+def render_collision_details(details) -> str:
+    """Text for the probe. Empty when there is nothing to name."""
+    if not details:
+        return "each collision: none"
+    lines = ["each collision (public catalogue names; no account data):"]
+    for detail in details:
+        lines.extend((
+            f"  competition {detail.competition!r}",
+            f"    claimed by: {', '.join(detail.claimant_sports)}",
+            f"    which narrow to: {', '.join(detail.narrows_to)}",
+            f"    the direct rule would say: {detail.direct_rule_says or '(nothing)'}",
+            f"    claimants could contain that: {detail.claimants_could_contain_it}",
+        ))
+    return "\n".join(lines)
+
+
 def measure_competition_collisions(taxonomy) -> CollisionStructure:
     """Describe the taxonomy's collisions without resolving any of them."""
     structure = CollisionStructure()
