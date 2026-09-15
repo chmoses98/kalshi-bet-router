@@ -117,7 +117,11 @@ jobs:
           shopt -s nullglob
           payloads=("${RUNNER_TEMP}"/payloads/*.json)
           if [ ${#payloads[@]} -eq 0 ]; then
-            echo "HEALTHY NO-OP: nothing eligible for delivery."
+            # "No payload" is not a health verdict. It can mean a quiet
+            # account OR a wager this system refused to record, and this
+            # step cannot tell them apart -- the health annotation below
+            # can, and it is the one that says which.
+            echo "no payload: nothing was eligible for delivery this run."
             exit 0
           fi
 

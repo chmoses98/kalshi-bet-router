@@ -272,3 +272,91 @@ def test_the_finality_render_names_no_ticker_or_order():
     text = measure_finality([order("SECRETORDER", ticker="KXSECRET", last=3)]).render()
     assert "SECRETORDER" not in text
     assert "KXSECRET" not in text
+
+
+# ---------------------------------------------------------------------------
+# What the DELIVERED ROW carries, checked against the row itself.
+#
+# The privacy rules say raw account evidence must not be published: no fill
+# payloads, no fill ids, no order ids except as an opaque source key, no
+# subaccount identifiers. Those are properties of the row that actually leaves,
+# so they are tested on the row rather than on the intent.
+#
+# The identifiers below are deliberately unlike any numeral the row legitimately
+# contains. A one-digit subaccount gives a FALSE POSITIVE against "0.07" and
+# "5.37" -- which is exactly what happened when this was first checked by hand,
+# and is why the values are what they are.
+# ---------------------------------------------------------------------------
+
+import json as _json
+
+from kalshi_router.production import OrderFinality, ProductionWager, to_import_row
+
+_SECRET_ORDER_ID = "ord-SECRET-0xZZZ"
+_SECRET_SUBACCOUNT = 8675309
+_TICKER = "KXMLBGAME-26SEP14NYYBOS-NYY"
+
+
+def _delivered_row():
+    wager = ProductionWager(
+        source_key=production_source_key(_SECRET_SUBACCOUNT, _TICKER, _SECRET_ORDER_ID),
+        market_ticker=_TICKER,
+        sport="MLB",
+        game_date="2026-09-14",
+        side="YES",
+        contracts=Decimal(10),
+        vwap_price=Decimal("0.53"),
+        total_fees=Decimal("0.07"),
+        stake=Decimal("5.37"),
+        first_execution_time=Decimal(1789000000),
+        last_execution_time=Decimal(1789000000),
+        fill_count=1,
+        finality=OrderFinality.FINAL_MARKET_CLOSED,
+    )
+    return to_import_row(wager)
+
+
+def test_the_delivered_row_carries_no_raw_account_identifier():
+    blob = _json.dumps(_delivered_row())
+
+    assert _SECRET_ORDER_ID not in blob
+    assert str(_SECRET_SUBACCOUNT) not in blob
+
+
+def test_the_source_key_still_depends_on_what_it_hides():
+    """Otherwise 'the identifier is absent' would be true and meaningless."""
+    base = production_source_key(_SECRET_SUBACCOUNT, _TICKER, _SECRET_ORDER_ID)
+
+    assert base != production_source_key(_SECRET_SUBACCOUNT, _TICKER, "ord-OTHER")
+    assert base != production_source_key(99, _TICKER, _SECRET_ORDER_ID)
+
+
+def test_the_delivered_row_claims_no_model_provenance():
+    """A Kalshi execution proves the owner placed the bet. It proves nothing
+    about what recommended it, so these fields are ABSENT rather than null."""
+    row = _delivered_row()
+
+    for field in (
+        "recommendationId",
+        "modelEvaluationId",
+        "modelFairProbability",
+        "productionRunId",
+    ):
+        assert field not in row, f"{field} would be fabricated provenance"
+
+
+def test_the_delivered_row_asserts_no_outcome():
+    """The router records the wager; the destination settles it. A row that
+    carried a result or a P&L would be the router grading a game."""
+    row = _delivered_row()
+
+    for field in ("result", "netProfitLoss", "returnAmount", "grossSettlementPayout"):
+        assert field not in row
+    assert row["status"] == "pending"
+
+
+def test_the_delivered_row_invents_no_field_the_destination_owns():
+    row = _delivered_row()
+
+    for field in ("betId", "validationStatus", "provenance", "createdAt", "recordedAt"):
+        assert field not in row

@@ -46,6 +46,7 @@ from .http import (
     Transport,
     build_url,
     decode_json_object,
+    TransportTelemetry,
     request_with_retries,
     urllib_transport,
 )
@@ -116,6 +117,8 @@ class KalshiReadOnlyClient:
         self._sleep = sleep
         #: Count of HTTP requests issued, for privacy-safe diagnostics.
         self.request_count = 0
+        #: What retrying cost this client. Counts and seconds only.
+        self.telemetry = TransportTelemetry()
 
     def _get(self, path: str, operation: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         _assert_read_only(path)
@@ -132,6 +135,7 @@ class KalshiReadOnlyClient:
             max_retries=self._config.max_retries,
             operation=operation,
             sleep=self._sleep,
+            telemetry=self.telemetry,
         )
         return decode_json_object(body, operation)
 

@@ -465,3 +465,131 @@ def test_the_archive_settlements_probe_surfaces_a_missing_route(signer):
     with pytest.raises(HttpStatusError) as excinfo:
         client.probe_historical_settlements()
     assert excinfo.value.status == 404
+
+
+# ---------------------------------------------------------------------------
+# Transport telemetry: what retrying cost.
+#
+# A run that spends four minutes in backoff and a run that sails through look
+# IDENTICAL in the log without this, and the difference is exactly what says
+# whether a 15-minute cadence is sustainable against Kalshi's limits.
+# ---------------------------------------------------------------------------
+
+from kalshi_router.http import HttpResponse, TransportTelemetry, request_with_retries
+
+
+def _attempts(*statuses):
+    """A transport that returns each status in turn."""
+    responses = iter(statuses)
+
+    def transport(method, url, headers, timeout):
+        return HttpResponse(status=next(responses), body=b"{}")
+
+    return transport
+
+
+def test_a_clean_request_records_one_request_and_no_retries():
+    telemetry = TransportTelemetry()
+
+    request_with_retries(
+        transport=_attempts(200),
+        method="GET",
+        url="https://example.test/x",
+        headers_factory=dict,
+        timeout=1.0,
+        max_retries=3,
+        operation="probe",
+        sleep=lambda _: None,
+        telemetry=telemetry,
+    )
+
+    assert telemetry.requests == 1
+    assert telemetry.retries == 0
+    assert telemetry.exhausted == 0
+
+
+def test_a_rate_limit_is_counted_apart_from_a_server_error():
+    """429 and 503 mean different things: one says slow down, the other says
+    the exchange is unwell. Pooling them would hide which."""
+    telemetry = TransportTelemetry()
+
+    request_with_retries(
+        transport=_attempts(429, 503, 200),
+        method="GET",
+        url="https://example.test/x",
+        headers_factory=dict,
+        timeout=1.0,
+        max_retries=3,
+        operation="probe",
+        sleep=lambda _: None,
+        telemetry=telemetry,
+    )
+
+    assert telemetry.retries_rate_limited == 1
+    assert telemetry.retries_server_error == 1
+    assert telemetry.retries == 2
+    assert telemetry.requests == 1, "one REQUEST, retried twice"
+
+
+def test_backoff_seconds_accumulate():
+    telemetry = TransportTelemetry()
+
+    request_with_retries(
+        transport=_attempts(429, 429, 200),
+        method="GET",
+        url="https://example.test/x",
+        headers_factory=dict,
+        timeout=1.0,
+        max_retries=3,
+        operation="probe",
+        sleep=lambda _: None,
+        telemetry=telemetry,
+    )
+
+    assert telemetry.backoff_seconds >= 0
+    assert isinstance(telemetry.backoff_seconds, int)
+
+
+def test_a_request_that_exhausts_every_retry_is_counted():
+    telemetry = TransportTelemetry()
+
+    with pytest.raises(Exception):
+        request_with_retries(
+            transport=_attempts(503, 503, 503, 503),
+            method="GET",
+            url="https://example.test/x",
+            headers_factory=dict,
+            timeout=1.0,
+            max_retries=3,
+            operation="probe",
+            sleep=lambda _: None,
+            telemetry=telemetry,
+        )
+
+    assert telemetry.exhausted == 1
+
+
+def test_telemetry_is_optional_and_changes_nothing_when_absent():
+    """No caller is obliged to care, and adding it could not alter behaviour
+    for one that does not."""
+    body = request_with_retries(
+        transport=_attempts(429, 200),
+        method="GET",
+        url="https://example.test/x",
+        headers_factory=dict,
+        timeout=1.0,
+        max_retries=3,
+        operation="probe",
+        sleep=lambda _: None,
+    )
+
+    assert body == b"{}"
+
+
+def test_the_telemetry_is_structurally_counts_only():
+    telemetry = TransportTelemetry()
+
+    for name, value in telemetry.as_dict().items():
+        assert isinstance(value, int), f"{name} is {type(value).__name__}"
+    rendered = telemetry.render()
+    assert "https://" not in rendered

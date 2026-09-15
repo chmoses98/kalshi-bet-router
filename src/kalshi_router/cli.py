@@ -297,6 +297,9 @@ def _run_deliver(args, client, out, err) -> int:
         print(f"  {sport}: {rows}", file=out)
     print(f"import batch id: {ROUTER_IMPORT_BATCH_ID}", file=out)
 
+    print("", file=out)
+    print(result.transport.render(), file=out)
+
     # A machine-readable health line, so a scheduled run can annotate itself
     # without a human reading the report. One token, on its own line, never a
     # count and never a market.
@@ -383,6 +386,9 @@ def main(argv: list[str] | None = None, stdout=None, stderr=None) -> int:
         payload.update(
             {f"collision_{k}": v for k, v in result.collisions.as_dict().items()}
         )
+        payload.update(
+            {f"transport_{k}": v for k, v in result.transport.as_dict().items()}
+        )
         if result.ledger_comparison is not None:
             payload.update(
                 {f"ledger_{k}": v for k, v in result.ledger_comparison.as_dict().items()}
@@ -414,6 +420,8 @@ def main(argv: list[str] | None = None, stdout=None, stderr=None) -> int:
         print(result.finality.render(), file=out)
         print("", file=out)
         print(result.collisions.render(), file=out)
+        print("", file=out)
+        print(result.transport.render(), file=out)
         if args.production:
             print("", file=out)
             print(result.production.render(), file=out)
