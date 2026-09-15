@@ -159,6 +159,29 @@ claimants could contain that answer or could not.
 That measurement is what any future decision about the gate should rest on. It
 changes no verdict, and two tests prove it.
 
+## Delivery lands as a pull request, not a branch
+
+A branch is not the ledger. Each sport has **one long-lived branch**
+(`kalshi-router/<SPORT>`) and one pull request on it. Every run rebuilds that
+branch from the destination's current `main` and re-runs the importer, so it
+always holds exactly *main plus everything not yet recorded* — content that is
+a function of the account, not of when the job ran.
+
+The router never pushes to the destination's `main`. The force-with-lease goes
+only onto its own branch, whose previous tip is this job's own earlier output.
+
+A run that pushes the branch but cannot open the pull request **fails**, and
+says so: the wagers exist but are not recorded, and that is not a success.
+
+> Both properties are fixes. The first version derived the branch name from the
+> destination's `HEAD`, which moves — so the same undelivered wager produced a
+> new branch on every destination commit, and (worse) a *non*-moving
+> destination meant the same branch name with a different commit, rejected
+> non-fast-forward, red every 15 minutes. It also opened no pull request at
+> all, so delivery terminated in a dead end. The test that was supposed to
+> catch this only forbade `$RANDOM`, `date` and `GITHUB_RUN_ID`; none appeared,
+> so it passed while testing the wrong property.
+
 ## Health states
 
 A scheduled run annotates itself with one of five:

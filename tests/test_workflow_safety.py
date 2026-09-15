@@ -404,12 +404,74 @@ def test_delivery_defaults_to_a_dry_run(deliver):
     assert default in (True, "true"), f"dry_run defaults to {default!r}"
 
 
-def test_delivery_uses_a_deterministic_branch_name(deliver_text):
-    """A retry must find the existing branch rather than open a second pull
-    request for wagers that were already delivered."""
-    assert "kalshi-router/${sport}-$(git -C \"${work}\" rev-parse --short HEAD)" in deliver_text
-    for nondeterministic in ("$RANDOM", "date +%s", "${GITHUB_RUN_ID}"):
-        assert nondeterministic not in deliver_text
+def _delivering_workflow_texts():
+    return [
+        (p.name, strip_comments(p.read_text()))
+        for p in workflow_files()
+        if "kalshi_router.cli deliver" in p.read_text()
+    ]
+
+
+@pytest.mark.parametrize("name,text", _delivering_workflow_texts(), ids=lambda v: v if isinstance(v, str) and len(v) < 40 else "")
+def test_the_branch_name_is_stable_over_TIME_not_just_within_one_run(name, text):
+    """The first version derived it from the DESTINATION's HEAD, which moves.
+
+    Same undelivered wager, two destination commits, two branches -- and
+    because the branch is never merged, every run re-imports as NEW. If the
+    destination had NOT moved it was worse: the same name with a different
+    commit, rejected non-fast-forward, red every 15 minutes.
+
+    The old test forbade $RANDOM, date and GITHUB_RUN_ID. None of those
+    appeared, so it passed while the name was still unstable -- it was testing
+    the wrong property. This one requires the name to depend on NOTHING that
+    can change between runs.
+    """
+    branch_lines = [line for line in text.splitlines() if line.strip().startswith("branch=")]
+    assert branch_lines, f"{name} sets no branch"
+    for line in branch_lines:
+        for unstable in ("$RANDOM", "date +%s", "GITHUB_RUN_ID", "rev-parse", "$(git"):
+            assert unstable not in line, f"{name}: branch name depends on {unstable}: {line.strip()}"
+
+
+@pytest.mark.parametrize("name,text", _delivering_workflow_texts(), ids=lambda v: v if isinstance(v, str) and len(v) < 40 else "")
+def test_a_delivery_that_cannot_open_a_pull_request_is_a_FAILURE(name, text):
+    """A BRANCH IS NOT THE LEDGER.
+
+    The first version pushed a branch and stopped, so a delivered wager sat
+    somewhere nobody looks and was never recorded -- which is the one thing
+    this system exists to do. Opening the pull request is part of delivery.
+    """
+    assert "/pulls" in text, f"{name} never opens a pull request"
+    assert "are NOT recorded" in text, f"{name} does not fail loudly when it cannot"
+    # 422 means "already open for this head", which is the NORMAL case on every
+    # run after the first, because the branch is long-lived.
+    assert "422)" in text, f"{name} would treat an already-open PR as an error"
+
+
+@pytest.mark.parametrize("name,text", _delivering_workflow_texts(), ids=lambda v: v if isinstance(v, str) and len(v) < 40 else "")
+def test_the_destination_default_branch_is_never_pushed_to(name, text):
+    """The router opens a pull request. It does not write the ledger itself."""
+    # Join shell line-continuations first: the refspec of a wrapped `git push`
+    # is on the NEXT line, and checking line by line would read the command as
+    # having no destination at all.
+    joined = text.replace("\\\n", " ")
+
+    pushes = [line for line in joined.splitlines() if "git" in line and " push" in line]
+    assert pushes, f"{name} never pushes"
+    for line in pushes:
+        # The target is the branch VARIABLE, so the two halves are checked
+        # separately: every push goes to ${branch}, and ${branch} is only ever
+        # set to a router-owned name (below).
+        assert 'HEAD:refs/heads/${branch}' in line, f"{name}: {line.strip()}"
+        assert ":refs/heads/main" not in line
+        assert "--force " not in line, "force-with-lease, never bare force"
+
+    assignments = [line.strip() for line in joined.splitlines() if line.strip().startswith("branch=")]
+    assert assignments, f"{name} sets no branch"
+    for line in assignments:
+        assert line.startswith('branch="kalshi-router/'), (
+            f"{name} could push outside the router's own namespace: {line}"
+        )
 
 
 def test_delivery_keeps_one_sports_failure_from_rolling_back_another(deliver_text):
