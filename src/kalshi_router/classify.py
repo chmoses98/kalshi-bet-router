@@ -346,6 +346,51 @@ def derive_series_ticker(context: MarketContext) -> tuple[str | None, str]:
 
 # ------------------------------------------------------------- level verdicts
 
+def _taxonomy_affirms_the_direct_answer(taxonomy, competition, direct) -> bool:
+    """True only when the catalogue AFFIRMS the specific answer the direct rule
+    intends to return.
+
+    An earlier version of this asked only whether exactly one claimant was in
+    scope *somewhere*, which is a weaker and wrong test. Consider a competition
+    whose direct rule says NFL, claimed by Baseball and Hockey: exactly one
+    claimant (Baseball) is technically in scope, and the taxonomy still says
+    nothing whatsoever in support of NFL. Standing the gate aside there would
+    return an answer the catalogue does not back, which is the failure this gate
+    exists to prevent -- arrived at through the bypass rather than around it.
+
+    So the question is not "is someone in scope" but "does the one in-scope
+    claimant hold THIS answer, with every other claimant proven irrelevant":
+
+      * no direct answer at all              -> refuse; there is nothing to affirm
+      * any claimant unknown to us           -> refuse; "we cannot say" is not
+                                                "none of ours"
+      * a claimant holding some of our four
+        but NOT the direct answer            -> refuse; the catalogue offers a
+                                                rival league for this name
+      * exactly one claimant holds the
+        direct answer, all others empty      -> stand aside
+    """
+    if direct is None:
+        return False
+
+    claimants = getattr(taxonomy, "ambiguous_claimants", {}).get(normalize(competition))
+    if not claimants:
+        return False
+
+    affirming = 0
+    for name in claimants:
+        members = possible_sports(name)
+        if members is None:
+            return False          # unknown: we cannot call it harmless
+        if not members:
+            continue              # proven to hold none of our four
+        if direct not in members:
+            # In scope, and pointing somewhere else. That is a real rival.
+            return False
+        affirming += 1
+    return affirming == 1
+
+
 def _competition_verdict(
     context: MarketContext,
     taxonomy: "SportTaxonomy | None",
@@ -366,15 +411,37 @@ def _competition_verdict(
                      context.competition_scope, level=EvidenceLevel.L1_EVENT_COMPETITION)
         )
 
+    # The direct answer is computed FIRST, because the gate below has to ask
+    # whether the catalogue affirms THIS answer -- a question that cannot be
+    # asked before the answer exists. Computing it here decides nothing on its
+    # own; the gate still gets to refuse it.
+    direct = sport_from_competition(competition)
+
     # A competition claimed by several sports in Kalshi's own taxonomy cannot be
     # resolved by anyone -- not even by our direct rules, which would otherwise
     # quietly disagree with the exchange's catalogue.
+    #
+    # EXCEPT when the catalogue AFFIRMS the direct answer: one claimant holds
+    # that specific league and every other claimant provably holds none of our
+    # four. The live catalogue files "Pro Baseball" under Baseball AND under
+    # Hockey, and `possible_sports("hockey")` is the EMPTY SET -- not None. This
+    # module already draws that distinction: empty means "positively none of
+    # ours", None means "we cannot say". A claimant that positively cannot hold
+    # any of our leagues raises no question about WHICH of our leagues this is,
+    # so refusing on its account refuses on nothing at all.
+    #
+    # Deliberately narrow. Two IN-SCOPE claimants still refuse, because Baseball
+    # and Football really could mean different leagues. An UNKNOWN claimant
+    # still refuses, because "we cannot say" is not "none of ours", and reading
+    # it as such is precisely the substitution this gate exists to prevent. And
+    # an in-scope claimant that does NOT hold the direct answer still refuses,
+    # because the catalogue is then offering a rival league for this name.
     if taxonomy is not None and taxonomy.is_ambiguous_competition(competition):
-        return Verdict(EvidenceLevel.L2_SPORT_TAXONOMY, None,
-                       "competition is claimed by more than one sport",
-                       UnresolvedReason.COMPETITION_AMBIGUOUS)
+        if not _taxonomy_affirms_the_direct_answer(taxonomy, competition, direct):
+            return Verdict(EvidenceLevel.L2_SPORT_TAXONOMY, None,
+                           "competition is claimed by more than one sport",
+                           UnresolvedReason.COMPETITION_AMBIGUOUS)
 
-    direct = sport_from_competition(competition)
     if direct is not None:
         return Verdict(EvidenceLevel.L1_EVENT_COMPETITION, direct, f"competition={competition!r}")
 
