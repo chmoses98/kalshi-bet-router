@@ -24,6 +24,14 @@ order endpoint, and none may be added.
 | `downstream-credential-probe.yml` | dispatch, `main` only | Kalshi + downstream | no — it READS repository metadata |
 | `deliver-wagers.yml` | **every 15 minutes**, and dispatch | Kalshi + downstream | yes |
 | `recover-wagers.yml` | dispatch only | Kalshi + downstream | yes |
+| `backfill-inspect.yml` | dispatch, `main` only | Kalshi | no — holds no write credential |
+| `backfill-deliver.yml` | dispatch only, never scheduled | Kalshi + downstream | yes |
+| `backfill-settle.yml` | dispatch only, never scheduled | Kalshi + downstream | yes |
+
+The three `backfill-*` workflows are the one-time historical catch-up and it is
+CLOSED — see `docs/CLOSEOUT.md`. They are never scheduled, because a one-time
+catch-up on a timer stops being one-time, and the two that write require an
+acknowledgement phrase typed out before they push.
 
 Every Kalshi-credentialed workflow refuses to run from a ref other than
 `refs/heads/main`, requests no sensitive output, and uploads no artifact. Those
