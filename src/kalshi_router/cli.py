@@ -194,6 +194,7 @@ def main(argv: list[str] | None = None, stdout=None, stderr=None) -> int:
         payload.update({f"schema_{k}": v for k, v in result.coverage.as_dict().items()})
         payload.update({f"history_{k}": v for k, v in result.history.as_dict().items()})
         payload.update({f"wager_{k}": v for k, v in result.wagers.as_dict().items()})
+        payload.update({f"finality_{k}": v for k, v in result.finality.as_dict().items()})
         payload.update(
             {
                 f"settlement_coverage_{k}": v
@@ -213,6 +214,8 @@ def main(argv: list[str] | None = None, stdout=None, stderr=None) -> int:
         print(result.accounting.render(), file=out)
         print("", file=out)
         print(result.history.render(), file=out)
+        print("", file=out)
+        print(result.finality.render(), file=out)
         if args.shadow_wagers:
             print("", file=out)
             print(result.wagers.render(), file=out)
