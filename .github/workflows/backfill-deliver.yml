@@ -335,10 +335,31 @@ jobs:
                 ;;
             esac
 
+            # A REFUSED ROW MUST NOT COST THE ROWS THAT SUCCEEDED.
+            #
+            # The NFL and CFB importers screen and report PER ROW: one wager
+            # whose week cannot be resolved is one refusal, and the other
+            # twenty-three are already written into the working tree. Skipping
+            # the commit here would throw all of them away over one bad row,
+            # and would keep doing it on every re-run for as long as that row
+            # stayed unfixable -- so the delivery could never complete.
+            #
+            # So the failure is COUNTED (the job still exits non-zero, and the
+            # refusal reasons are above) and the rows that were accepted are
+            # still committed and proposed. Nothing is lost and nothing is
+            # hidden.
+            #
+            # MLB is deliberately different. `import_bet_batch.py` is that
+            # repository's own tool and this workflow does not know whether a
+            # non-zero exit leaves a partial write behind, so its failure still
+            # stops that destination. Guessing the safe behaviour of someone
+            # else's importer is not a thing to do with the owner's ledger.
             if [ "${import_status}" -ne 0 ]; then
               echo "::error::${sport}: the destination importer refused at least one row."
               failures=$((failures + 1))
-              continue
+              if [ "${sport}" = "MLB" ]; then
+                continue
+              fi
             fi
 
             if [ -z "$(git -C "${work}" status --porcelain)" ]; then

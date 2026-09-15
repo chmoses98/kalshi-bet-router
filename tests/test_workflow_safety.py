@@ -1650,3 +1650,34 @@ def test_each_destinations_existing_row_count_reaches_the_log(backfill_text):
     is a delivery nobody can check."""
     for sport in ("MLB", "NFL", "CFB"):
         assert f"{sport} ledger rows" in backfill_text
+
+
+def test_a_refused_row_does_not_cost_the_rows_that_succeeded(backfill_text):
+    """One wager whose week cannot be resolved is one refusal. The other
+    twenty-three are already written into the working tree.
+
+    Skipping the commit would throw all of them away over one bad row -- and
+    would keep doing it on every re-run for as long as that row stayed
+    unfixable, so the delivery could never complete. The failure is COUNTED so
+    the job still exits non-zero; the accepted rows are still proposed.
+    """
+    lines = backfill_text.splitlines()
+    refusal = [i for i, line in enumerate(lines) if "refused at least one row" in line]
+    assert refusal, "the refusal branch is gone"
+    branch = "\n".join(lines[refusal[0]:refusal[0] + 6])
+
+    # Abandoning the destination is reachable for MLB ONLY, and reaching it
+    # requires naming MLB outright -- a destination added later cannot inherit
+    # the bail-out by accident.
+    assert 'if [ "${sport}" = "MLB" ]; then' in branch, branch
+    assert "continue" in branch, branch
+
+
+def test_a_refusal_still_fails_the_job(backfill_text):
+    """Committing what succeeded must not turn a refusal into a quiet success.
+    The two are separate decisions and both are made here."""
+    lines = backfill_text.splitlines()
+    refusal = [i for i, line in enumerate(lines) if "refused at least one row" in line]
+    assert refusal, "the refusal branch is gone"
+    following = "\n".join(lines[refusal[0]:refusal[0] + 6])
+    assert "failures=$((failures + 1))" in following, following
