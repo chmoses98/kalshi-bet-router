@@ -59,6 +59,73 @@ BACKFILL_IMPORT_BATCH_ID = (
 )
 
 
+#: HOW TO READ A DESTINATION'S EXISTING ROWS.
+#:
+#: Reconciliation compares a reconstructed wager against the rows a destination
+#: already holds, and those rows are written in the DESTINATION's vocabulary --
+#: the same split ``production.ROW_BUILDERS`` exists for, seen from the other
+#: side. MLB writes ``marketTicker`` and ``entryPrice``; NFL writes
+#: ``market_ticker`` and ``actual_price``; CFB writes ``market_ticker`` and
+#: ``execution_price``.
+#:
+#: READING ONE LEDGER IN ANOTHER'S WORDS FAILS SILENTLY AND EXPENSIVELY. Every
+#: lookup would simply return None: the router's own source key would never be
+#: recognised, no economic match would ever be found, and every wager this
+#: backfill had ALREADY written would come back MISSING_IMPORTABLE. The second
+#: run -- the one whose whole purpose is to prove the first was idempotent --
+#: would duplicate the entire batch and report success doing it.
+#:
+#: So a sport absent from this map is REFUSED. Not read with some other sport's
+#: words, and not assumed to be MLB because MLB was first.
+LEDGER_VOCABULARIES: dict[str, dict[str, str]] = {
+    "MLB": {
+        "source_bet_key": "sourceBetKey",
+        "market_ticker": "marketTicker",
+        "side": "side",
+        "stake": "stake",
+        "entry_price": "entryPrice",
+    },
+    "NFL": {
+        "source_bet_key": "source_bet_key",
+        "market_ticker": "market_ticker",
+        "side": "side",
+        "stake": "stake",
+        "entry_price": "actual_price",
+    },
+    "CFB": {
+        "source_bet_key": "source_bet_key",
+        "market_ticker": "market_ticker",
+        "side": "side",
+        "stake": "stake",
+        "entry_price": "execution_price",
+    },
+}
+
+#: The keys every reconciliation reads, whatever the destination calls them.
+CANONICAL_LEDGER_FIELDS = ("source_bet_key", "market_ticker", "side", "stake", "entry_price")
+
+
+class UnreadableLedger(Exception):
+    """This sport's ledger cannot be read, so its verdicts would be fiction."""
+
+
+def normalize_ledger_row(sport: str, row: dict) -> dict:
+    """One destination row, restated in the words reconciliation uses.
+
+    Raises rather than guessing. A wrong verdict here does not look wrong: it
+    looks like a wager that needs writing, and writing it is exactly what must
+    not happen.
+    """
+    vocabulary = LEDGER_VOCABULARIES.get(sport)
+    if vocabulary is None:
+        raise UnreadableLedger(
+            f"no ledger vocabulary is known for {sport!r}; its rows cannot be "
+            "read, and reading them in another sport's words would report every "
+            "already-recorded wager as missing"
+        )
+    return {canonical: row.get(vocabulary[canonical]) for canonical in CANONICAL_LEDGER_FIELDS}
+
+
 class BackfillVerdict(str, Enum):
     """What reconciliation decided about one reconstructed wager.
 
@@ -197,13 +264,16 @@ def reconcile_one(wager, ledger_rows, supported_sports) -> BackfillVerdict:
     if key is None:
         return BackfillVerdict.AMBIGUOUS
 
+    # Read in the DESTINATION's own vocabulary before anything is compared.
+    rows = [normalize_ledger_row(wager.sport, row) for row in ledger_rows]
+
     # The router's own key first: a row carrying it was written by this
     # backfill, which is a different fact from the owner having recorded the
     # same wager by hand.
-    if any(row.get("sourceBetKey") == wager.source_key for row in ledger_rows):
+    if any(row.get("source_bet_key") == wager.source_key for row in rows):
         return BackfillVerdict.DUPLICATE_NOOP
 
-    matches = [row for row in ledger_rows if _key(row.get("marketTicker"), row.get("side")) == key]
+    matches = [row for row in rows if _key(row.get("market_ticker"), row.get("side")) == key]
     if not matches:
         return BackfillVerdict.MISSING_IMPORTABLE
     if len(matches) > 1:
@@ -221,13 +291,15 @@ def reconcile_one(wager, ledger_rows, supported_sports) -> BackfillVerdict:
 def _materially_disagrees(wager, row) -> bool:
     """Stake or entry price differing by more than the recording tolerance.
 
+    ``row`` is already NORMALIZED -- canonical keys, not the destination's own.
+
     A field the existing row does not carry is NOT a disagreement: many hand-
     entered rows have no contract count at all, and treating absence as
     conflict would turn most of the ledger into refusals.
     """
     for wager_value, row_value, tolerance in (
         (_decimal(getattr(wager, "stake", None)), _decimal(row.get("stake")), STAKE_TOLERANCE),
-        (_decimal(getattr(wager, "vwap_price", None)), _decimal(row.get("entryPrice")), PRICE_TOLERANCE),
+        (_decimal(getattr(wager, "vwap_price", None)), _decimal(row.get("entry_price")), PRICE_TOLERANCE),
     ):
         if wager_value is None or row_value is None:
             continue

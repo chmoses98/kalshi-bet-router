@@ -167,6 +167,17 @@ def _add_backfill_parser(sub) -> None:
             "compare against' and 'nothing there' are different answers."
         ),
     )
+    backfill.add_argument(
+        "--out-dir",
+        default=None,
+        metavar="DIR",
+        help=(
+            "Write one importer payload per destination for the MISSING_IMPORTABLE "
+            "wagers only. Omitted, this command still writes nothing at all -- "
+            "inspection stays the default, and producing a payload stays an "
+            "explicit request. The payload is written to FILES and never printed."
+        ),
+    )
     backfill.set_defaults(show_sensitive_details=False, max_fills=None, page_limit=None)
 
 
@@ -402,12 +413,31 @@ def _run_backfill(args, client, out, err) -> int:
     # orders_considered on the production diagnostics IS the in-window order
     # count: evaluate_window hands evaluate_production exactly the candidates
     # the window selected.
-    _importable, diagnostics = reconcile(
+    importable, diagnostics = reconcile(
         wagers, ledgers, frozenset(ledgers),
         orders_in_window=result.production.orders_considered,
     )
     print("", file=out)
     print(diagnostics.render(), file=out)
+
+    if args.out_dir:
+        from .destination import write_backfill_payloads
+
+        # ONLY the importable wagers. `reconcile` already filtered to
+        # MISSING_IMPORTABLE so a caller cannot get this wrong by forgetting,
+        # and the destinations are exactly the ones a ledger was supplied for:
+        # writing to a destination whose existing rows were never read is how a
+        # backfill duplicates a ledger.
+        counts = write_backfill_payloads(
+            importable, args.out_dir, BACKFILL_IMPORT_BATCH_ID, frozenset(ledgers)
+        )
+        print("", file=out)
+        print("payloads written (rows per destination; rows are NOT printed):", file=out)
+        if not counts:
+            print("  none -- nothing was missing and importable", file=out)
+        for sport, rows in sorted(counts.items()):
+            print(f"  {sport}: {rows}", file=out)
+
     print("", file=out)
     print(result.transport.render(), file=out)
     return EXIT_OK

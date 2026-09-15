@@ -302,3 +302,136 @@ def test_equal_counts_are_consistent():
     _importable, diagnostics = reconcile(wagers, {}, frozenset(), orders_in_window=5)
 
     assert not diagnostics.contradicts_itself
+
+
+# ------------------------------------------------ reading each ledger's words
+
+class TestLedgerVocabulary:
+    """Every destination spells the same row differently, and reading one in
+    another's words fails SILENTLY.
+
+    Nothing raises. Every lookup simply returns None, so the router's own source
+    key is never recognised, no economic match is ever found, and every wager
+    this backfill already wrote comes back MISSING_IMPORTABLE. The second run --
+    the one whose entire purpose is to prove the first was idempotent -- would
+    duplicate the whole batch and report success doing it.
+    """
+
+    NFL_TICKER = "KXNFLGAME-26SEP14KCBUF-KC"
+    CFB_TICKER = "KXNCAAFGAME-26SEP12ALAUGA-ALA"
+
+    def nfl_row(self, **overrides):
+        """Exactly what nfl_edge.handicap.imported_wagers holds."""
+        row = {
+            "source_bet_key": "kalshi:v1:abc123",
+            "market_ticker": self.NFL_TICKER,
+            "side": "YES",
+            "stake": 24.68,
+            "actual_price": 0.61,
+        }
+        row.update(overrides)
+        return row
+
+    def cfb_row(self, **overrides):
+        """Exactly what cfb_edge_finder.accounting.wager holds."""
+        row = {
+            "source_bet_key": "kalshi:v1:abc123",
+            "market_ticker": self.CFB_TICKER,
+            "side": "YES",
+            "stake": 11.94,
+            "execution_price": 0.47,
+        }
+        row.update(overrides)
+        return row
+
+    def test_a_wager_this_backfill_already_wrote_to_nfl_is_a_no_op(self):
+        """The whole idempotency proof, for the destination that does not speak
+        MLB's language."""
+        wager = FakeWager(market_ticker=self.NFL_TICKER, sport="NFL",
+                          stake=Decimal("24.68"), vwap_price=Decimal("0.61"))
+
+        verdict = reconcile_one(wager, [self.nfl_row()], frozenset({"NFL"}))
+
+        assert verdict is BackfillVerdict.DUPLICATE_NOOP
+
+    def test_a_wager_this_backfill_already_wrote_to_cfb_is_a_no_op(self):
+        wager = FakeWager(market_ticker=self.CFB_TICKER, sport="CFB",
+                          stake=Decimal("11.94"), vwap_price=Decimal("0.47"))
+
+        verdict = reconcile_one(wager, [self.cfb_row()], frozenset({"CFB"}))
+
+        assert verdict is BackfillVerdict.DUPLICATE_NOOP
+
+    def test_reading_a_cfb_ledger_in_mlbs_words_would_report_it_missing(self):
+        """The defect, demonstrated rather than described.
+
+        This is what the code did before the vocabularies existed: the row is
+        RIGHT THERE, the sport is supported, and the verdict is 'write it'.
+        """
+        from kalshi_router.backfill import normalize_ledger_row
+
+        as_mlb = normalize_ledger_row("MLB", self.cfb_row())
+
+        assert as_mlb["source_bet_key"] is None
+        assert as_mlb["market_ticker"] is None
+        assert as_mlb["entry_price"] is None
+
+    def test_an_owner_recorded_nfl_row_is_matched_economically(self):
+        """A row the owner entered by hand carries a key this router will never
+        produce, so it must still be recognised on (ticker, side)."""
+        wager = FakeWager(market_ticker=self.NFL_TICKER, sport="NFL",
+                          stake=Decimal("24.68"), vwap_price=Decimal("0.61"))
+
+        verdict = reconcile_one(
+            wager, [self.nfl_row(source_bet_key="hand-entered-week-2-kc")],
+            frozenset({"NFL"}),
+        )
+
+        assert verdict is BackfillVerdict.EXACT_EXISTING
+
+    def test_a_disagreeing_cfb_price_is_a_conflict_not_an_overwrite(self):
+        """Proves the price field is being read at all: with the wrong key it
+        would be None, and a missing field is deliberately not a disagreement --
+        so this test passing on `execution_price` is what shows the vocabulary
+        reached the comparison."""
+        wager = FakeWager(market_ticker=self.CFB_TICKER, sport="CFB",
+                          stake=Decimal("11.94"), vwap_price=Decimal("0.47"))
+
+        verdict = reconcile_one(
+            wager,
+            [self.cfb_row(source_bet_key="hand-entered", execution_price=0.80)],
+            frozenset({"CFB"}),
+        )
+
+        assert verdict is BackfillVerdict.CONFLICT
+
+    def test_a_sport_with_no_known_vocabulary_is_refused_not_guessed(self):
+        """Refusing aborts the run. That is the point: a ledger read in the
+        wrong words poisons EVERY verdict for that sport, so continuing past it
+        produces a batch of confident writes that are all wrong."""
+        from kalshi_router.backfill import UnreadableLedger
+
+        wager = FakeWager(sport="TENNIS")
+
+        with pytest.raises(UnreadableLedger, match="no ledger vocabulary"):
+            reconcile_one(wager, [ledger_row()], frozenset({"TENNIS"}))
+
+    def test_every_vocabulary_names_every_field_reconciliation_reads(self):
+        """A vocabulary missing one key would raise KeyError at reconcile time,
+        on a credentialed run, halfway through a backfill."""
+        from kalshi_router.backfill import CANONICAL_LEDGER_FIELDS, LEDGER_VOCABULARIES
+
+        for sport, vocabulary in LEDGER_VOCABULARIES.items():
+            assert set(vocabulary) == set(CANONICAL_LEDGER_FIELDS), sport
+
+    def test_every_destination_that_can_be_written_can_also_be_read(self):
+        """The two halves of the same split.
+
+        A sport this router can BUILD a row for but cannot READ the ledger of is
+        the exact shape of the bug above: it would be written on the first run
+        and written again on every run after.
+        """
+        from kalshi_router.backfill import LEDGER_VOCABULARIES
+        from kalshi_router.production import ROW_BUILDERS
+
+        assert set(ROW_BUILDERS) == set(LEDGER_VOCABULARIES)
