@@ -1,0 +1,394 @@
+# THE ONE-TIME HISTORICAL CATCH-UP, WITH A WRITE CREDENTIAL.
+#
+# `backfill-inspect.yml` answers "what did we miss" and holds no downstream
+# token, so it cannot act on its own answer. This is the workflow that acts.
+#
+# WHY IT IS A SEPARATE FILE RATHER THAN A FLAG ON THE INSPECTION
+#   The inspection is safe to run at any time by anyone who can dispatch it.
+#   Putting a write path behind a checkbox on that workflow would make the safe
+#   thing and the irreversible thing the same button.
+#
+# WHAT KEEPS IT FROM BECOMING PRODUCTION
+#   * the window's END is PRODUCTION_CUTOVER_ISO structurally, in
+#     `BackfillWindow`. There is no input for it and no flag that widens it, so
+#     this cannot reach into the range the scheduled job owns;
+#   * it is NEVER scheduled. A one-time catch-up that ran on a timer would stop
+#     being one-time;
+#   * only MISSING_IMPORTABLE wagers reach a payload. `reconcile` filters them,
+#     so a conflict or a duplicate cannot be written by a caller filtering
+#     wrongly.
+#
+# SECURITY (this repository and all three destinations are PUBLIC)
+#   * main branch only, dispatch only.
+#   * Holds Kalshi read access to rebuild the wagers and DOWNSTREAM_REPO_TOKEN
+#     to deliver them. One job, because passing a payload between jobs means an
+#     artifact, and the payload is the owner's betting activity.
+#   * THE PAYLOAD IS NEVER PRINTED and never uploaded. It is written to
+#     RUNNER_TEMP, consumed by each destination's own importer, and discarded
+#     with the runner. Only counts reach this log.
+#   * The token reaches git through a credential helper that reads it from the
+#     environment at push time: never in a URL, never in argv, never in
+#     .git/config.
+#   * The router NEVER edits a ledger file and never pushes to a destination's
+#     own branch. It hands a payload to that destination's importer, commits
+#     what the importer produced onto a branch in its own namespace, and opens
+#     a pull request. Bypassing the importer would bypass its duplicate
+#     detection and its validation, which are what make a re-run safe.
+#
+# Kalshi remains READ-ONLY. Nothing here creates, modifies or cancels an order.
+name: Backfill delivery (one-time historical catch-up)
+
+on:
+  workflow_dispatch:
+    inputs:
+      since:
+        description: "Window start (RFC3339). The end is always the cutover."
+        required: false
+        type: string
+        default: "2026-09-11T00:00:00Z"
+      cfb_season:
+        description: "Which season's CFB ledger these wagers belong to. No default, on purpose."
+        required: true
+        type: string
+      dry_run:
+        description: "Import locally and discard without pushing"
+        required: false
+        type: boolean
+        default: true
+      acknowledgement:
+        description: "To push, type: I have decided to import pre-cutover history"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  # Never cancel a delivery in flight: cancellation between a destination's
+  # commit and this job's receipt would leave canonical wagers written with no
+  # record here that they were.
+  group: backfill-deliver
+  cancel-in-progress: false
+
+jobs:
+  deliver:
+    name: Deliver the gap window
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Refuse to run credentialed code from an untrusted ref
+        run: |
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::error::This credentialed workflow may only run from refs/heads/main (got ${GITHUB_REF})."
+            exit 1
+          fi
+
+      - name: Refuse to push without an explicit acknowledgement
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          ACKNOWLEDGEMENT: ${{ inputs.acknowledgement }}
+          CFB_SEASON: ${{ inputs.cfb_season }}
+        run: |
+          set -euo pipefail
+
+          # An unreadable value is refused rather than falling through a
+          # `!= "true"` test, which would read "" as "go ahead and push".
+          case "${DRY_RUN}" in
+            true|false) ;;
+            *)
+              echo "::error::dry_run must be exactly 'true' or 'false' (got '${DRY_RUN}')."
+              exit 1 ;;
+          esac
+
+          # The season names a ledger FILE. A non-numeric value would create
+          # `wagers/<whatever>.jsonl` and put real wagers somewhere no report
+          # reads.
+          case "${CFB_SEASON}" in
+            [0-9][0-9][0-9][0-9]) ;;
+            *)
+              echo "::error::cfb_season must be a four-digit year (got '${CFB_SEASON}')."
+              exit 1 ;;
+          esac
+
+          if [ "${DRY_RUN}" = "false" ] && \
+             [ "${ACKNOWLEDGEMENT}" != "I have decided to import pre-cutover history" ]; then
+            echo "::error::Writing history downstream is not reversible by this workflow."
+            echo "Re-dispatch with the acknowledgement phrase typed exactly."
+            exit 1
+          fi
+          echo "dry run: ${DRY_RUN}"
+
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install router
+        run: python -m pip install --disable-pip-version-check --quiet .
+
+      - name: Fetch every destination's existing rows (public, unauthenticated)
+        env:
+          CFB_SEASON: ${{ inputs.cfb_season }}
+        run: |
+          set -euo pipefail
+
+          # READING IS NOT WRITING. These clones are unauthenticated and are
+          # used only to answer "does this destination already hold this
+          # wager". A destination whose rows were never read must not be
+          # written to -- that is how a backfill duplicates a ledger -- so a
+          # missing ledger here FAILS rather than being treated as empty.
+
+          # --- MLB: one JSONL on main -------------------------------------
+          git clone --quiet --depth 1 \
+            https://github.com/chmoses98/edge-finder-api "${RUNNER_TEMP}/mlb-ledger"
+          mlb="${RUNNER_TEMP}/mlb-ledger/data/edgelab/bets/bets.jsonl"
+          test -f "${mlb}"
+          echo "MLB ledger rows: $(wc -l < "${mlb}")"
+          echo "MLB_LEDGER=${mlb}" >> "${GITHUB_ENV}"
+
+          # --- NFL: one JSON FILE PER RECORD on handicap-data -------------
+          # The router's reader takes JSONL, so the records are flattened into
+          # one. This is an adapter, not a transformation: each file becomes
+          # exactly one line and nothing is computed, renamed or dropped.
+          git clone --quiet --depth 1 --branch handicap-data \
+            https://github.com/chmoses98/nfl-edge-finder "${RUNNER_TEMP}/nfl-ledger"
+          nfl="${RUNNER_TEMP}/nfl.jsonl"
+          python - "${RUNNER_TEMP}/nfl-ledger/data/imported_wagers" "${nfl}" <<'PYEOF'
+          import json, os, sys
+          root, out = sys.argv[1], sys.argv[2]
+          rows = []
+          for directory, _subdirs, names in os.walk(root):
+              for name in sorted(names):
+                  if name.endswith(".json"):
+                      with open(os.path.join(directory, name), encoding="utf-8") as handle:
+                          rows.append(json.load(handle))
+          with open(out, "w", encoding="utf-8") as handle:
+              for row in rows:
+                  handle.write(json.dumps(row, sort_keys=True) + "\n")
+          print(f"NFL ledger rows: {len(rows)}")
+          PYEOF
+          echo "NFL_LEDGER=${nfl}" >> "${GITHUB_ENV}"
+
+          # --- CFB: one JSONL per season on accounting-data ---------------
+          git clone --quiet --depth 1 --branch accounting-data \
+            https://github.com/chmoses98/cfb-edge-finder "${RUNNER_TEMP}/cfb-ledger"
+          cfb="${RUNNER_TEMP}/cfb-ledger/wagers/${CFB_SEASON}.jsonl"
+          # A season with no wagers yet has no file. That is genuinely empty
+          # rather than unreadable, and the branch's own existence is what was
+          # checked above.
+          touch "${cfb}"
+          echo "CFB ledger rows: $(wc -l < "${cfb}")"
+          echo "CFB_LEDGER=${cfb}" >> "${GITHUB_ENV}"
+
+      - name: Reconcile the window and build the payloads
+        env:
+          KALSHI_API_KEY_ID: ${{ secrets.KALSHI_API_KEY_ID }}
+          KALSHI_PRIVATE_KEY: ${{ secrets.KALSHI_PRIVATE_KEY }}
+          SINCE: ${{ inputs.since }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/payloads"
+          python -m kalshi_router.cli backfill \
+            --since "${SINCE:-2026-09-11T00:00:00Z}" \
+            --ledger "MLB=${MLB_LEDGER}" \
+            --ledger "NFL=${NFL_LEDGER}" \
+            --ledger "CFB=${CFB_LEDGER}" \
+            --out-dir "${RUNNER_TEMP}/payloads"
+
+      - name: Deliver each destination through its own importer
+        env:
+          DOWNSTREAM_REPO_TOKEN: ${{ secrets.DOWNSTREAM_REPO_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          CFB_SEASON: ${{ inputs.cfb_season }}
+        run: |
+          set -euo pipefail
+
+          shopt -s nullglob
+          payloads=("${RUNNER_TEMP}"/payloads/*.json)
+          if [ ${#payloads[@]} -eq 0 ]; then
+            echo "no payload: the gap window holds nothing this backfill may write."
+            exit 0
+          fi
+
+          # Per-destination, so one failing sport cannot roll back another's
+          # success. Each reports its own outcome and the job fails at the end
+          # if any did.
+          failures=0
+          for payload in "${payloads[@]}"; do
+            sport="$(basename "${payload}" .json)"
+
+            # Each destination: the repository, the branch its ledger lives on,
+            # and the importer that owns writing to it. A sport absent here has
+            # nowhere to go and is a FAILURE, never a silent skip -- a wager
+            # this router reconstructed and then dropped is the one outcome
+            # that looks like success and is not.
+            case "${sport}" in
+              MLB) repo="chmoses98/edge-finder-api"; base="main" ;;
+              NFL) repo="chmoses98/nfl-edge-finder"; base="handicap-data" ;;
+              CFB) repo="chmoses98/cfb-edge-finder"; base="accounting-data" ;;
+              *)
+                echo "::error::${sport} has no configured destination repository."
+                failures=$((failures + 1))
+                continue ;;
+            esac
+
+            echo "=== ${sport} -> ${repo} (${base}) ==="
+
+            # The LEDGER checkout, which is what gets committed.
+            work="${RUNNER_TEMP}/dest-${sport}"
+            rm -rf "${work}"
+            git clone --quiet --depth 1 --branch "${base}" \
+              "https://github.com/${repo}" "${work}"
+
+            git -C "${work}" config credential.helper \
+              '!f() { echo "username=x-access-token"; echo "password=${DOWNSTREAM_REPO_TOKEN}"; }; f'
+            git -C "${work}" config user.name "kalshi-bet-router"
+            git -C "${work}" config user.email "noreply@users.noreply.github.com"
+            echo "  destination ${base}: $(git -C "${work}" rev-parse HEAD)"
+
+            # The CODE checkout. NFL and CFB keep their importers on `main`
+            # while their ledgers live on a data branch, so the script and the
+            # thing it writes are two different checkouts. Conflating them is
+            # how a delivery ends up running an importer that does not exist on
+            # the branch it is writing.
+            import_status=0
+            case "${sport}" in
+              MLB)
+                ( cd "${work}" && python scripts/edgelab/import_bet_batch.py \
+                    --file "${payload}" --receipts-out "${RUNNER_TEMP}/receipts-MLB.json" \
+                    >/dev/null ) || import_status=$?
+                python - "${RUNNER_TEMP}/receipts-MLB.json" <<'PYEOF'
+          import json, sys
+          rows = json.load(open(sys.argv[1]))
+          verdicts = {}
+          for row in rows:
+              verdicts[row.get("duplicateStatus")] = verdicts.get(row.get("duplicateStatus"), 0) + 1
+          print(f"  rows: {len(rows)}")
+          for verdict, count in sorted(verdicts.items(), key=lambda kv: str(kv[0])):
+              print(f"    {verdict}: {count}")
+          print(f"  canonical bet ids returned: {sum(1 for r in rows if r.get('betId'))}")
+          print(f"  failed rows: {sum(1 for r in rows if not r.get('success'))}")
+          PYEOF
+                ;;
+              NFL)
+                code="${RUNNER_TEMP}/code-NFL"
+                rm -rf "${code}"
+                git clone --quiet --depth 1 "https://github.com/${repo}" "${code}"
+                # The week comes from the REAL schedule. The repository keeps a
+                # capture of it on its own market-data branch; without it the
+                # importer refuses rather than computing a week from a date.
+                sched="${RUNNER_TEMP}/nfl-schedule"
+                rm -rf "${sched}"
+                git clone --quiet --depth 1 --branch market-data \
+                  "https://github.com/${repo}" "${sched}"
+                python "${code}/scripts/handicap/import_routed_wagers.py" \
+                  --payload "${payload}" \
+                  --handicap-root "${work}" \
+                  --schedule "${sched}/data/kalshi/capture/schedule_cache.csv" \
+                  || import_status=$?
+                ;;
+              CFB)
+                code="${RUNNER_TEMP}/code-CFB"
+                rm -rf "${code}"
+                git clone --quiet --depth 1 "https://github.com/${repo}" "${code}"
+                python "${code}/scripts/import_routed_wagers.py" \
+                  --payload "${payload}" \
+                  --base-dir "${work}" \
+                  --season "${CFB_SEASON}" \
+                  || import_status=$?
+                ;;
+            esac
+
+            if [ "${import_status}" -ne 0 ]; then
+              echo "::error::${sport}: the destination importer refused at least one row."
+              failures=$((failures + 1))
+              continue
+            fi
+
+            if [ -z "$(git -C "${work}" status --porcelain)" ]; then
+              echo "  no ledger change -- every row was already imported (no-op)."
+              continue
+            fi
+
+            if [ "${DRY_RUN}" = "true" ]; then
+              echo "  DRY RUN: ledger changed, nothing pushed."
+              git -C "${work}" --no-pager diff --stat
+              continue
+            fi
+
+            # ONE STABLE BRANCH PER SPORT, in the router's own namespace.
+            # Stable over TIME, not merely within a run: a name derived from
+            # anything that moves would re-propose the same wagers under a new
+            # branch on every dispatch.
+            branch="kalshi-router/backfill-${sport}"
+
+            git -C "${work}" checkout -q -b "${branch}"
+            git -C "${work}" add -A
+
+            # WHAT GOES INTO SOMEONE ELSE'S REPOSITORY IS CHECKED, NOT ASSUMED.
+            # A router-authored commit may only touch the ledger's own data.
+            # A lock file or a .pyc appearing here means something changed
+            # upstream, and stopping beats quietly committing it.
+            staged="$(git -C "${work}" diff --cached --name-only)"
+            case "${sport}" in
+              CFB) allowed='^wagers/' ;;
+              *)   allowed='^data/' ;;
+            esac
+            unexpected="$(printf '%s\n' "${staged}" | grep -v "${allowed}" || true)"
+            if [ -n "${unexpected}" ]; then
+              echo "::error::${sport}: the import dirtied files outside the ledger -- refusing to commit them:"
+              printf '%s\n' "${unexpected}"
+              failures=$((failures + 1))
+              continue
+            fi
+
+            git -C "${work}" commit -q \
+              -m "Record the Kalshi gap window via kalshi-bet-router (${sport})"
+
+            # --verify --quiet IS LOAD-BEARING. A bare `git rev-parse` on a
+            # missing ref ECHOES ITS ARGUMENT TO STDOUT before failing, so the
+            # lease would be handed the literal string "refs/remotes/..." and
+            # the push would die with "cannot parse expected object name" --
+            # after the importer had already returned canonical ids. An EMPTY
+            # value means "the branch must not exist yet", which is a first run.
+            git -C "${work}" fetch -q --depth 1 origin \
+              "+refs/heads/${branch}:refs/remotes/origin/${branch}" || true
+            expected="$(git -C "${work}" rev-parse --verify --quiet "refs/remotes/origin/${branch}" || echo "")"
+
+            git -C "${work}" push -q \
+              --force-with-lease="refs/heads/${branch}:${expected}" \
+              origin "HEAD:refs/heads/${branch}"
+            echo "  pushed ${branch}"
+            echo "  destination commit: $(git -C "${work}" rev-parse HEAD)"
+
+            # A BRANCH IS NOT THE LEDGER. Without a pull request the wagers sit
+            # somewhere nobody looks and are never recorded, which is the one
+            # thing this system exists to do. Opening it is part of delivery.
+            pr_body="${RUNNER_TEMP}/pr-${sport}.json"
+            pr_status="$(curl --silent --show-error --write-out '%{http_code}' \
+              --output "${pr_body}" \
+              -X POST \
+              -H "Authorization: Bearer ${DOWNSTREAM_REPO_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${repo}/pulls" \
+              -d "{\"title\":\"Record the Kalshi gap window (${sport})\",\"head\":\"${branch}\",\"base\":\"${base}\",\"body\":\"Imported by kalshi-bet-router through this repository's own importer, for the window between the owner's last completed accounting and the router's production cutover. Counts are in the router's run log; the rows are in the diff.\"}")"
+
+            case "${pr_status}" in
+              201) echo "  opened a pull request" ;;
+              422) echo "  pull request already open for ${branch}" ;;
+              *)
+                echo "::error::${sport}: could not open a pull request (HTTP ${pr_status}). The wagers are on ${branch} but are NOT recorded."
+                failures=$((failures + 1))
+                continue ;;
+            esac
+          done
+
+          echo ""
+          echo "destinations that failed: ${failures}"
+          if [ "${failures}" -ne 0 ]; then
+            exit 1
+          fi
