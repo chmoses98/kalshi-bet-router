@@ -181,13 +181,84 @@ jobs:
               continue
             fi
 
-            branch="kalshi-router/recover-${sport}-$(git -C "${work}" rev-parse --short HEAD)"
+            # ONE LONG-LIVED BRANCH PER SPORT, and one pull request on it.
+            #
+            # The first version of this derived the branch name from the
+            # DESTINATION's HEAD, which moves. Same undelivered wager, two
+            # destination commits, two branches -- and because the branch is
+            # never merged, every run re-imports as NEW. If the destination
+            # had NOT moved it was worse: the same branch name with a
+            # different commit, rejected non-fast-forward, red every 15
+            # minutes.
+            #
+            # A stable name fixes both. Each run rebuilds the branch from the
+            # destination's current main and re-runs the importer, so the
+            # branch always holds exactly "main + everything not yet
+            # recorded". The import is deterministic and idempotent, so that
+            # content is a function of the account, not of when the job ran.
+            branch="kalshi-router/recover-${sport}"
+
             git -C "${work}" checkout -q -b "${branch}"
             git -C "${work}" add -A
+
+            # WHAT GOES INTO SOMEONE ELSE'S REPOSITORY IS CHECKED, NOT ASSUMED.
+            #
+            # `git add -A` is safe here only because the destination's own
+            # .gitignore covers what the importer leaves behind -- measured on
+            # a real clone, it creates three __pycache__ directories and a
+            # bets.jsonl.lock, and ignores all of them. That is a property of
+            # THEIR repository, which can change without anyone telling this
+            # workflow.
+            #
+            # So: a router-authored commit may only touch data/. A lock file or
+            # a .pyc appearing in one means something changed upstream, and
+            # stopping is far better than quietly committing it every 15
+            # minutes.
+            staged="$(git -C "${work}" diff --cached --name-only)"
+            unexpected="$(printf '%s\n' "${staged}" | grep -v '^data/' || true)"
+            if [ -n "${unexpected}" ]; then
+              echo "::error::${sport}: the import dirtied files outside data/ -- refusing to commit them:"
+              printf '%s\n' "${unexpected}"
+              failures=$((failures + 1))
+              continue
+            fi
+
             git -C "${work}" commit -q -m "Recover Kalshi wagers via kalshi-bet-router (${sport})"
-            git -C "${work}" push -q --set-upstream origin "${branch}"
+
+            # --force-with-lease, and ONLY onto this router-owned branch: the
+            # branch is rebuilt from main every run, so its previous tip is
+            # this job's own earlier output, never anyone else's work. The
+            # destination's main is never pushed to.
+            git -C "${work}" push -q --force-with-lease \
+              origin "HEAD:refs/heads/${branch}"
             echo "  pushed ${branch}"
             echo "  destination commit: $(git -C "${work}" rev-parse HEAD)"
+
+            # A BRANCH IS NOT THE LEDGER. Without a pull request the wager sits
+            # somewhere nobody looks and is never recorded, which is the one
+            # thing this system exists to do. Opening it is therefore part of
+            # delivery, not a nicety -- and failing to open it is a failure.
+            pr_body="${RUNNER_TEMP}/pr-${sport}.json"
+            pr_status="$(curl --silent --show-error --write-out '%{http_code}' \
+              --output "${pr_body}" \
+              -X POST \
+              -H "Authorization: Bearer ${DOWNSTREAM_REPO_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${repo}/pulls" \
+              -d "{\"title\":\"Recover Kalshi wagers (${sport})\",\"head\":\"${branch}\",\"base\":\"main\",\"body\":\"Imported by kalshi-bet-router through this repository's own importer. Counts are in the router's run log; the rows are in the diff.\"}")"
+
+            case "${pr_status}" in
+              201)
+                echo "  opened a pull request" ;;
+              422)
+                # Already open for this head. Expected on every run after the
+                # first, because the branch is long-lived.
+                echo "  pull request already open for ${branch}" ;;
+              *)
+                echo "::error::${sport}: could not open a pull request (HTTP ${pr_status}). The wagers are on ${branch} but are NOT recorded."
+                failures=$((failures + 1))
+                continue ;;
+            esac
           done
 
           echo ""
