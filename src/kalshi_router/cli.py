@@ -133,6 +133,14 @@ def config_from_args(args) -> AuditConfig:
     )
 
 
+def _add_series_probe_parser(sub) -> None:
+    probe = sub.add_parser(
+        "series-probe",
+        help="ask Kalshi to corroborate candidate series tickers (adds nothing)",
+    )
+    probe.set_defaults(show_sensitive_details=False, max_fills=None, page_limit=None)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="kalshi-router",
@@ -234,6 +242,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     _add_deliver_parser(sub)
+    _add_series_probe_parser(sub)
     return parser
 
 
@@ -307,6 +316,27 @@ def _run_deliver(args, client, out, err) -> int:
     return EXIT_OK
 
 
+def _run_series_probe(client, out, err) -> int:
+    """Corroborate candidate series tickers against Kalshi's own catalogue.
+
+    Promotes nothing. The registry is edited by a human reading this output,
+    because a table the classifier treats as authoritative should not be
+    written by the same run that decided it wanted more entries.
+    """
+    from .series_probe import MLB_LEDGER_CANDIDATES, probe_series
+    from .sports import Sport
+
+    candidates = {t: Sport.MLB for t in MLB_LEDGER_CANDIDATES}
+    try:
+        report = probe_series(client, candidates)
+    except KalshiRouterError as exc:
+        print(f"series probe failed: {type(exc).__name__}: {exc}", file=err)
+        return EXIT_API
+
+    print(report.render(), file=out)
+    return EXIT_OK
+
+
 def main(argv: list[str] | None = None, stdout=None, stderr=None) -> int:
     out = stdout if stdout is not None else sys.stdout
     err = stderr if stderr is not None else sys.stderr
@@ -355,6 +385,9 @@ def main(argv: list[str] | None = None, stdout=None, stderr=None) -> int:
 
     if args.command == "deliver":
         return _run_deliver(args, client, out, err)
+
+    if args.command == "series-probe":
+        return _run_series_probe(client, out, err)
 
     try:
         result = run_audit(

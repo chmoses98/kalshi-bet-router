@@ -1,0 +1,57 @@
+# Ask Kalshi to corroborate candidate series tickers. Promotes nothing.
+#
+# The classifier's series registry is EXACT MATCH and is treated as
+# authoritative. It knew one MLB series (KXMLBGAME), which covers 82 of the
+# owner's 452 recorded MLB wagers; the rest are derivative markets the table
+# had never heard of. That -- not the taxonomy ambiguity gate -- is why a live
+# shadow run classified ZERO episodes as MLB.
+#
+# A prefix that looks right is a naming convention, not evidence, so each
+# candidate is checked against the series' OWN category, tags and title. The
+# output is read by a human who then edits the registry; this workflow never
+# writes it.
+#
+# SECURITY: series tickers are PUBLIC catalogue names, the same class of value
+# the audit already prints as "settlement keys observed". No account data is
+# read and no downstream credential is present.
+name: Series registry probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: series-probe
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    name: Corroborate candidate series tickers
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Refuse to run credentialed code from an untrusted ref
+        run: |
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::error::This credentialed workflow may only run from refs/heads/main (got ${GITHUB_REF})."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install router
+        run: python -m pip install --disable-pip-version-check --quiet .
+
+      - name: Probe each candidate series
+        env:
+          KALSHI_API_KEY_ID: ${{ secrets.KALSHI_API_KEY_ID }}
+          KALSHI_PRIVATE_KEY: ${{ secrets.KALSHI_PRIVATE_KEY }}
+        run: python -m kalshi_router.cli series-probe
