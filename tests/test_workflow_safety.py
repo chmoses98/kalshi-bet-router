@@ -941,3 +941,106 @@ def test_a_missing_branch_yields_an_empty_expectation_not_a_failure(name, text):
         "rev-parse" in line and 'echo ""' in line
         for line in joined.splitlines()
     ), f"{name}: the first run would fail on a missing ref"
+
+
+# ============ the receipts block is code, and it was untested ================
+#
+# Each delivering workflow embeds a Python heredoc that summarises the
+# destination's import receipts. It is real code on the delivery path, it had no
+# test, and it can only run when a payload exists -- so it would first have
+# executed on the first real wager, printing into a public log.
+#
+# These tests extract it from the YAML exactly as bash would see it and run it.
+
+
+def _receipts_block(path):
+    """The heredoc body, as the shell hands it to python.
+
+    YAML strips the block scalar's own indentation, which is why the body
+    reaches python at column zero even though it is indented in the file. That
+    is load-bearing -- an indented top-level statement is a SyntaxError -- so
+    it is extracted rather than retyped.
+    """
+    import re
+
+    config = load(path)
+    for job in (config.get("jobs") or {}).values():
+        for step in job.get("steps") or []:
+            script = step.get("run")
+            if not isinstance(script, str) or "PYEOF" not in script:
+                continue
+            match = re.search(r"<<'PYEOF'\n(.*?)\n\s*PYEOF", script, re.S)
+            if match:
+                return match.group(1)
+    return None
+
+
+@pytest.mark.parametrize("path", _health_workflows(), ids=lambda p: p.name)
+def test_the_receipts_block_is_valid_python_at_column_zero(path):
+    body = _receipts_block(path)
+    assert body is not None, f"{path.name} has no receipts block"
+    assert not body.splitlines()[0].startswith(" "), (
+        "the block reaches python indented, which is a SyntaxError"
+    )
+    compile(body, "receipts", "exec")
+
+
+@pytest.mark.parametrize("path", _health_workflows(), ids=lambda p: p.name)
+def test_the_receipts_block_prints_counts_and_verdicts_only(path, tmp_path, capfd):
+    """Receipts carry marketTicker, stake, entryPrice and the source key. The
+    summary must carry none of them into a public Actions log."""
+    import json as _j
+    import subprocess
+    import sys as _sys
+
+    receipts = tmp_path / "r.json"
+    receipts.write_text(_j.dumps([
+        {
+            "duplicateStatus": "NEW", "betId": "abc123", "success": True,
+            "sourceBetKey": "kalshi:v1:deadbeef", "stake": 5.37, "entryPrice": 0.53,
+            "market": {"marketTicker": "KXMLBGAME-26SEP14NYYBOS-NYY", "side": "YES"},
+        },
+        {
+            "duplicateStatus": "CONFLICT", "betId": "def456", "success": False,
+            "sourceBetKey": "kalshi:v1:feedface", "stake": 1.23, "entryPrice": 0.11,
+            "market": {"marketTicker": "KXMLBGAME-26SEP14NYYBOS-BOS", "side": "NO"},
+        },
+    ]))
+    script = tmp_path / "block.py"
+    script.write_text(_receipts_block(path) + "\n")
+
+    result = subprocess.run(
+        [_sys.executable, str(script), str(receipts)],
+        capture_output=True, text=True, check=True,
+    )
+
+    assert "rows: 2" in result.stdout
+    assert "NEW: 1" in result.stdout
+    assert "CONFLICT: 1" in result.stdout
+    assert "failed rows: 1" in result.stdout
+
+    for secret in (
+        "KXMLB", "5.37", "0.53", "1.23", "0.11",
+        "kalshi:v1", "deadbeef", "feedface", "YES", "NO",
+    ):
+        assert secret not in result.stdout, f"the receipts summary leaked {secret!r}"
+
+
+@pytest.mark.parametrize("path", _health_workflows(), ids=lambda p: p.name)
+def test_the_receipts_block_survives_an_empty_receipts_file(path, tmp_path):
+    """An import that wrote nothing must not crash the summary and turn a
+    clean run red."""
+    import subprocess
+    import sys as _sys
+
+    receipts = tmp_path / "r.json"
+    receipts.write_text("[]")
+    script = tmp_path / "block.py"
+    script.write_text(_receipts_block(path) + "\n")
+
+    result = subprocess.run(
+        [_sys.executable, str(script), str(receipts)],
+        capture_output=True, text=True, check=True,
+    )
+
+    assert "rows: 0" in result.stdout
