@@ -1,0 +1,74 @@
+# Inspect the historical gap window and reconcile it. WRITES NOTHING.
+#
+# This answers "what did we miss between the owner's last completed accounting
+# and the production cutover". It is read-only by construction:
+#
+#   * no downstream write credential is present, so it CANNOT import;
+#   * the window's end is the production cutover structurally, so it cannot be
+#     pointed at production's range however it is dispatched;
+#   * the destination ledger is fetched over a PUBLIC unauthenticated clone.
+#
+# Only counts reach this log. The reconciliation verdicts are counts, and the
+# per-sport breakdown is a sport name and a number.
+name: Backfill window inspection
+
+on:
+  workflow_dispatch:
+    inputs:
+      since:
+        description: "Window start (RFC3339). The end is always the cutover."
+        required: false
+        type: string
+        default: "2026-09-11T00:00:00Z"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backfill-inspect
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    name: Inspect the gap window
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Refuse to run credentialed code from an untrusted ref
+        run: |
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::error::This credentialed workflow may only run from refs/heads/main (got ${GITHUB_REF})."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install router
+        run: python -m pip install --disable-pip-version-check --quiet .
+
+      - name: Fetch the MLB ledger (public, unauthenticated)
+        run: |
+          set -euo pipefail
+          git clone --quiet --depth 1 \
+            https://github.com/chmoses98/edge-finder-api "${RUNNER_TEMP}/mlb"
+          ledger="${RUNNER_TEMP}/mlb/data/edgelab/bets/bets.jsonl"
+          test -f "${ledger}"
+          echo "MLB ledger rows on disk: $(wc -l < "${ledger}")"
+          echo "MLB_LEDGER=${ledger}" >> "${GITHUB_ENV}"
+
+      - name: Inspect and reconcile
+        env:
+          KALSHI_API_KEY_ID: ${{ secrets.KALSHI_API_KEY_ID }}
+          KALSHI_PRIVATE_KEY: ${{ secrets.KALSHI_PRIVATE_KEY }}
+          SINCE: ${{ inputs.since }}
+        run: |
+          set -euo pipefail
+          python -m kalshi_router.cli backfill \
+            --since "${SINCE:-2026-09-11T00:00:00Z}" \
+            --ledger "MLB=${MLB_LEDGER}"

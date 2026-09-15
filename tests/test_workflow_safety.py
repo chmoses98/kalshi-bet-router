@@ -1175,3 +1175,46 @@ def test_no_command_in_the_delivery_step_cats_the_ledger(name, text):
     joined = text.replace("\\\n", " ")
     for forbidden in ("cat ${payload}", "cat \"${payload}\"", "jq . ", "head ", "tail "):
         assert forbidden not in joined, f"{name} would print a payload or ledger: {forbidden}"
+
+
+# ============ the backfill inspection writes nothing =========================
+
+BACKFILL_WORKFLOW = ROOT / ".github/workflows/backfill-inspect.yml"
+
+
+@pytest.fixture(scope="module")
+def backfill_inspect() -> dict:
+    return load(BACKFILL_WORKFLOW)
+
+
+@pytest.fixture(scope="module")
+def backfill_inspect_text() -> str:
+    return strip_comments(BACKFILL_WORKFLOW.read_text())
+
+
+def test_the_inspection_holds_no_downstream_credential():
+    """It answers a question. It must not be ABLE to act on the answer."""
+    assert DOWNSTREAM_SECRET not in BACKFILL_WORKFLOW.read_text()
+
+
+def test_the_inspection_cannot_be_pointed_past_the_cutover(backfill_inspect):
+    """There is a `since` input and deliberately no `until`.
+
+    A settable end is the one way this could quietly become a second
+    production path, reaching forward instead of back.
+    """
+    inputs = triggers(backfill_inspect)["workflow_dispatch"]["inputs"]
+    assert "since" in inputs
+    for forbidden in ("until", "end", "through", "to"):
+        assert forbidden not in inputs
+
+
+def test_the_inspection_never_pushes_or_commits(backfill_inspect_text):
+    for verb in ("git push", "git commit", "git add", "/pulls", "import_bet_batch"):
+        assert verb not in backfill_inspect_text
+
+
+def test_the_inspection_clones_the_ledger_without_a_credential(backfill_inspect_text):
+    assert "https://github.com/chmoses98/edge-finder-api" in backfill_inspect_text
+    for pattern in ("x-access-token", "credential.helper", "extraheader"):
+        assert pattern not in backfill_inspect_text

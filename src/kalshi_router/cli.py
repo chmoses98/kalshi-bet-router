@@ -141,6 +141,35 @@ def _add_series_probe_parser(sub) -> None:
     probe.set_defaults(show_sensitive_details=False, max_fills=None, page_limit=None)
 
 
+def _add_backfill_parser(sub) -> None:
+    backfill = sub.add_parser(
+        "backfill",
+        help="inspect a bounded PRE-CUTOVER window and reconcile it (writes nothing)",
+    )
+    backfill.add_argument(
+        "--since",
+        required=True,
+        metavar="RFC3339",
+        help=(
+            "Start of the window. The END is always the production cutover and "
+            "is not settable, so this cannot be pointed at production's range."
+        ),
+    )
+    backfill.add_argument(
+        "--ledger",
+        action="append",
+        default=[],
+        metavar="SPORT=PATH",
+        help=(
+            "A destination ledger to reconcile against, e.g. MLB=/path/bets.jsonl. "
+            "Repeatable. A sport with no ledger given is reported as "
+            "UNSUPPORTED_DESTINATION rather than assumed empty -- 'nothing to "
+            "compare against' and 'nothing there' are different answers."
+        ),
+    )
+    backfill.set_defaults(show_sensitive_details=False, max_fills=None, page_limit=None)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="kalshi-router",
@@ -243,6 +272,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_deliver_parser(sub)
     _add_series_probe_parser(sub)
+    _add_backfill_parser(sub)
     return parser
 
 
@@ -313,6 +343,67 @@ def _run_deliver(args, client, out, err) -> int:
     # without a human reading the report. One token, on its own line, never a
     # count and never a market.
     print(f"HEALTH={result.production.health.value}", file=out)
+    return EXIT_OK
+
+
+def _run_backfill(args, client, out, err) -> int:
+    """Inspect the gap window and reconcile it against the destinations.
+
+    Writes NOTHING. This command exists to answer "what did we miss", and the
+    answer has to be trustworthy before anything acts on it.
+    """
+    from .backfill import BACKFILL_IMPORT_BATCH_ID, BackfillWindow, reconcile
+    from .ledger_compare import read_ledger
+
+    try:
+        window = BackfillWindow(args.since)
+    except ValueError as exc:
+        print(f"backfill window: {exc}", file=err)
+        return EXIT_CONFIG
+
+    ledgers: dict[str, list] = {}
+    for spec in args.ledger:
+        sport, _, path = spec.partition("=")
+        if not sport or not path:
+            print(f"--ledger expects SPORT=PATH; got {spec!r}", file=err)
+            return EXIT_CONFIG
+        ledgers[sport.strip().upper()] = read_ledger(path)
+
+    try:
+        result = run_audit(
+            client,
+            max_fills=None,
+            full_history=True,
+            backfill_window=window,
+            now=Decimal(int(time.time())),
+        )
+    except KalshiRouterError as exc:
+        print(f"backfill inspection failed: {type(exc).__name__}: {exc}", file=err)
+        return EXIT_API
+
+    print(f"backfill window: {window.start_iso}  ->  {window.end_iso} (the cutover)", file=out)
+    print(f"import batch id: {BACKFILL_IMPORT_BATCH_ID}", file=out)
+    print("", file=out)
+    print(result.production.render(), file=out)
+
+    wagers = result.production_wagers
+    by_sport: dict[str, int] = {}
+    for wager in wagers:
+        by_sport[wager.sport] = by_sport.get(wager.sport, 0) + 1
+    print("", file=out)
+    print("reconstructed wagers by sport:", file=out)
+    for sport in sorted(by_sport) or []:
+        print(f"  {sport}: {by_sport[sport]}", file=out)
+    if not by_sport:
+        print("  none", file=out)
+
+    print("", file=out)
+    print(f"destination ledgers supplied: {sorted(ledgers) or 'none'}", file=out)
+    _importable, diagnostics = reconcile(wagers, ledgers, frozenset(ledgers))
+    print("", file=out)
+    print(diagnostics.render(), file=out)
+    print("", file=out)
+    print(result.transport.render(), file=out)
     return EXIT_OK
 
 
@@ -412,6 +503,9 @@ def main(argv: list[str] | None = None, stdout=None, stderr=None) -> int:
 
     if args.command == "series-probe":
         return _run_series_probe(client, out, err)
+
+    if args.command == "backfill":
+        return _run_backfill(args, client, out, err)
 
     try:
         result = run_audit(
