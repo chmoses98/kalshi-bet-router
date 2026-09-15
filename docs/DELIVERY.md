@@ -3,10 +3,20 @@
 What a batch is, what makes re-sending one safe, and the two decisions that are
 the owner's rather than the router's.
 
-`src/kalshi_router/destination.py` builds the payload. **It contains no
-transport** — no HTTP client, no git push, no dispatch — and a structural test
+> **Status, 2026-09-15.** Both blockers below are **RESOLVED** — the owner has
+> supplied the credential and settled the privacy question (Reading A). The
+> transport exists, MLB delivery runs on a 15-minute schedule, and the
+> operational record is [OPERATIONS.md](OPERATIONS.md). The blocker sections
+> are kept verbatim rather than deleted, because the reasoning is the record of
+> *why* the questions were the owner's and not the router's. Read them as
+> history, not as current state.
+
+`src/kalshi_router/destination.py` builds the payload. It holds no NETWORK
+reach — no HTTP client, no socket, no subprocess — and a structural test
 (parsing the module's AST, not grepping its prose) asserts it cannot acquire
-one. That is deliberate, and the rest of this document is why.
+one. It does now write the payload to a local file, which it did not when this
+document was first written; the transport that carries that file lives in
+`.github/workflows/deliver-wagers.yml` and runs the destination's own importer.
 
 ## The router must never write the ledger file
 
@@ -71,7 +81,7 @@ Until that exists there is nothing to test against, and shipping a writer that
 waits for a credential would put a loaded mechanism in a public repository for
 no benefit.
 
-## Blocker 2 — every destination repository is PUBLIC
+## Blocker 2 — every destination repository is PUBLIC *(RESOLVED: Reading A)*
 
 Checked, not assumed:
 
@@ -95,11 +105,11 @@ So the owner has already chosen to publish that ledger.
 That makes this a real decision rather than an obvious one, and it is not the
 router's to make:
 
-* **Reading A.** The privacy rule governs the router's own outputs — its
+* **Reading A.** ← **the owner chose this one.** The privacy rule governs the router's own outputs — its
   repository, its workflow files, its public Actions logs. Appending to a ledger
   the owner already publishes changes nothing about what is exposed, and routing
   there is the entire point of the system.
-* **Reading B.** The rule is absolute. Automatically publishing hundreds of
+* **Reading B.** *(not adopted)* The rule is absolute. Automatically publishing hundreds of
   additional wagers into a public repository is precisely what it forbids, and
   an existing 457 rows is a precedent, not a permission.
 
@@ -113,11 +123,16 @@ never print a payload, a row, a ticker or an amount. Only counts. That rule is
 already enforced structurally by the diagnostics types and their tests, and
 Phase H does not touch it.
 
-## What exists today
+## What exists today *(updated 2026-09-15)*
 
-* `build_batch(wagers)` — the importer payload, reproducible and idempotent.
-* `plan_delivery(wagers)` — counts per destination, and a repository name that
-  is already a public fact about the system.
+* `write_payloads(wagers, out_dir)` — one importer payload per destination.
+  Returns **counts, never rows**: a function that returned the rows would
+  eventually have them printed by one of its callers.
 * `DESTINATION_REPOS` — one entry. A sport absent from it is refused upstream by
   `WagerRefusal.NO_DESTINATION_IMPORTER`, never defaulted somewhere plausible.
-* No transport, by construction and by test.
+* No NETWORK reach in this module, by construction and by test. The transport is
+  a workflow, and it runs the destination's own importer rather than editing a
+  ledger file.
+
+See [OPERATIONS.md](OPERATIONS.md) for how it runs, what it has measured, and
+what it currently cannot do.
