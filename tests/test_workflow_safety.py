@@ -646,3 +646,56 @@ def test_recovery_sends_the_importers_receipts_to_dev_null(recover_text):
 
 def test_recovery_uploads_no_artifact(recover_text):
     assert "upload-artifact" not in recover_text
+
+
+# ============ Phase 13: the health signal reaches the log ====================
+
+
+def _health_workflows():
+    return [
+        p for p in workflow_files()
+        if "kalshi_router.cli deliver" in p.read_text()
+    ]
+
+
+def test_there_is_at_least_one_delivering_workflow():
+    assert _health_workflows()
+
+
+@pytest.mark.parametrize("path", _health_workflows(), ids=lambda p: p.name)
+def test_every_delivering_workflow_annotates_its_health(path):
+    text = strip_comments(path.read_text())
+    assert "HEALTH=" in text
+    for state in ("healthy_no_op", "delivered", "deferred", "not_routable", "blocked"):
+        assert state in text, f"{path.name} does not handle {state}"
+
+
+@pytest.mark.parametrize("path", _health_workflows(), ids=lambda p: p.name)
+def test_a_missing_health_state_is_itself_a_failure(path):
+    """A run that reports no health is not a healthy run."""
+    text = strip_comments(path.read_text())
+    assert "reported no health state" in text
+
+
+@pytest.mark.parametrize("path", _health_workflows(), ids=lambda p: p.name)
+def test_a_blocked_run_warns_rather_than_failing(path):
+    """A REFUSAL IS NOT A FAILURE.
+
+    BLOCKED means the system correctly refused a wager it cannot record.
+    Failing a scheduled job every 15 minutes for something only the owner can
+    fix would train them to ignore it.
+    """
+    text = strip_comments(path.read_text())
+    blocked_line = next(
+        line for line in text.splitlines()
+        if "BLOCKED --" in line
+    )
+    assert "::warning::" in blocked_line
+    assert "::error::" not in blocked_line
+
+
+@pytest.mark.parametrize("path", _health_workflows(), ids=lambda p: p.name)
+def test_the_health_token_never_carries_a_count_or_a_market(path):
+    """It is one word from a closed set, read out of the report by grep."""
+    text = strip_comments(path.read_text())
+    assert "grep -E '^HEALTH=' " in text

@@ -329,3 +329,123 @@ def test_the_source_key_of_a_recovered_order_is_unchanged_by_the_flag():
     )
     assert normal is not None and recovered is not None
     assert normal.source_key == recovered.source_key
+
+
+# ---------------------------------------------------------------------------
+# Phase 13: the health signal.
+#
+# "HEALTHY NO-OP: False" reads like bad news whether the cause is a wager
+# pending settlement or a wager that can never be recorded. Those call for
+# opposite responses -- wait, and act -- so they are different states.
+# ---------------------------------------------------------------------------
+
+
+def test_every_refusal_is_classified_exactly_once():
+    """A refusal in no bucket would be invisible to the health signal; one in
+    two would be counted twice."""
+    from kalshi_router.production import (
+        BY_DESIGN_REFUSALS,
+        NEEDS_ATTENTION_REFUSALS,
+        SELF_RESOLVING_REFUSALS,
+        ProductionRefusal,
+    )
+
+    buckets = [SELF_RESOLVING_REFUSALS, BY_DESIGN_REFUSALS, NEEDS_ATTENTION_REFUSALS]
+    union = set().union(*buckets)
+    assert union == set(ProductionRefusal)
+    assert sum(len(b) for b in buckets) == len(union), "a refusal is in two buckets"
+
+
+def test_a_new_refusal_would_default_to_needing_attention():
+    """NEEDS_ATTENTION is derived by subtraction, not listed.
+
+    So a refusal added later is treated as needing a human until someone
+    deliberately says otherwise -- the safe direction for a list whose job is
+    to decide what gets ignored.
+    """
+    from kalshi_router.production import (
+        BY_DESIGN_REFUSALS,
+        NEEDS_ATTENTION_REFUSALS,
+        ProductionRefusal,
+        SELF_RESOLVING_REFUSALS,
+    )
+
+    explicitly_excused = SELF_RESOLVING_REFUSALS | BY_DESIGN_REFUSALS
+    for refusal in ProductionRefusal:
+        if refusal not in explicitly_excused:
+            assert refusal in NEEDS_ATTENTION_REFUSALS, refusal
+
+
+def _diagnostics(**kwargs):
+    from kalshi_router.production import ProductionDiagnostics
+
+    return ProductionDiagnostics(**kwargs)
+
+
+def test_a_quiet_account_is_a_healthy_no_op():
+    from kalshi_router.production import HealthState
+
+    assert _diagnostics(orders_considered=1755, refused_before_cutover=1755).health is (
+        HealthState.HEALTHY_NO_OP
+    )
+
+
+def test_an_order_waiting_to_finalise_is_deferred_not_blocked():
+    from kalshi_router.production import HealthState
+
+    health = _diagnostics(orders_after_cutover=1, refused_order_not_final=1).health
+    assert health is HealthState.DEFERRED
+
+
+def test_an_unclassifiable_market_blocks_because_waiting_will_not_help():
+    from kalshi_router.production import HealthState
+
+    health = _diagnostics(orders_after_cutover=1, refused_sport_unresolved=1).health
+    assert health is HealthState.BLOCKED
+
+
+def test_a_sport_with_no_importer_is_not_routable_rather_than_broken():
+    """The other three repositories mechanically refuse to hold a wager. That
+    is their decision, not this system's failure."""
+    from kalshi_router.production import HealthState
+
+    health = _diagnostics(
+        orders_after_cutover=1, refused_no_destination_importer=1
+    ).health
+    assert health is HealthState.NOT_ROUTABLE
+
+
+def test_a_delivered_wager_reports_delivered():
+    from kalshi_router.production import HealthState
+
+    assert _diagnostics(orders_after_cutover=1, eligible=1).health is HealthState.DELIVERED
+
+
+def test_blocked_outranks_delivered_because_only_one_of_them_needs_anyone():
+    """A run that delivered one wager and cannot record another is BLOCKED."""
+    from kalshi_router.production import HealthState
+
+    health = _diagnostics(
+        orders_after_cutover=2, eligible=1, refused_fees_incomplete=1
+    ).health
+    assert health is HealthState.BLOCKED
+
+
+def test_blocked_outranks_deferred():
+    from kalshi_router.production import HealthState
+
+    health = _diagnostics(
+        orders_after_cutover=2, refused_order_not_final=1, refused_sport_unresolved=1
+    ).health
+    assert health is HealthState.BLOCKED
+
+
+def test_pre_cutover_refusals_never_count_as_blocked():
+    """1755 historical orders must not read as 1755 problems."""
+    assert _diagnostics(refused_before_cutover=1755).blocked_orders == 0
+    assert _diagnostics(refused_before_cutover=1755).deferred_orders == 0
+
+
+def test_the_health_state_is_rendered():
+    rendered = _diagnostics(orders_after_cutover=1, refused_sport_unresolved=1).render()
+    assert "HEALTH: blocked" in rendered

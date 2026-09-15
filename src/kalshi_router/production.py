@@ -84,6 +84,42 @@ def production_source_key(
     return f"{SOURCE_KEY_VERSION}:{digest}"
 
 
+# ------------------------------------------------------------- the health signal
+
+
+class HealthState(str, Enum):
+    """What one production run means, in one word a human can act on.
+
+    The mission asked for three states to stay distinguishable. In practice
+    there are five, because "nothing was delivered" collapses four genuinely
+    different situations and collapsing them is what makes an alert useless:
+
+    * a quiet account (nothing to do),
+    * activity this system is DESIGNED never to route (not a fault),
+    * activity held by a gate that will open on its own (wait),
+    * activity this system cannot record and will not fix by waiting (act).
+
+    A boolean cannot say which, and "HEALTHY NO-OP: False" reads like bad news
+    whether the cause is a wager pending settlement or a wager permanently
+    unrecordable.
+    """
+
+    #: No post-cutover orders at all. Nothing to do, nothing wrong.
+    HEALTHY_NO_OP = "healthy_no_op"
+    #: At least one wager was eligible and handed to a destination.
+    DELIVERED = "delivered"
+    #: Post-cutover orders exist; every one is held by a gate that opens on its
+    #: own. The next run is the fix. No action.
+    DEFERRED = "deferred"
+    #: Post-cutover orders exist and every one is terminal BY DESIGN -- history,
+    #: or a sport with no importer. Correct behaviour, not a fault.
+    NOT_ROUTABLE = "not_routable"
+    #: At least one post-cutover order is a wager the owner really made that
+    #: this system cannot record, and waiting will not change that. This is the
+    #: only state that asks for a human.
+    BLOCKED = "blocked"
+
+
 # ------------------------------------------------------------ production cutover
 
 #: The moment production recording begins, as a fixed instant.
@@ -330,9 +366,46 @@ class ProductionDiagnostics:
         """Nothing to do, and nothing wrong with that.
 
         Distinct from a deferral: a post-cutover order held back by a gate is
-        the system working, but it is not nothing.
+        the system working, but it is not nothing. Kept as its own property
+        because it is the one question with a yes/no answer; everything else
+        goes through :attr:`health`.
         """
         return self.orders_after_cutover == 0
+
+    @property
+    def health(self) -> HealthState:
+        """One word for what this run means. See :class:`HealthState`.
+
+        Ordered by ATTENTION REQUIRED, not by severity of outcome: a run that
+        delivered one wager and cannot record another is BLOCKED, because the
+        delivery needs nothing from anyone and the refusal does.
+        """
+        if self.blocked_orders:
+            return HealthState.BLOCKED
+        if self.deferred_orders:
+            return HealthState.DEFERRED
+        if self.eligible:
+            return HealthState.DELIVERED
+        if self.orders_after_cutover:
+            return HealthState.NOT_ROUTABLE
+        return HealthState.HEALTHY_NO_OP
+
+    @property
+    def deferred_orders(self) -> int:
+        """Post-cutover orders held by a gate that opens on its own."""
+        return sum(
+            getattr(self, _REFUSAL_COUNTERS[refusal])
+            for refusal in SELF_RESOLVING_REFUSALS
+        )
+
+    @property
+    def blocked_orders(self) -> int:
+        """Post-cutover wagers this system cannot record, and waiting will not
+        change that. The only number that asks for a human."""
+        return sum(
+            getattr(self, _REFUSAL_COUNTERS[refusal])
+            for refusal in NEEDS_ATTENTION_REFUSALS
+        )
 
     def render(self) -> str:
         lines = [
@@ -378,9 +451,39 @@ class ProductionDiagnostics:
             f"    insufficient authoritative metadata: {self.unresolved_insufficient}",
             f"    reason unavailable: {self.unresolved_reason_unavailable}",
             "",
-            f"  HEALTHY NO-OP: {self.is_healthy_no_op}",
+            f"  deferred (a gate that opens on its own): {self.deferred_orders}",
+            f"  BLOCKED (cannot be recorded, and waiting will not help): "
+            f"{self.blocked_orders}",
+            f"  HEALTH: {self.health.value}",
         ]
         return "\n".join(lines)
+
+
+#: Refusals that the NEXT RUN can clear without anyone doing anything.
+#:
+#: Exactly one qualifies today: an order that is not final yet becomes final
+#: when its market closes or its stabilization window elapses. Nothing else on
+#: this list is a matter of waiting.
+SELF_RESOLVING_REFUSALS = frozenset({ProductionRefusal.ORDER_NOT_FINAL})
+
+#: Refusals that are CORRECT AND PERMANENT, and therefore not a fault.
+#:
+#: A pre-cutover order is history and was never going to be imported. A sport
+#: with no destination importer is a design fact the owner already knows -- the
+#: other three repositories mechanically refuse to hold a wager, which is their
+#: decision, not this system's failure.
+BY_DESIGN_REFUSALS = frozenset({
+    ProductionRefusal.BEFORE_CUTOVER,
+    ProductionRefusal.NO_DESTINATION_IMPORTER,
+})
+
+#: Everything else: a wager the owner really made that this system cannot
+#: record. Derived by SUBTRACTION rather than listed, so a refusal added later
+#: is treated as needing attention until someone deliberately says otherwise --
+#: the safe direction for a list whose job is to decide what gets ignored.
+NEEDS_ATTENTION_REFUSALS = (
+    frozenset(ProductionRefusal) - SELF_RESOLVING_REFUSALS - BY_DESIGN_REFUSALS
+)
 
 
 _REFUSAL_COUNTERS = {
