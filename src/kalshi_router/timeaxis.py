@@ -20,7 +20,7 @@ package that decision is always fail-closed.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
@@ -59,3 +59,31 @@ def seconds_to_days(span: Decimal) -> int:
     safe for a public log in a way an absolute timestamp is not.
     """
     return int(span / Decimal(86400))
+
+
+def seconds_to_rfc3339(seconds: Decimal | None) -> str | None:
+    """Render exact epoch seconds back as an RFC3339 UTC instant, or ``None``.
+
+    The inverse of :func:`parse_rfc3339_seconds`, needed because the NFL and CFB
+    destinations record an ``executed_at`` string while this package carries
+    every instant as exact epoch seconds.
+
+    ``None`` in, ``None`` out -- an unreadable execution time is not "now" and
+    is not the epoch, and a destination that requires the field should refuse
+    the row rather than receive a fabricated instant.
+
+    Always UTC with a trailing ``Z``, because that is what Kalshi reports and
+    what both destinations store; a local rendering would make the recorded
+    instant depend on which machine ran the import.
+
+    Sub-second precision is TRUNCATED, not rounded, and never routed through a
+    float: this module exists because a float epoch second cannot represent
+    every RFC3339 instant exactly. The destinations record seconds, so the
+    remainder has nowhere to go -- and truncating is the direction that cannot
+    move an execution into a later second than the one it happened in.
+    """
+    if seconds is None:
+        return None
+    whole = int(seconds // 1)
+    moment = EPOCH + timedelta(seconds=whole)
+    return moment.strftime("%Y-%m-%dT%H:%M:%SZ")

@@ -31,7 +31,7 @@ from decimal import Decimal
 from enum import Enum
 
 from .accounting.execution import OrderExecution
-from .timeaxis import parse_rfc3339_seconds
+from .timeaxis import parse_rfc3339_seconds, seconds_to_rfc3339
 
 # --------------------------------------------------------------- source identity
 
@@ -747,3 +747,104 @@ def execution_economics(wager: ProductionWager) -> dict:
         # inventing a confidence of its own.
         "economicsConfidence": "HIGH",
     }
+
+
+# --------------------------------------------- the other destinations' shapes
+#
+# EACH DESTINATION HAS ITS OWN VOCABULARY, and they genuinely differ. The MLB
+# ledger speaks camelCase and calls the quantity-weighted price `entryPrice`
+# with the economics nested under `executionEconomics`. The NFL kind speaks
+# snake_case and calls it `actual_price`. The CFB ledger also speaks snake_case
+# but calls it `execution_price`. Emitting one shape and hoping is exactly how
+# the MLB economics silently became null, so each destination gets a function
+# written against ITS schema.
+
+
+def to_nfl_import_row(wager: ProductionWager, import_batch_id: str) -> dict:
+    """One wager in the NFL repository's ``imported_wager.v1`` shape.
+
+    ABSENT ON PURPOSE -- `imported_wager_id`. That is the destination's own
+    identity, and this router does not mint destination identities: it omits
+    MLB's `betId` for the same reason. The NFL importer derives it
+    deterministically from `source_bet_key`, so a re-run lands on the same
+    record rather than a second one.
+
+    ABSENT ON PURPOSE -- `season` and `week`. The NFL record requires both, and
+    this router knows only the contest's date. Turning a date into an NFL week
+    means consulting the NFL calendar, which is the destination's own knowledge
+    and not evidence this router holds. `nfl_edge.data.nfl_calendar` resolves
+    both from the REAL schedule at import time. A week inferred here from a date
+    would be a guess wearing a fact's clothes, and the `contracts` field that
+    landed null in the MLB ledger is what that costs.
+
+    ABSENT ON PURPOSE -- every recommendation-provenance field. A Kalshi
+    execution proves the owner placed this bet; it proves nothing about what
+    recommended it. The NFL record refuses those fields outright, so sending one
+    would fail the import rather than quietly assert model backing.
+    """
+    return {
+        "source_bet_key": wager.source_key,
+        "import_batch_id": import_batch_id,
+        "entry_method": "IMPORTED_RECEIPT",
+        "game_date": wager.game_date,
+        "market_ticker": wager.market_ticker,
+        "side": wager.side,
+        "executed_at": seconds_to_rfc3339(wager.first_execution_time),
+        "contracts": float(wager.contracts),
+        # NFL calls the quantity-weighted average `actual_price`, and its
+        # docstring is explicit that it is an average over the ORDER's own
+        # fills rather than a stored guess at a price nobody paid.
+        "actual_price": float(wager.vwap_price),
+        "stake": float(wager.stake),
+        "fees_paid": float(wager.total_fees),
+        # Read from the exchange's own fills, so not estimated. The NFL record
+        # refuses a net_profit_loss stated from estimated fees, and this is the
+        # flag that distinguishes the two.
+        "fees_are_estimated": False,
+        "fee_state": "ACTUAL_API_FILL",
+        "venue": "kalshi",
+    }
+
+
+def to_cfb_import_row(wager: ProductionWager, import_batch_id: str) -> dict:
+    """One wager in the CFB repository's ``cfb_accounted_wager.v1`` shape.
+
+    ABSENT ON PURPOSE -- `wager_id`, for the same reason `imported_wager_id` is
+    absent above: it is the destination's identity to mint, deterministically
+    from `source_bet_key`.
+
+    `season` and `week` are OPTIONAL in the CFB record, so they are simply not
+    sent. Optional is not an invitation to fill something in.
+
+    RECORDING IS NOT ENDORSING. The CFB model is research-only and stays that
+    way; this row says the owner placed a College Football bet, and says nothing
+    about whether anything recommended it. The CFB ledger refuses every
+    model-provenance field outright, including `model_supported=False`, which
+    still asserts the model had an opinion.
+    """
+    return {
+        "source_bet_key": wager.source_key,
+        "import_batch_id": import_batch_id,
+        "entry_method": "IMPORTED_RECEIPT",
+        "game_date": wager.game_date,
+        "market_ticker": wager.market_ticker,
+        "side": wager.side,
+        "executed_at": seconds_to_rfc3339(wager.first_execution_time),
+        "contracts": float(wager.contracts),
+        # CFB calls it `execution_price`; NFL calls the same number
+        # `actual_price`. Same quantity-weighted average, different vocabulary.
+        "execution_price": float(wager.vwap_price),
+        "stake": float(wager.stake),
+        "fees_paid": float(wager.total_fees),
+        "fees_are_estimated": False,
+        "venue": "kalshi",
+    }
+
+
+#: Which emitter speaks each destination's language. A sport absent from this
+#: map has no payload shape and must be refused rather than sent in some other
+#: sport's vocabulary.
+ROW_BUILDERS = {
+    "NFL": to_nfl_import_row,
+    "CFB": to_cfb_import_row,
+}
