@@ -471,3 +471,46 @@ def evaluate_production(
         diagnostics.eligible += 1
 
     return eligible, diagnostics
+
+
+# ------------------------------------------------------- the destination row
+
+def to_import_row(wager: ProductionWager) -> dict:
+    """The importer's row shape for one production wager.
+
+    Fields the IMPORTER owns -- betId, validationStatus, provenance, createdAt
+    -- are absent. A router that emitted them would be inventing values the
+    destination produces.
+
+    Fields that would claim MODEL PROVENANCE are absent too, and that absence is
+    deliberate. A Kalshi execution proves the owner placed this bet. It does not
+    prove anything recommended it, so recommendationId, modelEvaluationId,
+    productionRunId and modelFairProbability are all left unset rather than
+    filled in with something plausible.
+
+    Money crosses to float here because that is what the destination schema
+    declares. Every value was computed in Decimal and is converted once, at this
+    boundary; no arithmetic happens after it.
+    """
+    return {
+        "sourceBetKey": wager.source_key,
+        "gameDate": wager.game_date,
+        "marketTicker": wager.market_ticker,
+        "side": wager.side,
+        "stake": float(wager.stake),
+        "entryPrice": float(wager.vwap_price),
+        "contracts": float(wager.contracts),
+        "contractCost": float(wager.vwap_price * wager.contracts),
+        "totalFees": float(wager.total_fees),
+        "actualCashConsumed": float(wager.stake),
+        "status": "pending",
+        "executionStatus": "HELD_TO_SETTLEMENT",
+        # The fees are the exchange's own, read from its fills. Nothing here is
+        # reconstructed from a fee schedule, which is what the lower tiers of
+        # these enums mean.
+        "feeStatus": "ACTUAL_API_FILL",
+        "economicsSource": "EXACT_API_EXECUTION",
+        "source": "OTHER",
+        "entryMethod": "IMPORTED_RECEIPT",
+        "trackingType": "REAL",
+    }

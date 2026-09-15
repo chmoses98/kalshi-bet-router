@@ -45,6 +45,38 @@ activity. Do not paste it into an issue, a pull request, a chat, or any log.
 """.strip()
 
 
+def _add_deliver_parser(sub) -> None:
+    deliver = sub.add_parser(
+        "deliver",
+        help="write the importer payload for every eligible wager (counts to stdout, rows to files)",
+    )
+    deliver.add_argument(
+        "--out-dir",
+        required=True,
+        help=(
+            "Directory to write one payload per destination sport. The payload "
+            "carries market, side, stake, contracts, price and fees, so it goes "
+            "to a file and never to stdout."
+        ),
+    )
+    deliver.add_argument(
+        "--page-limit", type=int, default=None, help="rows per API page"
+    )
+    # The deliver path never renders a wager, so the sensitive-details mode is
+    # not merely unset here -- it does not exist. Defaulted so the shared
+    # credential setup in main() can read it uniformly.
+    deliver.set_defaults(show_sensitive_details=False, max_fills=None)
+    deliver.add_argument(
+        "--allow-stabilization",
+        action="store_true",
+        help=(
+            "Treat an order with no new fill for the stabilization window as "
+            "final, even while its market is open. Supported by measurement: "
+            "every order in this account's history filled within one second."
+        ),
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="kalshi-router",
@@ -128,6 +160,7 @@ def build_parser() -> argparse.ArgumentParser:
             "run in CI. Never use this where the output could be captured."
         ),
     )
+    _add_deliver_parser(sub)
     return parser
 
 
@@ -156,6 +189,40 @@ def render_sensitive(result: AuditResult) -> str:
     return "\n".join(lines)
 
 
+def _run_deliver(args, client, out, err) -> int:
+    """Build the payload for every eligible wager and write it to disk.
+
+    Prints COUNTS. The rows go to files, because the rows are the sensitive
+    thing this whole system handles and a public Actions log is not where they
+    belong -- the destination ledger the owner chose to publish is.
+    """
+    from .destination import ROUTER_IMPORT_BATCH_ID, write_payloads
+
+    try:
+        result = run_audit(
+            client,
+            max_fills=None,
+            full_history=True,
+            production=True,
+            now=Decimal(int(time.time())),
+            allow_stabilization=args.allow_stabilization,
+        )
+    except KalshiRouterError as exc:
+        print(f"delivery failed: {type(exc).__name__}: {exc}", file=err)
+        return EXIT_API
+
+    print(result.production.render(), file=out)
+    counts = write_payloads(result.production_wagers, args.out_dir)
+    print("", file=out)
+    print("payloads written (rows per destination; rows are NOT printed):", file=out)
+    if not counts:
+        print("  none -- nothing eligible", file=out)
+    for sport, rows in sorted(counts.items()):
+        print(f"  {sport}: {rows}", file=out)
+    print(f"import batch id: {ROUTER_IMPORT_BATCH_ID}", file=out)
+    return EXIT_OK
+
+
 def main(argv: list[str] | None = None, stdout=None, stderr=None) -> int:
     out = stdout if stdout is not None else sys.stdout
     err = stderr if stderr is not None else sys.stderr
@@ -181,6 +248,9 @@ def main(argv: list[str] | None = None, stdout=None, stderr=None) -> int:
         return EXIT_CONFIG
 
     client = KalshiReadOnlyClient(signer=signer, config=config)
+
+    if args.command == "deliver":
+        return _run_deliver(args, client, out, err)
 
     try:
         result = run_audit(

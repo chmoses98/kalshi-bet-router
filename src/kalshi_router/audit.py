@@ -108,6 +108,9 @@ class AuditResult:
     finality: FinalityEvidence = field(default_factory=FinalityEvidence)
     #: Which orders would actually be delivered, and why the rest would not.
     production: ProductionDiagnostics = field(default_factory=ProductionDiagnostics)
+    #: SENSITIVE: the eligible wagers themselves. Written to a payload file for
+    #: the destination importer and never rendered.
+    production_wagers: tuple = ()
     details: tuple[SensitiveDetail, ...] = ()
     _classifications: dict[str, Classification] = field(default_factory=dict, repr=False)
 
@@ -181,6 +184,7 @@ def run_audit(
     shadow_wagers: bool = False,
     production: bool = False,
     now: "Decimal | None" = None,
+    allow_stabilization: bool = False,
 ) -> AuditResult:
     """Run one complete Phase 0.1 audit.
 
@@ -443,9 +447,10 @@ def run_audit(
     # handful the owner has bet on since the cutover, so it can afford to
     # resolve every one of them and never has to skip a candidate for budget.
     production_diagnostics = ProductionDiagnostics()
+    production_wagers: list = []
     if production and replay is not None:
-        production_diagnostics = _evaluate_production(
-            client, resolver, replay, taxonomy, now
+        production_wagers, production_diagnostics = _evaluate_production(
+            client, resolver, replay, taxonomy, now, allow_stabilization
         )
 
     finality_evidence = (
@@ -459,6 +464,7 @@ def run_audit(
         wagers=wager_diagnostics,
         finality=finality_evidence,
         production=production_diagnostics,
+        production_wagers=tuple(production_wagers),
         accounting=accounting,
         coverage=coverage,
         history=history_evidence,
@@ -645,7 +651,7 @@ def _probe_settlement_archive(
         coverage.archive_first_page_rows = len(rows)
 
 
-def _evaluate_production(client, resolver, replay, taxonomy, now):
+def _evaluate_production(client, resolver, replay, taxonomy, now, allow_stabilization=False):
     """Apply the production filter, resolving metadata only where it matters.
 
     Every gate but the cutover needs metadata, and the cutover needs none -- so
@@ -678,15 +684,15 @@ def _evaluate_production(client, resolver, replay, taxonomy, now):
             statuses[ticker] = raw_status
 
     destinations = frozenset(sport.value for sport in DESTINATION_REPOS)
-    _wagers, diagnostics = evaluate_production(
+    return evaluate_production(
         replay.orders.values(),
         sports,
         game_dates,
         statuses,
         now if now is not None else Decimal(0),
         destinations,
+        allow_stabilization,
     )
-    return diagnostics
 
 
 def _classification_order(tickers: list[str], replay) -> list[str]:
