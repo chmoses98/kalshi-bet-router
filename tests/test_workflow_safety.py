@@ -699,3 +699,22 @@ def test_the_health_token_never_carries_a_count_or_a_market(path):
     """It is one word from a closed set, read out of the report by grep."""
     text = strip_comments(path.read_text())
     assert "grep -E '^HEALTH=' " in text
+
+
+@pytest.mark.parametrize("path", _health_workflows(), ids=lambda p: p.name)
+def test_only_the_health_annotation_may_claim_a_health_verdict(path):
+    """Run 3 printed "HEALTHY NO-OP" and "HEALTH: blocked" in the same log.
+
+    Both came from the same job. The delivery step hardcoded the first whenever
+    no payload file existed, but "no payload" can mean a quiet account OR a
+    wager this system refused to record, and that step cannot tell them apart.
+    The health annotation can. So the verdict words belong to it alone.
+    """
+    text = strip_comments(path.read_text())
+
+    verdicts = ("HEALTHY NO-OP", "BLOCKED", "DEFERRED", "NOT ROUTABLE", "DELIVERED")
+    for line in text.splitlines():
+        if any(verdict in line for verdict in verdicts):
+            assert "::notice::" in line or "::warning::" in line, (
+                f"{path.name} states a health verdict outside the annotation: {line.strip()}"
+            )

@@ -25,6 +25,7 @@ from .classify import (
     measure_competition_collisions,
 )
 from .client import KalshiReadOnlyClient, WalkStats
+from .http import TransportTelemetry
 from .coverage import SettlementCoverage, build_settlement_coverage
 from .errors import HttpStatusError, KalshiRouterError, SchemaError
 from .finality import FinalityEvidence, measure_finality
@@ -99,6 +100,8 @@ class AuditResult:
     coverage: SchemaCoverage = field(default_factory=SchemaCoverage)
     #: Replay-versus-exchange measurement.  Empty unless explicitly requested.
     reconciliation: ReconciliationReport | None = None
+    #: What the run's retries cost. Counts and seconds only.
+    transport: TransportTelemetry = field(default_factory=TransportTelemetry)
     #: What kind of ambiguity the taxonomy's competition collisions are.
     #: Measured, never acted on: it changes no verdict.
     collisions: CollisionStructure = field(default_factory=CollisionStructure)
@@ -490,6 +493,7 @@ def run_audit(
     return AuditResult(
         report=report,
         collisions=measure_competition_collisions(taxonomy),
+        transport=client.telemetry,
         wagers=wager_diagnostics,
         ledger_comparison=ledger_comparison,
         finality=finality_evidence,
