@@ -349,17 +349,22 @@ jobs:
             # still committed and proposed. Nothing is lost and nothing is
             # hidden.
             #
-            # MLB is deliberately different. `import_bet_batch.py` is that
-            # repository's own tool and this workflow does not know whether a
-            # non-zero exit leaves a partial write behind, so its failure still
-            # stops that destination. Guessing the safe behaviour of someone
-            # else's importer is not a thing to do with the owner's ledger.
+            # MLB IS NO LONGER AN EXCEPTION, AND THE CARVE-OUT WAS A GUESS.
+            #
+            # This once read "this workflow does not know whether a non-zero
+            # exit leaves a partial write behind", and stopped the MLB
+            # destination on any refusal. The answer was in the importer's own
+            # docstring the whole time: "1 if any row failed ... the full
+            # per-row receipt list is still always printed/written so a
+            # partially-successful batch is never silently lossy." Rows are
+            # written one at a time in process_row.
+            #
+            # That guess cost a production delivery on 2026-09-16: 16 NEW rows
+            # discarded alongside 1 CONFLICT. All three destinations now follow
+            # the same rule, for the same documented reason.
             if [ "${import_status}" -ne 0 ]; then
-              echo "::error::${sport}: the destination importer refused at least one row."
+              echo "::error::${sport}: the destination importer refused at least one row. Rows it DID write are still being delivered below."
               failures=$((failures + 1))
-              if [ "${sport}" = "MLB" ]; then
-                continue
-              fi
             fi
 
             if [ -z "$(git -C "${work}" status --porcelain)" ]; then
