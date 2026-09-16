@@ -176,14 +176,40 @@ jobs:
           print(f"  failed rows: {sum(1 for r in rows if not r.get('success'))}")
           PYEOF
 
+            # A REFUSED ROW MUST NEVER COST THE ROWS THAT SUCCEEDED.
+            #
+            # `import_bet_batch.py` states its own contract, and it is not
+            # ambiguous: "0 if every row wrote successfully (NEW/DUPLICATE_NOOP/
+            # CORRECTED); 1 if any row failed ... the full per-row receipt list
+            # is still always printed/written so a partially-successful batch is
+            # never silently lossy." Rows are persisted ONE AT A TIME inside
+            # process_row via write_placed_bet, so a non-zero exit means A ROW
+            # FAILED -- never NOTHING WAS WRITTEN.
+            #
+            # This loop used to `continue` here, discarding the whole clone. On
+            # 2026-09-16 a scheduled run built 17 eligible MLB wagers, the
+            # importer wrote 16 as NEW and refused 1 as CONFLICT, and all 16
+            # were thrown away: no commit, no branch, no pull request -- and a
+            # postmortem the next morning that could not see the night's bets.
+            #
+            # So the failure is COUNTED (the job still ends red, and the refusal
+            # is annotated below) and whatever the importer DID write is still
+            # committed and proposed. Those are two separate decisions and both
+            # are made on purpose: a partial failure must not become a quiet
+            # success, and it must not cost valid rows either.
+            partial=0
             if [ "${import_status}" -ne 0 ]; then
-              echo "::error::${sport}: the destination importer refused at least one row."
+              echo "::error::${sport}: the destination importer refused at least one row. Rows it DID write are still being delivered below."
               failures=$((failures + 1))
-              continue
+              partial=1
             fi
 
             if [ -z "$(git -C "${work}" status --porcelain)" ]; then
-              echo "  no ledger change -- every row was already imported (no-op)."
+              if [ "${partial}" -eq 1 ]; then
+                echo "  the importer refused row(s) and wrote nothing; there is nothing to deliver."
+              else
+                echo "  no ledger change -- every row was already imported (no-op)."
+              fi
               continue
             fi
 
@@ -305,6 +331,14 @@ jobs:
                 failures=$((failures + 1))
                 continue ;;
             esac
+            # A PARTIAL DELIVERY MUST NOT READ LIKE A CLEAN ONE. The rows that
+            # were written are on the branch and in the pull request above; the
+            # refusal is an error annotation and a job-summary line, so it
+            # cannot disappear behind a green-looking push.
+            if [ "${partial}" -eq 1 ]; then
+              echo "::warning::${sport}: DELIVERED PARTIALLY -- the rows above were written and proposed, and at least one row was refused. See the receipts counts."
+              echo "${sport}: PARTIAL -- delivered what the importer wrote; at least one row refused" >> "${GITHUB_STEP_SUMMARY}"
+            fi
           done
 
           echo ""

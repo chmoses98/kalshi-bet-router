@@ -1655,25 +1655,79 @@ def test_each_destinations_existing_row_count_reaches_the_log(backfill_text):
         assert f"{sport} ledger rows" in backfill_text
 
 
-def test_a_refused_row_does_not_cost_the_rows_that_succeeded(backfill_text):
-    """One wager whose week cannot be resolved is one refusal. The other
-    twenty-three are already written into the working tree.
+def _destination_importer_workflows():
+    """Every workflow that runs a destination's own importer and can push.
 
-    Skipping the commit would throw all of them away over one bad row -- and
-    would keep doing it on every re-run for as long as that row stayed
-    unfixable, so the delivery could never complete. The failure is COUNTED so
-    the job still exits non-zero; the accepted rows are still proposed.
+    Enumerated from the directory rather than named, so a delivery workflow
+    added later is covered the day it is added.
     """
-    lines = backfill_text.splitlines()
-    refusal = [i for i, line in enumerate(lines) if "refused at least one row" in line]
-    assert refusal, "the refusal branch is gone"
-    branch = "\n".join(lines[refusal[0]:refusal[0] + 6])
+    return [
+        (p.name, strip_comments(p.read_text()))
+        for p in workflow_files()
+        if "import_bet_batch.py" in p.read_text() or "import_routed_wagers.py" in p.read_text()
+    ]
 
-    # Abandoning the destination is reachable for MLB ONLY, and reaching it
-    # requires naming MLB outright -- a destination added later cannot inherit
-    # the bail-out by accident.
-    assert 'if [ "${sport}" = "MLB" ]; then' in branch, branch
-    assert "continue" in branch, branch
+
+def test_there_is_at_least_one_destination_importer_workflow():
+    """Guards the enumeration below against silently testing nothing."""
+    assert _destination_importer_workflows()
+
+
+@pytest.mark.parametrize(
+    "name,text", _destination_importer_workflows(),
+    ids=lambda v: v if isinstance(v, str) and len(v) < 40 else "",
+)
+def test_a_refused_row_does_not_cost_the_rows_that_succeeded(name, text):
+    """THE 2026-09-16 PRODUCTION INCIDENT, AS A RULE.
+
+    A scheduled run built 17 eligible MLB wagers. The destination importer
+    wrote 16 as NEW and refused 1 as CONFLICT, exiting 1. The delivery loop
+    read that exit code, `continue`d, and discarded the entire clone -- all 16
+    successful canonical writes included. No commit, no branch, no pull
+    request, and a postmortem the next morning that could not see the night's
+    bets.
+
+    `import_bet_batch.py` documents the contract the loop was violating: rows
+    are written one at a time, and a non-zero exit means A ROW FAILED, never
+    NOTHING WAS WRITTEN. So no delivery workflow may abandon a destination on
+    a refusal -- it counts the failure and delivers what was written.
+
+    Checked on EVERY workflow that runs a destination importer, because the
+    defect was fixed in one of them and left in the other two.
+    """
+    lines = text.splitlines()
+    refusal = [i for i, line in enumerate(lines) if "refused at least one row" in line]
+    assert refusal, f"{name}: the refusal branch is gone"
+
+    for index in refusal:
+        # The branch runs until its closing `fi` at the same indentation.
+        opening = next(
+            i for i in range(index, -1, -1) if lines[i].strip().startswith("if [")
+        )
+        indent = len(lines[opening]) - len(lines[opening].lstrip())
+        closing = next(
+            i for i in range(index, len(lines))
+            if lines[i].strip() == "fi" and (len(lines[i]) - len(lines[i].lstrip())) == indent
+        )
+        branch = "\n".join(lines[opening:closing + 1])
+
+        assert "failures=$((failures + 1))" in branch, f"{name}: a refusal is not counted:\n{branch}"
+        assert "continue" not in branch, (
+            f"{name}: a refusal abandons the destination, discarding rows the "
+            f"importer already wrote:\n{branch}"
+        )
+
+
+@pytest.mark.parametrize(
+    "name,text", _destination_importer_workflows(),
+    ids=lambda v: v if isinstance(v, str) and len(v) < 40 else "",
+)
+def test_a_destination_that_wrote_nothing_is_still_distinguished_from_a_no_op(name, text):
+    """"Every row was already imported" and "the importer refused and wrote
+    nothing" are different facts, and the second must not print as the first."""
+    if "partial=1" not in text:
+        pytest.skip(f"{name} has no partial-delivery state to distinguish")
+    assert "refused row(s) and wrote nothing" in text, name
 
 
 def test_a_refusal_still_fails_the_job(backfill_text):
