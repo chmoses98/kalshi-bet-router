@@ -62,11 +62,16 @@ falling back to the larger number.
 are a field that can disagree. The integer cents are converted once, here,
 with `Decimal`.
 
-> **Not verified against a live account.** The field semantics above come
-> from Kalshi's published API reference. This environment has no Kalshi
-> credentials and no network route to `api.kalshi.com`, so no live response
-> was observed. That is why the parser is strict rather than tolerant: every
-> shape it has not been shown is refused, so a contract change surfaces as
+> **Verified against the live account on 2026-09-18.** The first authenticated
+> run of this workflow
+> ([35298910389](https://github.com/chmoses98/kalshi-bet-router/actions/runs/35298910389))
+> called `GET /portfolio/balance` with the real credentials and
+> `parse_balance_response` accepted the response unchanged. Since that parser
+> refuses string cents, float cents, a bool, a negative value, a missing
+> `balance` and a non-object body, acceptance is itself the confirmation: the
+> live payload carries `balance` as a non-negative integer number of cents,
+> exactly as the API reference documents. The amount was withheld from the log,
+> as designed. The parser stays strict, so a future contract change surfaces as
 > "sizing unavailable" instead of as a plausible wrong number.
 
 ## 3. Why the number travels as an encrypted secret
@@ -118,6 +123,14 @@ publish-bankroll.yml  (*/15 * * * *)
 The card that gets committed carries the bankroll's **status, observation
 time, age, source, semantic type and `sizingAllowed`** — everything needed to
 trust or distrust the sizing — and **not the amount**.
+
+The destination draws the consequence explicitly, because `sizingAllowed` and
+"the reader knows the number" are different facts: the committed card also
+carries `numericBankrollAvailable: false` and
+`consumerSizingVerdict: NO_DOLLAR_SIZING_FOR_THIS_CONSUMER`, so a chat session
+reading the public artifact cannot mistake a true `sizingAllowed: true` — true
+of the workflow that held the balance — for permission to invent dollar
+stakes. See `edge-finder-api/docs/BANKROLL_CONTEXT.md`.
 
 ## 4. What is published, and what is never published
 
