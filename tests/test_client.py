@@ -231,7 +231,7 @@ def test_only_get_requests_are_issued(signer):
 
 
 @pytest.mark.parametrize(
-    "path", ["/portfolio/orders", "/portfolio/balance", "/exchange/status"]
+    "path", ["/portfolio/orders", "/portfolio/balance/transfer", "/exchange/status"]
 )
 def test_non_allowlisted_paths_are_refused_before_any_request(signer, path):
     calls = []
@@ -304,7 +304,7 @@ def test_new_routes_are_still_signed_and_still_get_only(signer):
 
 @pytest.mark.parametrize(
     "path",
-    ["/portfolio/orders", "/portfolio/balance",
+    ["/portfolio/orders", "/portfolio/balances",
      "/search/anything_else", "/milestone_admin"],
 )
 def test_mutating_and_unlisted_routes_remain_refused(signer, path):
@@ -325,8 +325,14 @@ TRADING_ROUTES = [
     "/portfolio/orders/ORDER123/decrease",
     "/portfolio/orders/batched/cancel",
     "/portfolio/orders/queue_position",
-    "/portfolio/balance",
     "/portfolio/resting_order_total_value",
+    # Account MUTATION, as opposed to the account READ below. The owner
+    # authorised reading the balance; moving money was never part of it,
+    # and these are pinned so that widening cannot creep.
+    "/portfolio/balance/transfer",
+    "/portfolio/withdrawals",
+    "/portfolio/deposits",
+    "/portfolio/transfers",
 ]
 
 
@@ -341,12 +347,86 @@ def test_no_trading_route_is_reachable(signer, path):
 
 
 def test_the_allowlist_itself_contains_no_order_route():
-    """Structural, so a future prefix cannot quietly admit order entry."""
+    """Structural, so a future prefix cannot quietly admit order entry.
+
+    `balance` is still barred from the PREFIX list specifically. It is
+    reachable only through the exact-match account allowlist below, so
+    that no `/portfolio/balance/<something>` sub-route can ever ride in
+    behind it.
+    """
     from kalshi_router.client import READ_ONLY_PATH_PREFIXES
 
     for prefix in READ_ONLY_PATH_PREFIXES:
         assert "order" not in prefix
         assert "balance" not in prefix
+
+
+# ------------------------------------------- authorised read-only balance
+
+def test_balance_is_reachable_and_is_a_signed_get(signer):
+    """The owner-authorised widening: READING the balance is permitted."""
+    methods = []
+
+    class Recording(FakeTransport):
+        def __call__(self, method, url, headers, timeout):
+            methods.append(method)
+            return super().__call__(method, url, headers, timeout)
+
+    transport = Recording(lambda m, p, q: (200, {"balance": 123456}))
+    client = KalshiReadOnlyClient(signer=signer, config=AuditConfig(), transport=transport)
+    assert client.get_balance() == {"balance": 123456}
+    assert methods == ["GET"]
+    assert "KALSHI-ACCESS-SIGNATURE" in transport.header_names[0]
+    assert transport.paths[0].endswith("/portfolio/balance")
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/portfolio/balance/",
+        "/portfolio/balanceX",
+        "/portfolio/balance/transfer",
+        "/portfolio/balance/withdraw",
+    ],
+)
+def test_balance_allowlist_is_exact_match_not_a_prefix(signer, path):
+    """A prefix would admit every future sub-route of /portfolio/balance.
+
+    This is the failure the exact-match set exists to prevent, so it is
+    pinned rather than reviewed for.
+    """
+    calls = []
+    client, _ = build_client(lambda m, p, q: (calls.append(p), (200, {}))[1], signer)
+    with pytest.raises(SchemaError, match="read-only"):
+        client._get(path, "forbidden")
+    assert calls == []
+
+
+def test_account_allowlist_admits_nothing_but_the_balance_read():
+    """Structural: the widening is one route, and stays one route."""
+    from kalshi_router.client import ACCOUNT_READ_ONLY_PATHS
+
+    assert ACCOUNT_READ_ONLY_PATHS == frozenset({"/portfolio/balance"})
+    for path in ACCOUNT_READ_ONLY_PATHS:
+        for forbidden in ("order", "transfer", "withdraw", "deposit", "cancel", "amend"):
+            assert forbidden not in path
+
+
+def test_no_mutating_method_exists_on_the_client():
+    """READ access is not trading access, and the class shape proves it.
+
+    A test on paths alone would still pass if someone added a
+    `place_order` that built its own request. This asserts the client
+    exposes no mutating capability at all.
+    """
+    from kalshi_router.client import KalshiReadOnlyClient as C
+
+    names = [n for n in dir(C) if not n.startswith("__")]
+    for verb in ("order", "place", "cancel", "amend", "withdraw",
+                 "deposit", "transfer", "post", "put", "delete", "patch"):
+        assert not any(verb in n.lower() for n in names), (
+            f"{verb!r} appears in the read-only client's API: {names}"
+        )
 
 
 @pytest.mark.parametrize(

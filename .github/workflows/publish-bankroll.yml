@@ -1,0 +1,126 @@
+# Publish the account's current available cash to the MLB handicapper.
+#
+# WHY A SECRET AND NOT A FILE, AN ARTIFACT OR A LOG LINE
+# ------------------------------------------------------
+# BOTH repositories in this system are PUBLIC:
+#
+#   chmoses98/kalshi-bet-router   public
+#   chmoses98/edge-finder-api     public
+#
+# On a public repository, workflow logs, job summaries and uploaded
+# artifacts are readable by anyone on the internet, with no login. So
+# every obvious delivery mechanism publishes the owner's bank balance to
+# the world:
+#
+#   commit it to either repo   -> public, and public forever in history
+#   upload it as an artifact   -> public download link
+#   echo it into the job log   -> public
+#   put it in a job summary    -> public
+#
+# GitHub Actions SECRETS are the one channel in this architecture that is
+# not. A secret is sealed client-side with libsodium against the
+# destination repository's Actions public key, is never readable back out
+# through the API (the REST API exposes no plaintext read), and is
+# decrypted only inside a workflow run of that repository. That is
+# exactly the shape this needs: the destination's CARD BUILD can use the
+# number, and nobody reading the destination repository can.
+#
+# So the balance travels router -> (sealed) -> edge-finder-api secret ->
+# that repo's card-build workflow, and the card that gets COMMITTED
+# carries the bankroll's status, age, source and semantics but not its
+# value. See docs/BANKROLL_DELIVERY.md.
+#
+# SCOPE OF THE CREDENTIAL WIDENING
+# --------------------------------
+# This job reads GET /portfolio/balance and nothing else. The Kalshi
+# client has no order, cancel, amend, withdraw, deposit or transfer
+# capability, and those routes are pinned unreachable by tests
+# (tests/test_client.py::TRADING_ROUTES). Reading the balance is not
+# permission to trade, and nothing here grants it.
+name: Publish bankroll to the handicapper
+
+on:
+  # Matches the 30-minute freshness window the destination enforces, with
+  # headroom for a delayed scheduled run. A balance older than that window
+  # does not produce a wrong stake size -- it produces no stake size.
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Last writer wins, and the newest reading is the one worth having.
+  group: publish-bankroll
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    name: Read balance, seal it into the destination
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Refuse to run credentialed code from an untrusted ref
+        run: |
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::error::This credentialed workflow may only run from refs/heads/main (got ${GITHUB_REF})."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install router
+        run: python -m pip install --disable-pip-version-check --quiet . pynacl
+
+      - name: Read the balance
+        env:
+          KALSHI_API_KEY_ID: ${{ secrets.KALSHI_API_KEY_ID }}
+          KALSHI_PRIVATE_KEY: ${{ secrets.KALSHI_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          # RUNNER_TEMP, never the workspace: a file in the workspace can be
+          # picked up by a later `git add -A` in some future edit of this
+          # workflow. The runner is destroyed with the job.
+          python -m kalshi_router.cli bankroll --out "${RUNNER_TEMP}/bankroll.json"
+
+      - name: Seal it into the destination repository
+        env:
+          DOWNSTREAM_SECRETS_TOKEN: ${{ secrets.DOWNSTREAM_SECRETS_TOKEN }}
+          DESTINATION_REPO: chmoses98/edge-finder-api
+          DESTINATION_SECRET: KALSHI_BANKROLL_CONTEXT
+        run: |
+          set -euo pipefail
+          if [ -z "${DOWNSTREAM_SECRETS_TOKEN:-}" ]; then
+            echo "::error::DOWNSTREAM_SECRETS_TOKEN is not configured. It needs a fine-grained PAT scoped to ${DESTINATION_REPO} with 'Secrets: Read and write' -- and nothing else. Deliberately NOT the delivery token: writing a secret and pushing a branch are different powers."
+            exit 1
+          fi
+          python "${GITHUB_WORKSPACE}/scripts/publish_bankroll_secret.py" \
+            --context "${RUNNER_TEMP}/bankroll.json" \
+            --repo "${DESTINATION_REPO}" \
+            --secret-name "${DESTINATION_SECRET}"
+
+      - name: Report (shape only, never the amount)
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -f "${RUNNER_TEMP}/bankroll.json" ]; then
+            python - "${RUNNER_TEMP}/bankroll.json" <<'PYEOF'
+          import json, sys
+          ctx = json.load(open(sys.argv[1]))
+          # Keys and non-monetary values only. `bankroll` is never read here.
+          print(f"observedAt: {ctx['observedAt']}")
+          print(f"valueType:  {ctx['valueType']}")
+          print(f"source:     {ctx['source']}")
+          print(f"currency:   {ctx['currency']}")
+          print("amount:     ***withheld*** (this repository is public)")
+          PYEOF
+          else
+            echo "no bankroll context was produced this run"
+          fi
