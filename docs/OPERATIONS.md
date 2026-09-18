@@ -342,9 +342,20 @@ raw account evidence:
 * the destination importer prints its receipts (ticker, stake, entry price) to
   **stdout** and its one-line count to **stderr** — verified by running it with
   stdout discarded — so both delivering workflows send stdout to `/dev/null`;
-* no raw fill payload, fill id, subaccount identifier, balance or account
-  metadata is persisted anywhere. Order ids are transformed into an opaque,
+* no raw fill payload, fill id, subaccount identifier or account metadata is
+  persisted anywhere. Order ids are transformed into an opaque,
   domain-separated, length-prefixed digest before they leave the process.
+
+**One deliberate, owner-authorised exception, added after the above:** the
+account's **available cash balance** is read (`GET /portfolio/balance`, read
+only -- no trading capability is enabled) and delivered to the MLB
+handicapper. It is never logged, never committed, never uploaded as an
+artifact and never written to a job summary; it travels only as an
+**encrypted GitHub Actions secret** sealed against the destination
+repository's public key, because both repositories here are public and every
+other channel would publish it. Five fields are published and nothing else --
+no raw response, no account ids, no `portfolio_value`, no positions. See
+[BANKROLL_DELIVERY.md](BANKROLL_DELIVERY.md).
 
 The downstream credential reaches git only through a helper that reads it from
 the environment at push time. It is never in a URL, never in argv, never in

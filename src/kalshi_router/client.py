@@ -11,6 +11,7 @@ Phase 0 is read-only by construction, not by convention:
 Endpoints used (all documented Kalshi ``/trade-api/v2`` routes):
 
 =========================================  ===============================================
+``GET /portfolio/balance``                 available cash balance (READ ONLY)
 ``GET /portfolio/fills``                   member fills, cursor-paginated
 ``GET /portfolio/positions``               the exchange's own position view
 ``GET /portfolio/settlements``             markets the exchange settled and paid
@@ -67,6 +68,28 @@ READ_ONLY_PATH_PREFIXES = (
     "/milestones",
 )
 
+#: Authenticated ACCOUNT-STATE reads, matched EXACTLY -- never as a prefix.
+#:
+#: This is a deliberate, owner-authorised widening for one purpose: the
+#: destination repository's real-money handicapping card must size stakes
+#: against the account's true current cash, not a remembered number. It
+#: permits READING the balance and nothing else.
+#:
+#: It is a separate, exact-match set rather than an entry in the prefix tuple
+#: above for two reasons, both of which are failures that have to be designed
+#: out rather than reviewed for:
+#:
+#:   * a PREFIX "/portfolio/balance" would also admit
+#:     "/portfolio/balance/transfer" or any other future sub-route;
+#:   * a prefix "/portfolio/" -- the lazy version of this change -- would
+#:     admit order entry outright.
+#:
+#: Every mutating route (orders, amend, cancel, withdrawals, transfers)
+#: remains unreachable and is pinned so by tests.
+ACCOUNT_READ_ONLY_PATHS = frozenset({
+    "/portfolio/balance",
+})
+
 @dataclass
 class WalkStats:
     """How a paginated walk ended.
@@ -86,6 +109,7 @@ class WalkStats:
     truncated: bool = False
 
 
+BALANCE_PATH = "/portfolio/balance"
 FILLS_PATH = "/portfolio/fills"
 POSITIONS_PATH = "/portfolio/positions"
 SETTLEMENTS_PATH = "/portfolio/settlements"
@@ -95,9 +119,17 @@ HISTORICAL_SETTLEMENTS_PATH = "/historical/settlements"
 
 
 def _assert_read_only(path: str) -> None:
+    """Refuse anything that is not an allowlisted read.
+
+    Two allowlists, checked differently on purpose: collection routes need a
+    prefix (they carry ids and query strings), account-state routes are
+    matched exactly so no sub-route can ever ride in behind one.
+    """
+    if path in ACCOUNT_READ_ONLY_PATHS:
+        return
     if not any(path.startswith(prefix) for prefix in READ_ONLY_PATH_PREFIXES):
         raise SchemaError(
-            f"refusing to request non-allowlisted path {path!r}; Phase 0 is read-only"
+            f"refusing to request non-allowlisted path {path!r}; this client is read-only"
         )
 
 
@@ -369,6 +401,22 @@ class KalshiReadOnlyClient:
             "probe_historical_settlements",
             {"limit": limit},
         )
+
+    # ---------------------------------------------------------------- balance
+
+    def get_balance(self) -> dict[str, Any]:
+        """The account's balance object, unparsed.
+
+        READ ONLY. This is the single account-state route this client may
+        reach, and reaching it grants nothing else: there is no order,
+        cancel, withdraw or transfer method on this class, and
+        :func:`_assert_read_only` would refuse their paths anyway.
+
+        The response is returned verbatim for :mod:`kalshi_router.balance` to
+        parse and reduce. It is never logged, never written to the workspace
+        and never persisted -- see that module for what may be published.
+        """
+        return self._get(BALANCE_PATH, "get_balance")
 
     # --------------------------------------------------------------- metadata
 

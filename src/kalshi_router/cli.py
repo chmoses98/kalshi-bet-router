@@ -20,8 +20,11 @@ import time
 from decimal import Decimal
 import sys
 
+from pathlib import Path
+
 from .audit import AuditResult, run_audit
 from .auth import KalshiSigner
+from .balance import fetch_bankroll_context
 from .client import KalshiReadOnlyClient
 from .config import (
     DEFAULT_MAX_FILLS,
@@ -30,7 +33,14 @@ from .config import (
     base_url_from_env,
     read_credentials,
 )
-from .errors import ConfigurationError, KalshiRouterError, SensitiveOutputRefused
+from .errors import (
+    ConfigurationError,
+    HttpStatusError,
+    KalshiRouterError,
+    SchemaError,
+    SensitiveOutputRefused,
+    TransportError,
+)
 from .safety import assert_sensitive_output_allowed
 
 EXIT_OK = 0
@@ -134,6 +144,26 @@ def config_from_args(args) -> AuditConfig:
 
 
 def _add_series_probe_parser(sub) -> None:
+    bankroll = sub.add_parser(
+        "bankroll",
+        help="read the account's available cash balance and write a minimal bankroll context",
+        description=(
+            "ONE authenticated read-only GET /portfolio/balance, reduced to the minimum "
+            "a downstream handicapper needs: the available cash figure, its currency, "
+            "when it was observed, where it came from and what it means. "
+            "The raw response, account identifiers and portfolio value are never "
+            "written anywhere. The dollar amount is NEVER printed -- it goes to the "
+            "file named by --out and nowhere else, because this repository is public "
+            "and its logs are public with it."
+        ),
+    )
+    bankroll.add_argument(
+        "--out",
+        required=True,
+        help="file to write the bankroll context JSON to (use RUNNER_TEMP, never the workspace)",
+    )
+    bankroll.set_defaults(show_sensitive_details=False, max_fills=None, page_limit=None)
+
     probe = sub.add_parser(
         "series-probe",
         help="ask Kalshi to corroborate candidate series tickers (adds nothing)",
@@ -617,6 +647,42 @@ def _run_settle(args, client, out, err) -> int:
     return EXIT_OK
 
 
+def _run_bankroll(args, client, out, err) -> int:
+    """Publish the minimum, print only what is safe in a public log.
+
+    THE NUMBER IS NOT PRINTED. This repository is public, so its Actions
+    logs are readable by anyone; a balance echoed here would be a
+    disclosure that no later redaction can undo. What reaches the log is
+    the SHAPE of the answer -- that a balance was read, when, what kind of
+    figure it is -- which is everything an operator needs to debug the job
+    and nothing an observer can spend.
+    """
+    try:
+        context = fetch_bankroll_context(client)
+    except (SchemaError, HttpStatusError, TransportError) as exc:
+        # Deliberately no fallback. A bankroll this process could not read
+        # is a bankroll the downstream card must be told it does not have;
+        # any substitute would be a number nobody measured.
+        print(f"balance read failed: {type(exc).__name__}", file=err)
+        return EXIT_API
+
+    path = Path(args.out)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(context, sort_keys=True), encoding="utf-8")
+    try:
+        path.chmod(0o600)
+    except OSError:  # pragma: no cover - platform dependent
+        pass
+
+    print(f"bankroll context written to {path}", file=out)
+    print(f"  valueType: {context['valueType']}", file=out)
+    print(f"  currency:  {context['currency']}", file=out)
+    print(f"  observedAt: {context['observedAt']}", file=out)
+    print(f"  source:    {context['source']}", file=out)
+    print("  amount:    ***withheld*** (public log)", file=out)
+    return EXIT_OK
+
+
 def _run_series_probe(client, out, err) -> int:
     """Corroborate candidate series tickers against Kalshi's own catalogue.
 
@@ -726,6 +792,9 @@ def main(argv: list[str] | None = None, stdout=None, stderr=None) -> int:
 
     if args.command == "deliver":
         return _run_deliver(args, client, out, err)
+
+    if args.command == "bankroll":
+        return _run_bankroll(args, client, out, err)
 
     if args.command == "series-probe":
         return _run_series_probe(client, out, err)
