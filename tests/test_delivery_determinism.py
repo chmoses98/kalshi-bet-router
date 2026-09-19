@@ -118,53 +118,73 @@ def stamps(rows):
 # The decisions themselves. Pure, so the production state is one literal.
 # ══════════════════════════════════════════════════════════════════════
 
-def test_the_importer_is_seeded_from_a_branch_that_proposes_against_this_main():
+def test_the_importer_is_seeded_from_a_branch_whose_ledger_has_not_moved():
     """THE FIX, as one assertion."""
     remote = delivery_branch.RemoteBranch(head="b" * 40, base="a" * 40, tree="t" * 40)
-    seed, why = delivery_branch.choose_seed("a" * 40, remote)
+    seed, why = delivery_branch.choose_seed("a" * 40, remote, ledger_moved=False)
     assert seed == "b" * 40
     assert why == delivery_branch.SEED_BRANCH
 
 
-def test_the_importer_is_seeded_from_main_when_main_has_moved():
-    """A proposal built on a base that is no longer main is stale: its diff
-    against what is there now is something no run inspected."""
-    remote = delivery_branch.RemoteBranch(head="b" * 40, base="old", tree="t" * 40)
-    seed, why = delivery_branch.choose_seed("a" * 40, remote)
-    assert seed == "a" * 40
+def test_a_destination_commit_the_proposal_does_not_depend_on_keeps_the_branch():
+    """THE SECOND FIX. main moved, the canonical ledger did not.
+
+    Rebuilding here is what made the repair unusable in production: the live
+    destination commits its own pipeline output every one to five minutes and
+    its CI takes nineteen, so a head that resets on every destination commit
+    can never carry a finished check suite -- which is the same failure the
+    timestamp churn caused, arriving by a different road.
+    """
+    remote = delivery_branch.RemoteBranch(head="b" * 40, base="OLD-MAIN", tree="t" * 40)
+    seed, why = delivery_branch.choose_seed("NEW-MAIN", remote, ledger_moved=False)
+    assert seed == "b" * 40
+    assert why == delivery_branch.SEED_BRANCH
+
+
+def test_the_importer_is_seeded_from_main_when_the_canonical_ledger_moved():
+    """The one thing a proposal DOES depend on. Reconcile against what is
+    there now, whatever that costs in check-suite minutes."""
+    remote = delivery_branch.RemoteBranch(head="b" * 40, base="OLD-MAIN", tree="t" * 40)
+    seed, why = delivery_branch.choose_seed("NEW-MAIN", remote, ledger_moved=True)
+    assert seed == "NEW-MAIN"
     assert why == delivery_branch.SEED_MAIN
 
 
 def test_the_importer_is_seeded_from_main_when_no_branch_exists():
-    seed, why = delivery_branch.choose_seed("a" * 40, delivery_branch.RemoteBranch())
+    seed, why = delivery_branch.choose_seed(
+        "a" * 40, delivery_branch.RemoteBranch(), ledger_moved=False)
     assert seed == "a" * 40
     assert why == delivery_branch.SEED_MAIN
 
 
-def test_an_identical_tree_on_an_identical_base_is_adopted():
+def test_an_identical_tree_on_the_kept_proposal_is_adopted():
     remote = delivery_branch.RemoteBranch(head="b" * 40, base="a" * 40, tree="tree-x")
-    action, _why = delivery_branch.decide("a" * 40, "main-tree", "tree-x", remote)
+    action, _why = delivery_branch.decide(
+        "base-tree", "tree-x", remote, seeded_from_branch=True)
     assert action == delivery_branch.ADOPT
 
 
-def test_an_identical_tree_on_a_DIFFERENT_base_is_not_adopted():
-    """Same content, different base, different proposal. Its diff against the
-    destination's current main is something this run never looked at."""
+def test_an_identical_tree_is_NOT_adopted_when_the_batch_was_rebuilt():
+    """A rebuild means the ledger moved under the old proposal, so its tree is
+    not evidence about the new one. It is re-pushed and re-checked."""
     remote = delivery_branch.RemoteBranch(head="b" * 40, base="old", tree="tree-x")
-    action, _why = delivery_branch.decide("a" * 40, "main-tree", "tree-x", remote)
+    action, _why = delivery_branch.decide(
+        "base-tree", "tree-x", remote, seeded_from_branch=False)
     assert action == delivery_branch.PUSH
 
 
 def test_a_changed_tree_is_pushed():
     remote = delivery_branch.RemoteBranch(head="b" * 40, base="a" * 40, tree="tree-x")
-    action, _why = delivery_branch.decide("a" * 40, "main-tree", "tree-y", remote)
+    action, _why = delivery_branch.decide(
+        "base-tree", "tree-y", remote, seeded_from_branch=True)
     assert action == delivery_branch.PUSH
 
 
-def test_a_result_identical_to_main_is_nothing_to_deliver():
+def test_a_result_identical_to_its_base_is_nothing_to_deliver():
     """Checked FIRST, so a branch whose rows have landed is not re-proposed."""
-    remote = delivery_branch.RemoteBranch(head="b" * 40, base="a" * 40, tree="main-tree")
-    action, _why = delivery_branch.decide("a" * 40, "main-tree", "main-tree", remote)
+    remote = delivery_branch.RemoteBranch(head="b" * 40, base="a" * 40, tree="base-tree")
+    action, _why = delivery_branch.decide(
+        "base-tree", "base-tree", remote, seeded_from_branch=False)
     assert action == delivery_branch.NOTHING_TO_DELIVER
 
 
@@ -332,43 +352,134 @@ def test_B_a_genuinely_new_wager_does_produce_a_new_proposal(world):  # noqa: F8
 # TEST C -- the destination's main advanced
 # ══════════════════════════════════════════════════════════════════════
 
-def test_C_a_moved_destination_main_is_rebuilt_on_and_never_overwritten(world):  # noqa: F811
-    """The branch is reconciled against what is on main NOW, and the
-    destination's own commit survives untouched."""
+def _commit_on_destination_main(world, path, body, message):  # noqa: F811
+    """Somebody else commits to the destination's main, as its own pipelines do."""
+    other = world["tmp"] / f"other-{os.urandom(4).hex()}"
+    subprocess.run(["git", "clone", "--quiet", str(world["remote"]), str(other)],
+                   check=True, capture_output=True)
+    target = other / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if path == LEDGER:
+        with target.open("a", encoding="utf-8") as handle:
+            handle.write(body)
+    else:
+        target.write_text(body)
+    _git("add", "-A", cwd=other)
+    _git("-c", "user.email=o@example.invalid", "-c", "user.name=o",
+         "commit", "--quiet", "-m", message, cwd=other)
+    _git("push", "--quiet", "origin", "main", cwd=other)
+    return _git("rev-parse", "refs/heads/main", cwd=world["remote"]).strip()
+
+
+def test_C_a_moved_canonical_ledger_is_rebuilt_on_and_never_overwritten(world):  # noqa: F811
+    """THE SAFETY HALF OF TEST C, and the one that matters.
+
+    The canonical ledger is the only thing a proposal depends on. When it
+    moves, the batch is reconciled against what is on main NOW -- and the row
+    somebody else wrote there survives untouched.
+    """
     drop_the_conflicted_row(world)
     deliver_at(world, FIRST_CLOCK)
     head_before = branch_head(world)
 
-    other = world["tmp"] / "other"
-    subprocess.run(["git", "clone", "--quiet", str(world["remote"]), str(other)],
-                   check=True, capture_output=True)
-    (other / "NOTES.md").write_text("an unrelated change\n")
-    _git("add", "-A", cwd=other)
-    _git("-c", "user.email=o@example.invalid", "-c", "user.name=o",
-         "commit", "--quiet", "-m", "unrelated", cwd=other)
-    _git("push", "--quiet", "origin", "main", cwd=other)
-    moved_main = _git("rev-parse", "refs/heads/main", cwd=world["remote"]).strip()
+    foreign = json.dumps({
+        "betId": "someone-elses-row", "sourceBetKey": "manual-9999",
+        "importBatchId": "a-different-batch", "marketTicker": "KXOTHER-1",
+        "side": "YES", "gameDate": "2026-09-15",
+    }, sort_keys=True) + "\n"
+    moved_main = _commit_on_destination_main(world, LEDGER, foreign, "a manual bet")
 
     result = deliver_at(world, SECOND_CLOCK)
 
     assert "pushed kalshi-router/MLB" in result.stdout
-    assert branch_head(world) != head_before
-    # REBUILT ON the new main: the branch's parent is the destination's commit.
+    assert branch_head(world) != head_before, "a moved ledger did not force a rebuild"
     parent = _git("rev-parse", f"refs/heads/{BRANCH}^", cwd=world["remote"]).strip()
     assert parent == moved_main, "the proposal was not rebuilt on current main"
 
-    # The destination's own change is intact on the branch and on main.
-    checkout = world["tmp"] / "verify-main"
-    subprocess.run(["git", "clone", "--quiet", "--branch", BRANCH,
-                    str(world["remote"]), str(checkout)], check=True, capture_output=True)
-    assert (checkout / "NOTES.md").read_text() == "an unrelated change\n", (
-        "the delivery overwrote a destination change")
-    assert len(branch_ledger(world)) == 17
+    ledger = branch_ledger(world)
+    assert any(r["betId"] == "someone-elses-row" for r in ledger), (
+        "the delivery overwrote a row somebody else wrote to main")
+    # Every row this batch delivers is still there, alongside theirs. (The
+    # fixture also seeds main with one earlier router row, which is why a
+    # count of router-batch rows is not the assertion to make here.)
+    delivered = {r["sourceBetKey"] for r in json.loads(world["payload"].read_text())["rows"]}
+    assert delivered <= {r["sourceBetKey"] for r in ledger}
 
     # And the rebuilt proposal is stable in its turn.
     rebuilt = branch_head(world)
     deliver_at(world, "2026-09-19T21:30:00Z")
     assert branch_head(world) == rebuilt
+
+
+def test_C_a_destination_commit_the_proposal_does_not_depend_on_keeps_the_head(world):  # noqa: F811
+    """THE SECOND PRODUCTION DEFECT, and it arrived by a different road.
+
+    Rebuilding on ANY destination commit is safe and, measured against the
+    live destination, unusable: it commits its own pipeline output every one
+    to five minutes and its pull-request CI takes nineteen, so the head reset
+    faster than any check suite could finish and the gate still could not
+    fire. Measured 2026-09-19, across four consecutive deliveries.
+
+    A snapshot or a report is not the canonical wager ledger. The proposal
+    does not depend on it, so the head stays and its checks are allowed to
+    finish -- and the destination's change is still carried into the merge,
+    which is what the append-only and clean-mergeability conditions verify.
+    """
+    drop_the_conflicted_row(world)
+    deliver_at(world, FIRST_CLOCK)
+    head_before = branch_head(world)
+    stamps_before = stamps(branch_ledger(world))
+
+    _commit_on_destination_main(
+        world, "reports/daily.md", "an unrelated report\n", "nightly report")
+
+    result = deliver_at(world, SECOND_CLOCK)
+
+    assert branch_head(world) == head_before, (
+        "an unrelated destination commit reset the head; CI would restart forever")
+    assert "pushed kalshi-router/MLB" not in result.stdout
+    assert "already carries this exact content on this base; not pushing" in result.stdout
+    assert stamps(branch_ledger(world)) == stamps_before
+    assert result.returncode == 0
+
+
+def test_C_the_gate_reads_the_branchs_own_parent_as_the_base(world):  # noqa: F811
+    """What makes keeping the head safe: the gate inspects exactly what
+    merging would apply.
+
+    With a destination commit on main that the branch does not carry, a diff
+    against the RUN's clone of main would show that commit's file as reverted
+    and the gate would refuse. Against the branch's own parent -- the true
+    merge base -- the diff is the pull request's own change and nothing else.
+    """
+    drop_the_conflicted_row(world)
+    # The first run pushes while CI is still pending, which is what a real
+    # first delivery sees -- and it must NOT merge, or there is no open
+    # proposal left for the second run to reason about.
+    deliver_at(world, FIRST_CLOCK)
+
+    _commit_on_destination_main(
+        world, "reports/daily.md", "an unrelated report\n", "nightly report")
+
+    world["stub"].check_runs = [("test", "completed", "success")]
+    result = deliver_at(world, SECOND_CLOCK)
+
+    assert "PASS   ONLY_CANONICAL_WAGER_FILES_CHANGED" in result.stdout, result.stdout
+    assert "PASS   THE_LEDGER_DIFF_IS_APPEND_ONLY" in result.stdout
+    # No condition FAILED. Matched on the rendered bucket prefix, because the
+    # condition NAME `IMPORTER_REFUSED_NOTHING` contains the word.
+    assert "    REFUSE " not in result.stdout, result.stdout
+
+    # And it goes all the way: the proposal kept its head across a destination
+    # commit it does not carry, and then LANDED.
+    assert "verdict: MERGE" in result.stdout
+    assert "MERGED #218" in result.stdout
+    assert world["stub"].merged_sha is not None
+    landed = main_ledger(world)
+    assert {r["sourceBetKey"] for r in json.loads(world["payload"].read_text())["rows"]} \
+        <= {r["sourceBetKey"] for r in landed}, "the rows did not reach main"
+    # The destination's own commit is still on main, untouched by the merge.
+    assert any(r.get("betId") for r in landed)
 
 
 # ══════════════════════════════════════════════════════════════════════

@@ -52,7 +52,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
 from kalshi_router import delivery_branch  # noqa: E402
-from kalshi_router.automerge import router_branch_for  # noqa: E402
+from kalshi_router.automerge import MERGEABLE_PATHS, router_branch_for  # noqa: E402
 
 EXIT_OK = 0
 EXIT_CONFIG = 2
@@ -108,6 +108,44 @@ def read_remote_branch(work: str, branch: str) -> delivery_branch.RemoteBranch:
     )
 
 
+def ledger_moved(work: str, old: str | None, new: str) -> bool:
+    """Has the canonical wager ledger changed between two commits?
+
+    This is the ONLY thing a proposal depends on, so it is the only thing that
+    can make an existing proposal stale. `git diff` is given the exact paths
+    rather than a prefix: the question is about the canonical ledger, not about
+    everything the destination happens to keep under `data/`.
+
+    Unknown means moved. If the branch's base cannot be read -- a ref that never
+    fetched, a history the shallow clone does not have -- this cannot establish
+    that the proposal is still current, so it rebuilds. Failing towards the
+    rebuild costs a check suite; failing the other way would keep a proposal
+    built against a ledger nobody looked at.
+    """
+    if not old:
+        return True
+    result = subprocess.run(
+        ["git", "-C", work, "diff", "--name-only", old, new, "--", *sorted(MERGEABLE_PATHS)],
+        capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        return True
+    return bool(result.stdout.strip())
+
+
+def proposal_base(work: str, args, remote: delivery_branch.RemoteBranch):
+    """(the commit this proposal sits on, whether it came from the branch).
+
+    Recomputed identically by `seed` and `settle` from the same inputs -- the
+    remote-tracking ref is local and `--base-sha` is passed in, so neither can
+    move between the two calls within a run.
+    """
+    moved = ledger_moved(work, remote.base, args.base_sha)
+    seed, why = delivery_branch.choose_seed(args.base_sha, remote, moved)
+    if why == delivery_branch.SEED_BRANCH:
+        return remote.base, True, moved
+    return args.base_sha, False, moved
+
+
 def cmd_seed(args) -> int:
     work, branch, base_sha = args.work, args.branch, args.base_sha
 
@@ -119,16 +157,24 @@ def cmd_seed(args) -> int:
         f"+refs/heads/{branch}:refs/remotes/origin/{branch}", check=False)
 
     remote = read_remote_branch(work, branch)
-    seed, why = delivery_branch.choose_seed(base_sha, remote)
+    moved = ledger_moved(work, remote.base, base_sha)
+    seed, why = delivery_branch.choose_seed(base_sha, remote, moved)
 
     if why == delivery_branch.SEED_BRANCH:
-        log(f"  seeding the importer from {branch} ({seed[:12]}), which proposes "
-            f"against this exact main -- rows it already proposed will come back "
-            f"DUPLICATE_NOOP and keep their original canonical bytes")
+        log(f"  seeding the importer from {branch} ({seed[:12]}): the canonical "
+            f"ledger has not moved since that proposal was built, so rows it "
+            f"already proposed come back DUPLICATE_NOOP and keep their original "
+            f"canonical bytes")
+        if remote.base != base_sha:
+            log(f"  (the destination's main has moved to {base_sha[:12]} since, but "
+                f"only in files this proposal does not depend on -- the pull "
+                f"request's own diff is still what the gate reads and what merging "
+                f"would apply)")
     elif remote.exists:
-        log(f"  seeding the importer from the destination's main ({seed[:12]}): "
-            f"{branch} was built on {(remote.base or 'nothing')[:12]}, which is no "
-            f"longer main, so the batch is reconciled against what is there now")
+        log(f"  seeding the importer from the destination's main ({seed[:12]}): the "
+            f"canonical ledger moved since {branch} was built on "
+            f"{(remote.base or 'nothing')[:12]}, so the batch is reconciled against "
+            f"what is there now")
     else:
         log(f"  seeding the importer from the destination's main ({seed[:12]}): "
             f"{branch} does not exist yet")
@@ -145,12 +191,17 @@ def cmd_settle(args) -> int:
         log(f"  the base commit {base_sha} is not present in this clone")
         return EXIT_CONFIG
 
+    remote_before = read_remote_branch(work, branch)
+    base, seeded_from_branch, _moved = proposal_base(work, args, remote_before)
+
     git(work, "add", "-A")
 
-    # Reshape onto main BEFORE inspecting: `--cached` then answers "what would
-    # this pull request change", which is the question both the containment
-    # check and the merge gate actually ask.
-    git(work, "reset", "--soft", "-q", base_sha)
+    # Reshape onto the commit this proposal sits on BEFORE inspecting: `--cached`
+    # then answers "what would this pull request change", which is the question
+    # both the containment check and the merge gate actually ask. Keeping the
+    # branch at exactly ONE commit is what makes its parent readable as its base
+    # by the next run, from a --depth 2 fetch and no deeper history.
+    git(work, "reset", "--soft", "-q", base)
 
     staged = [line for line in git(work, "diff", "--cached", "--name-only").splitlines()]
     unexpected = delivery_branch.uncommittable(staged)
@@ -161,10 +212,11 @@ def cmd_settle(args) -> int:
         return EXIT_REFUSED
 
     resulting_tree = git(work, "write-tree")
-    base_tree = git(work, "rev-parse", f"{base_sha}^{{tree}}")
+    base_tree = git(work, "rev-parse", f"{base}^{{tree}}")
     remote = read_remote_branch(work, branch)
 
-    action, why = delivery_branch.decide(base_sha, base_tree, resulting_tree, remote)
+    action, why = delivery_branch.decide(
+        base_tree, resulting_tree, remote, seeded_from_branch)
     log(f"  {why}")
 
     if action == delivery_branch.NOTHING_TO_DELIVER:
