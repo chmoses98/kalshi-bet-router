@@ -79,6 +79,41 @@ jobs:
       - name: Install router
         run: python -m pip install --disable-pip-version-check --quiet . pynacl
 
+      # THE CREDENTIAL IS CHECKED BEFORE THE ACCOUNT IS TOUCHED.
+      #
+      # Every scheduled run from 2026-09-18 onward read a live balance from
+      # the owner's Kalshi account and then discovered it had no way to
+      # deliver it, because DOWNSTREAM_SECRETS_TOKEN does not exist on this
+      # repository. A credentialed read whose result is thrown away is not
+      # free, and it is not something to do on a fifteen-minute timer.
+      #
+      # The preflight makes ONE read-only request -- the destination's
+      # Actions public key -- which is exactly the capability the seal
+      # needs. A token that passes here can seal; a token that fails here
+      # never could have.
+      - name: Verify the delivery credential (no account is read yet)
+        id: preflight
+        env:
+          DOWNSTREAM_SECRETS_TOKEN: ${{ secrets.DOWNSTREAM_SECRETS_TOKEN }}
+          DESTINATION_REPO: chmoses98/edge-finder-api
+          DESTINATION_SECRET: KALSHI_BANKROLL_CONTEXT
+        run: |
+          set -euo pipefail
+          status=0
+          python "${GITHUB_WORKSPACE}/scripts/publish_bankroll_secret.py" \
+            --preflight-only \
+            --repo "${DESTINATION_REPO}" \
+            --secret-name "${DESTINATION_SECRET}" || status=$?
+          case "${status}" in
+            0) ;;
+            3)
+              echo "::error::The bankroll publisher cannot deliver: DOWNSTREAM_SECRETS_TOKEN is missing or is not scoped to ${DESTINATION_REPO} with 'Secrets: Read and write'. NOTHING was read from the Kalshi account this run. Create that fine-grained PAT and store it as the Actions secret DOWNSTREAM_SECRETS_TOKEN on this repository -- it is deliberately NOT the delivery token, because writing a secret and pushing a branch are different powers. Until then the handicapping card reports the bankroll as unavailable and presents no dollar stake sizes, which is the correct degraded behaviour."
+              exit 3 ;;
+            *)
+              echo "::error::The bankroll publisher could not reach the GitHub API (exit ${status}). No account was read. This is transient; the next scheduled run retries."
+              exit "${status}" ;;
+          esac
+
       - name: Read the balance
         env:
           KALSHI_API_KEY_ID: ${{ secrets.KALSHI_API_KEY_ID }}
@@ -90,6 +125,10 @@ jobs:
           # workflow. The runner is destroyed with the job.
           python -m kalshi_router.cli bankroll --out "${RUNNER_TEMP}/bankroll.json"
 
+      # The seal now also VERIFIES: after the write, the destination's
+      # secret metadata (name and updated_at -- never its value, which the
+      # REST API does not expose) must show this run's write. A 204 proves a
+      # request was accepted, not that the destination holds anything.
       - name: Seal it into the destination repository
         env:
           DOWNSTREAM_SECRETS_TOKEN: ${{ secrets.DOWNSTREAM_SECRETS_TOKEN }}
@@ -97,14 +136,19 @@ jobs:
           DESTINATION_SECRET: KALSHI_BANKROLL_CONTEXT
         run: |
           set -euo pipefail
-          if [ -z "${DOWNSTREAM_SECRETS_TOKEN:-}" ]; then
-            echo "::error::DOWNSTREAM_SECRETS_TOKEN is not configured. It needs a fine-grained PAT scoped to ${DESTINATION_REPO} with 'Secrets: Read and write' -- and nothing else. Deliberately NOT the delivery token: writing a secret and pushing a branch are different powers."
-            exit 1
-          fi
+          status=0
           python "${GITHUB_WORKSPACE}/scripts/publish_bankroll_secret.py" \
             --context "${RUNNER_TEMP}/bankroll.json" \
             --repo "${DESTINATION_REPO}" \
-            --secret-name "${DESTINATION_SECRET}"
+            --secret-name "${DESTINATION_SECRET}" || status=$?
+          case "${status}" in
+            0) ;;
+            2) echo "::error::The bankroll context this run produced was REFUSED before sending. The reason is named above and carries no amount -- most likely the value is not ${DESTINATION_SECRET}'s required KALSHI_AVAILABLE_CASH_BALANCE, or the reading is already past the destination's 30-minute window." ;;
+            3) echo "::error::DOWNSTREAM_SECRETS_TOKEN lost its 'Secrets: Read and write' access to ${DESTINATION_REPO} between the preflight and the write." ;;
+            5) echo "::error::The write was ACCEPTED but ${DESTINATION_SECRET} on ${DESTINATION_REPO} does not show it. Do not treat this run as a successful publication." ;;
+            *) echo "::error::The bankroll could not be sealed (exit ${status})." ;;
+          esac
+          exit "${status}"
 
       - name: Report (shape only, never the amount)
         if: always()

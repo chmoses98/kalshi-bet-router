@@ -199,6 +199,80 @@ still refuses when a second clone moves the branch in between.
 A run that pushes the branch but cannot open the pull request **fails**, and
 says so: the wagers exist but are not recorded, and that is not a success.
 
+## …and a pull request is not the ledger either *(added 2026-09-19)*
+
+`#218` carried 8 MLB wagers from 2026-09-18. It was open, clean, mergeable and
+CI-green for three days, and the destination's own 2026-09-18 EdgeLab report
+read `Placed bets: 0` — because the rows were on a branch and not on `main`.
+Delivery ended at "propose it", and nothing finished the job.
+
+**Two** defects produced that, and the second is the one that made the first
+unfixable:
+
+1. Nothing merged it. There was no machine-verifiable decision about whether
+   a proposal was safe to land without a human reading it.
+2. Nothing *could* have merged it. The import is deterministic, but a commit
+   carries a timestamp — so identical content got a new SHA every run, and
+   the force-push restarted the destination's ~19-minute pull-request CI on a
+   15-minute cadence. The head was therefore almost never a commit whose
+   checks had finished.
+
+### The branch head is now stable while the content is
+
+If the remote branch already carries **this exact tree on this exact base**,
+the run adopts that commit and pushes nothing. Both halves matter: the same
+tree on a *different* base is a different proposal, because its diff against
+`main` is something this run never inspected. A genuinely new wager still
+produces a new commit, and a moved destination `main` still forces a rebuild.
+
+So the sequence is: run *N* pushes and the gate **waits** (CI is running);
+run *N+1* adopts the same commit, finds CI green, and merges. One cycle.
+
+### The gate
+
+`src/kalshi_router/automerge.py` is a **pure function over facts** —
+no I/O, no credential, cannot merge anything.
+`scripts/merge_delivery_pr.py` gathers the facts and acts on the verdict.
+Twelve conditions, all machine-verifiable, all evaluated (it does not
+short-circuit, so one run names everything that is not yet right):
+
+| Condition | Refuses when |
+|---|---|
+| `PULL_REQUEST_IS_OPEN_AND_NOT_A_DRAFT` | someone marked it a draft — a human signal automation must not overrule |
+| `BRANCH_ORIGINATED_FROM_THE_ROUTER_WORKFLOW` | head is not `kalshi-router/<SPORT>`, or is a fork, or the base is not `main` |
+| `HEAD_IS_THE_COMMIT_THIS_RUN_VERIFIED` | the branch moved since this run inspected it *(waits)* |
+| `IMPORTER_REFUSED_NOTHING` | any row came back unsuccessful |
+| `EVERY_ROW_NEEDED_NO_HUMAN_JUDGEMENT` | a verdict outside `NEW`/`DUPLICATE_NOOP`/`CORRECTED`, a conflicting field, or a row with no canonical `betId` |
+| `THE_IMPORT_IS_IDEMPOTENT` | re-applying the identical payload writes again, or a `betId` moves |
+| `ONLY_CANONICAL_WAGER_FILES_CHANGED` | any path outside `data/edgelab/bets/bets.jsonl` |
+| `THE_LEDGER_DIFF_IS_APPEND_ONLY` | the diff removes or rewrites an existing canonical row |
+| `EVERY_ADDED_ROW_CARRIES_THE_ROUTER_IDENTITY` | an added row is from another batch, unidentifiable, or has no receipt from this run |
+| `CONTINUOUS_INTEGRATION_IS_GREEN` | a check failed *(and waits while any is running or none has reported)* |
+| `THE_DESTINATION_BRANCH_IS_CLEANLY_MERGEABLE` | `blocked` — a review or protection rule *(waits on `unknown`/`dirty`/`behind`)* |
+
+Three verdicts, and the difference between the last two is the whole point:
+
+* **MERGE** — squash-merged, pinned to the exact SHA every condition was
+  checked against. If anything moved the branch in between, GitHub answers
+  `409` and merges nothing, which is the correct outcome rather than a race
+  to win.
+* **WAIT** — not yet decidable, and it will decide itself. Silent, green,
+  costs one cycle. Nobody is paged.
+* **REFUSE** — a condition failed. Nothing merges, the rows stay delivered on
+  the branch, and the job is red with the condition named.
+
+**Idempotency is now proved every run, not assumed once.** The measurement in
+*"Why re-running is safe"* above came from a sandbox that was deleted. The
+gate will not land a batch on evidence nobody can re-run, so the payload is
+applied a **second** time to the tree the first import produced: every row
+must return `DUPLICATE_NOOP` with the same canonical `betId`, and
+`git write-tree` must not move.
+
+**A refusal still never costs the rows that succeeded.** The 2026-09-16 rule
+is untouched and they are two separate decisions: whatever the importer wrote
+is still committed, pushed and proposed; the batch simply does not auto-merge,
+because a refusal is exactly the case that needs a person.
+
 > Both properties are fixes. The first version derived the branch name from the
 > destination's `HEAD`, which moves — so the same undelivered wager produced a
 > new branch on every destination commit, and (worse) a *non*-moving

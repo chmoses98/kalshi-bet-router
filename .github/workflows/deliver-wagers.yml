@@ -204,6 +204,36 @@ jobs:
               partial=1
             fi
 
+            # IDEMPOTENCY IS PROVED EVERY RUN, NOT ASSUMED ONCE.
+            #
+            # docs/OPERATIONS.md records a sandbox measurement that a
+            # byte-identical re-run is a DUPLICATE_NOOP. That sandbox was
+            # deleted. The auto-merge gate below will not land a batch on the
+            # strength of a measurement nobody can re-run, so the payload is
+            # applied a SECOND time, here, to the tree the first import just
+            # produced. Every row must come back DUPLICATE_NOOP with the same
+            # canonical betId, and the tree must not move.
+            #
+            # `git write-tree` is the tree comparison: it hashes the staged
+            # content, so "did the second import change anything at all" is
+            # answered by git rather than by a diff of prose. Staging early is
+            # harmless -- the containment check below reads the staged set, and
+            # the commit stages the same thing anyway.
+            git -C "${work}" add -A
+            tree_before_rerun="$(git -C "${work}" write-tree)"
+            rerun_receipts="${RUNNER_TEMP}/receipts-rerun-${sport}.json"
+            ( cd "${work}" && python scripts/edgelab/import_bet_batch.py \
+                --file "${payload}" --receipts-out "${rerun_receipts}" >/dev/null ) || true
+            git -C "${work}" add -A
+            tree_after_rerun="$(git -C "${work}" write-tree)"
+            if [ "${tree_before_rerun}" = "${tree_after_rerun}" ]; then
+              rerun_changed_tree=false
+              echo "  idempotency: a second identical import changed nothing."
+            else
+              rerun_changed_tree=true
+              echo "::error::${sport}: re-applying the IDENTICAL payload changed the ledger. The import is not idempotent; this batch will not auto-merge."
+            fi
+
             if [ -z "$(git -C "${work}" status --porcelain)" ]; then
               if [ "${partial}" -eq 1 ]; then
                 echo "  the importer refused row(s) and wrote nothing; there is nothing to deliver."
@@ -292,19 +322,57 @@ jobs:
             #
             # With --verify --quiet a missing ref prints NOTHING and exits 1,
             # which is the empty value the line above describes.
-            git -C "${work}" fetch -q --depth 1 origin \
+            # --depth 2, not 1: the reuse check below needs the branch tip's
+            # PARENT to know which `main` that tip was built from.
+            git -C "${work}" fetch -q --depth 2 origin \
               "+refs/heads/${branch}:refs/remotes/origin/${branch}" || true
             expected="$(git -C "${work}" rev-parse --verify --quiet "refs/remotes/origin/${branch}" || echo "")"
 
-            # ONLY onto this router-owned branch: it is rebuilt from main every
-            # run, so its previous tip is this job's own earlier output. The
-            # lease still refuses if anything else moved it -- verified by
-            # having a second clone push in between.
-            git -C "${work}" push -q \
-              --force-with-lease="refs/heads/${branch}:${expected}" \
-              origin "HEAD:refs/heads/${branch}"
-            echo "  pushed ${branch}"
-            echo "  destination commit: $(git -C "${work}" rev-parse HEAD)"
+            # A NEW COMMIT EVERY FIFTEEN MINUTES IS WHY NOTHING EVER MERGED.
+            #
+            # The import is deterministic, so the branch's CONTENT is a
+            # function of the account -- but a commit also carries a
+            # timestamp, so every run produced a different SHA for identical
+            # content. Force-pushing that SHA restarted the destination's
+            # pull-request CI (~19 minutes) on a cadence of 15, so the head
+            # was essentially never a commit with a finished check suite, and
+            # an auto-merge gate that requires green CI could never fire.
+            # PR #218 was force-pushed like this for three days.
+            #
+            # So: if the remote branch already carries this EXACT tree, built
+            # on this EXACT base, there is nothing to say. Keep its commit,
+            # let its CI finish, and let the gate below act on it.
+            local_tree="$(git -C "${work}" rev-parse "HEAD^{tree}")"
+            reuse_existing=0
+            if [ -n "${expected}" ]; then
+              remote_tree="$(git -C "${work}" rev-parse --verify --quiet "${expected}^{tree}" || echo "")"
+              remote_base="$(git -C "${work}" rev-parse --verify --quiet "${expected}^" || echo "")"
+              # BOTH must match. Same tree on a DIFFERENT base is not the same
+              # proposal: the diff against main would be something this run
+              # never inspected.
+              if [ "${remote_tree}" = "${local_tree}" ] && [ "${remote_base}" = "${base_sha}" ]; then
+                reuse_existing=1
+              fi
+            fi
+
+            if [ "${reuse_existing}" -eq 1 ]; then
+              # Adopt the existing commit so everything downstream -- the
+              # merge gate's diff, its head check -- reasons about the commit
+              # that is actually on the branch.
+              git -C "${work}" reset --hard -q "${expected}"
+              echo "  ${branch} already carries this exact content on this base; not pushing."
+              echo "  destination commit: ${expected} (unchanged)"
+            else
+              # ONLY onto this router-owned branch: it is rebuilt from main every
+              # run, so its previous tip is this job's own earlier output. The
+              # lease still refuses if anything else moved it -- verified by
+              # having a second clone push in between.
+              git -C "${work}" push -q \
+                --force-with-lease="refs/heads/${branch}:${expected}" \
+                origin "HEAD:refs/heads/${branch}"
+              echo "  pushed ${branch}"
+              echo "  destination commit: $(git -C "${work}" rev-parse HEAD)"
+            fi
 
             # A BRANCH IS NOT THE LEDGER. Without a pull request the wager sits
             # somewhere nobody looks and is never recorded, which is the one
@@ -339,6 +407,63 @@ jobs:
               echo "::warning::${sport}: DELIVERED PARTIALLY -- the rows above were written and proposed, and at least one row was refused. See the receipts counts."
               echo "${sport}: PARTIAL -- delivered what the importer wrote; at least one row refused" >> "${GITHUB_STEP_SUMMARY}"
             fi
+
+            # A PULL REQUEST IS NOT THE LEDGER EITHER.
+            #
+            # docs/DELIVERY.md says a branch is not the ledger, and opening a
+            # pull request was the answer. It is only half of one: #218 carried
+            # 8 MLB wagers from 2026-09-18, stayed open and clean for three
+            # days, and the destination's own 2026-09-18 report said
+            # "Placed bets: 0" -- because the rows were not on main.
+            #
+            # The gate is deterministic and lives in
+            # src/kalshi_router/automerge.py, which is pure and separately
+            # tested. It merges ONLY when every machine-verifiable condition
+            # passes on THIS commit: router-owned branch, base main, no
+            # importer refusal, no verdict needing judgement, the second
+            # identical import proved idempotent above, only the canonical
+            # wager ledger changed, the ledger diff is APPEND-ONLY, every added
+            # row carries this router's importBatchId and a receipt, the
+            # destination's CI is green, and GitHub reports the branch cleanly
+            # mergeable.
+            #
+            # WAIT is the normal state on the run that first pushes a commit
+            # (CI is still running) and costs nothing -- the next run adopts
+            # the same commit and merges it.
+            merge_status=0
+            python "${GITHUB_WORKSPACE}/scripts/merge_delivery_pr.py" \
+              --sport "${sport}" \
+              --work "${work}" \
+              --receipts "${receipts}" \
+              --rerun-receipts "${rerun_receipts}" \
+              --rerun-changed-tree "${rerun_changed_tree}" \
+              --partial "$([ "${partial}" -eq 1 ] && echo true || echo false)" \
+              --base-ref "${base_sha}" \
+              $([ "${DRY_RUN}" = "true" ] && echo --dry-run) || merge_status=$?
+
+            case "${merge_status}" in
+              0) ;;
+              3)
+                # A condition FAILED. Nothing merged, the rows stay on the
+                # branch and in the pull request, and the reason is named
+                # above. This is red for the same reason a partial import is
+                # red: it needs a person, and the next run will not change it.
+                echo "::error::${sport}: the auto-merge gate REFUSED this batch. The rows are delivered and remain on ${branch}; they are NOT on main. See the named condition above."
+                echo "${sport}: MERGE REFUSED -- rows delivered to ${branch}, not merged" >> "${GITHUB_STEP_SUMMARY}"
+                # A partial import ALREADY counted this destination as failed,
+                # and the gate refusing is that same failure seen a second
+                # time -- not a second destination going wrong. Counting it
+                # twice would make "destinations that failed" stop meaning
+                # destinations.
+                if [ "${partial}" -eq 0 ]; then
+                  failures=$((failures + 1))
+                fi
+                ;;
+              *)
+                echo "::error::${sport}: the auto-merge gate could not run (exit ${merge_status})."
+                failures=$((failures + 1))
+                ;;
+            esac
           done
 
           echo ""
