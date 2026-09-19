@@ -40,12 +40,18 @@ from pathlib import Path
 import pytest
 import yaml
 
+from kalshi_router.destination import ROUTER_IMPORT_BATCH_ID
+from tests.github_api_stub import GitHubStub
+
 ROOT = Path(__file__).resolve().parents[1]
 DELIVER = ROOT / ".github/workflows/deliver-wagers.yml"
 
 DESTINATION = "chmoses98/edge-finder-api"
 LEDGER = "data/edgelab/bets/bets.jsonl"
-IMPORT_BATCH_ID = "kalshi-router-2026-09-16"
+# The PRODUCTION constant, not a dated label. The batch id is part of a row's
+# primary key (docs/DELIVERY.md), so the real 2026-09-16 payload carried this
+# exact value -- and the auto-merge gate refuses any added row that does not.
+IMPORT_BATCH_ID = ROUTER_IMPORT_BATCH_ID
 
 # The conflicted row's identity already exists in the destination, with
 # DIFFERENT economics. That is what makes it a CONFLICT -- the fake importer
@@ -262,24 +268,45 @@ def world(tmp_path):
     curl_log = tmp_path / "curl.log"
     curl_log.write_text("")
 
+    # The delivery step now finishes with the auto-merge gate, which asks
+    # GitHub four questions. `GitHubStub` answers them from THIS bare
+    # repository, so merging is a real ref update rather than a mocked
+    # boolean. Its default is a check suite still RUNNING -- which is exactly
+    # what the run that just pushed a commit sees, so the gate WAITs and none
+    # of the tests in this file (all about the import itself) are perturbed
+    # by it. The auto-merge tests set it green on purpose.
+    stub = GitHubStub(
+        remote, DESTINATION, branch="kalshi-router/MLB",
+        check_runs=(("test", "in_progress", None),),
+    )
+    api_root = stub.start()
+
     env = dict(os.environ)
     env.update(
         RUNNER_TEMP=str(runner_temp),
         DRY_RUN="false",
         DOWNSTREAM_REPO_TOKEN="not-a-real-token",
         GITHUB_STEP_SUMMARY=str(summary),
+        GITHUB_WORKSPACE=str(ROOT),
+        GITHUB_API_ROOT=api_root,
         GIT_CONFIG_GLOBAL=str(gitconfig),
         GIT_CONFIG_NOSYSTEM="1",
         HOME=str(home),
         PATH=f"{bin_dir}:{os.environ['PATH']}",
         CURL_LOG=str(curl_log),
     )
-    return {
-        "tmp": tmp_path, "env": env, "remote": remote,
-        "summary": summary, "curl_log": curl_log,
-        "receipts": runner_temp / "receipts-MLB.json",
-        "rows": rows,
-    }
+    try:
+        yield {
+            "tmp": tmp_path, "env": env, "remote": remote,
+            "summary": summary, "curl_log": curl_log,
+            "receipts": runner_temp / "receipts-MLB.json",
+            "rerun_receipts": runner_temp / "receipts-rerun-MLB.json",
+            "payload": runner_temp / "payloads" / "MLB.json",
+            "stub": stub,
+            "rows": rows,
+        }
+    finally:
+        stub.stop()
 
 
 def delivery_step() -> str:

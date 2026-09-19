@@ -152,6 +152,37 @@ the number in its hands is, and only the read time answers that.
 If `DOWNSTREAM_SECRETS_TOKEN` is absent the job fails loudly with that
 instruction rather than falling back to a public channel.
 
+### 5a. The 2026-09-18 outage, and what it changed *(added 2026-09-19)*
+
+`DOWNSTREAM_SECRETS_TOKEN` **was never created**. Ten consecutive scheduled
+runs (numbers 1–10, 2026-09-18 → 2026-09-19) failed identically: *"Read the
+balance"* succeeded, *"Seal it into the destination repository"* exited 1.
+The proof is in the run's own environment block —
+`DOWNSTREAM_SECRETS_TOKEN:` rendered **empty** while `KALSHI_API_KEY_ID`
+rendered `***`, and a configured secret always masks.
+
+No code creates a credential, so **the remaining fix is the owner's**: create
+the fine-grained PAT in the table above and store it on this repository as
+`DOWNSTREAM_SECRETS_TOKEN`. Until then the handicapping card reports the
+bankroll as unavailable and presents no dollar stake sizes, which is the
+correct degraded behaviour and not a second bug.
+
+What the publisher *was* doing wrong around it is fixed:
+
+| Was | Now |
+|---|---|
+| Read a live balance, **then** discovered it could not deliver it | `--preflight-only` verifies the credential with one read-only request **before** any account is touched |
+| Absent token, wrong scope, wrong repository and an unreachable API were one exit code | four exits — `2` refused context, `3` credential, `4` transport, `5` unverified — each with its own remedy in the job's error annotation |
+| A `204 No Content` was taken as proof the destination held the secret | the secret's **metadata** (name and `updated_at`, never its value) is read back and must show this run's write |
+| The context's **shape** was checked; its **meaning** was not | `valueType` must be `KALSHI_AVAILABLE_CASH_BALANCE` and `source` must be `kalshi_authenticated_balance`, or nothing is sent |
+| Any reading was sealed | a reading already past the destination's 30-minute window is refused, rather than replacing a possibly-usable secret with an unusable one |
+| One 502 failed the run | transient transport errors and 5xx get two retries; 4xx is an answer and is not retried |
+
+`tests/test_bankroll_publisher_repair.py` seals against a **real libsodium
+keypair and decrypts the result**, so "sealing succeeds" is a decryption the
+suite performs rather than a status code it believes — and every test greps
+stdout, stderr, the workflow and the whole git tree for the balance's digits.
+
 ## 6. Cadence and freshness
 
 The workflow runs **every 15 minutes**; the destination refuses to size
