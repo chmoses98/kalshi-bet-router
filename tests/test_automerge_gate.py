@@ -487,7 +487,10 @@ def test_a_red_destination_ci_is_never_merged_past(world):  # noqa: F811
     assert len(branch_ledger(world)) == 17
 
 
-def test_a_dry_run_evaluates_the_gate_and_merges_nothing(world):  # noqa: F811
+def test_a_dry_run_pushes_nothing_and_merges_nothing(world):  # noqa: F811
+    """A dry run stops before the push, so it never reaches the gate at
+    all. The gate call still carries --dry-run as defence in depth: if that
+    early `continue` is ever removed, the flag alone still merges nothing."""
     drop_the_conflicted_row(world)
     world["env"]["DRY_RUN"] = "true"
     result = run_delivery(world)
@@ -495,6 +498,32 @@ def test_a_dry_run_evaluates_the_gate_and_merges_nothing(world):  # noqa: F811
     assert "DRY RUN: ledger changed, nothing pushed." in result.stdout
     assert world["stub"].merged_sha is None
     assert result.returncode == 0
+    assert "--dry-run" in Path(ROOT / ".github/workflows/deliver-wagers.yml").read_text()
+
+
+def test_the_gate_itself_merges_nothing_in_dry_run(tmp_path):
+    """The flag, exercised directly rather than inferred."""
+    import subprocess as sp
+    work = tmp_path / "clone"
+    work.mkdir()
+    sp.run(["git", "init", "--quiet", "-b", "main", str(work)], check=True)
+    (work / "x").write_text("x")
+    sp.run(["git", "-C", str(work), "add", "-A"], check=True)
+    sp.run(["git", "-C", str(work), "-c", "user.email=t@e.invalid", "-c", "user.name=t",
+            "commit", "--quiet", "-m", "seed"], check=True)
+    receipts = tmp_path / "r.json"
+    receipts.write_text("[]")
+
+    result = sp.run(
+        [__import__("sys").executable, str(MERGE_SCRIPT), "--sport", "MLB",
+         "--work", str(work), "--receipts", str(receipts), "--dry-run"],
+        capture_output=True, text=True,
+        env={"PATH": os.environ["PATH"], "PYTHONPATH": str(ROOT / "src"),
+             "DOWNSTREAM_REPO_TOKEN": "", "GITHUB_API_ROOT": "http://127.0.0.1:1"},
+    )
+    # No token -> configuration refusal, and nothing was merged.
+    assert result.returncode == 2
+    assert "empty" in result.stderr
 
 
 # ── the churn that made green CI impossible ────────────────────────────
