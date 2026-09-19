@@ -683,21 +683,35 @@ def test_a_new_wager_does_produce_a_new_commit(world):  # noqa: F811
     assert len(branch_ledger(world)) == 18
 
 
-def test_a_moved_destination_main_is_rebuilt_on_rather_than_reused(world):  # noqa: F811
-    """Same tree on a DIFFERENT base is a different proposal: its diff
-    against main is something this run never inspected."""
+def test_a_moved_CANONICAL_LEDGER_is_rebuilt_on_rather_than_reused(world):  # noqa: F811
+    """A proposal is a function of the canonical ledger it was built from, so
+    that is what makes an existing one stale.
+
+    This test used to move `main` by writing an unrelated file and require a
+    rebuild. That was safe and, measured against the live destination,
+    unusable: it commits its own pipeline output every one to five minutes and
+    its pull-request CI takes nineteen, so the head reset faster than any check
+    suite could finish and the gate still could never fire. The unrelated-file
+    case is now the opposite assertion, and it lives with the rest of the
+    branch lifecycle in tests/test_delivery_determinism.py.
+    """
     drop_the_conflicted_row(world)
     run_delivery(world)
     first_head = _git("rev-parse", "refs/heads/kalshi-router/MLB", cwd=world["remote"]).strip()
 
-    # Someone else commits to the destination's main.
+    # Someone else writes a row into the destination's canonical ledger.
     other = world["tmp"] / "other"
     subprocess.run(["git", "clone", "--quiet", str(world["remote"]), str(other)],
                    check=True, capture_output=True)
-    (other / "NOTES.md").write_text("an unrelated change\n")
+    with (other / LEDGER).open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({
+            "betId": "someone-elses-row", "sourceBetKey": "manual-9999",
+            "importBatchId": "a-different-batch", "marketTicker": "KXOTHER-1",
+            "side": "YES", "gameDate": "2026-09-15",
+        }, sort_keys=True) + "\n")
     _git("add", "-A", cwd=other)
     _git("-c", "user.email=o@example.invalid", "-c", "user.name=o",
-         "commit", "--quiet", "-m", "unrelated", cwd=other)
+         "commit", "--quiet", "-m", "a manual bet", cwd=other)
     _git("push", "--quiet", "origin", "main", cwd=other)
 
     result = run_delivery(world)
@@ -705,6 +719,8 @@ def test_a_moved_destination_main_is_rebuilt_on_rather_than_reused(world):  # no
 
     assert "pushed kalshi-router/MLB" in result.stdout
     assert second_head != first_head
+    # Their row survived the rebuild.
+    assert any(r["betId"] == "someone-elses-row" for r in branch_ledger(world))
 
 
 # ── the gate is wired in, and cannot quietly be unwired ────────────────

@@ -124,7 +124,8 @@ class RemoteBranch:
         return bool(self.head) and bool(base_sha) and self.base == base_sha
 
 
-def choose_seed(base_sha: str, remote: RemoteBranch) -> tuple[str, str]:
+def choose_seed(base_sha: str, remote: RemoteBranch,
+                ledger_moved: bool) -> tuple[str, str]:
     """(commit the importer should run on top of, why).
 
     THE WHOLE DETERMINISM FIX IS THIS FUNCTION.
@@ -135,39 +136,66 @@ def choose_seed(base_sha: str, remote: RemoteBranch) -> tuple[str, str]:
     rows it already proposed, so it can recognise them instead of minting them
     again with a fresh clock reading.
 
-    Seeding from `main` is the answer whenever the branch is NOT built on the
-    destination's current main -- main moved, so the old proposal's diff is
-    stale and the batch must be reconciled against what is there now. That
-    rebuild legitimately produces a new tree and legitimately restarts CI;
-    determinism is promised for a fixed base, not across a moving one.
+    WHAT "STILL CURRENT" MEANS, AND WHY IT IS NOT "main HAS NOT MOVED"
+    -----------------------------------------------------------------
+    The first version of this rebuilt whenever the destination's `main` moved at
+    all. That is correct and, measured against the live destination, unusable.
+    It commits its own pipeline output every one to five minutes in bursts;
+    its pull-request CI takes nineteen. A rebuild necessarily changes
+    the tree -- not because of timestamps, but because the branch must carry
+    main's newer files -- so the head reset faster than any check suite could
+    finish, and the gate could still never fire. Measured 2026-09-19: main was
+    quiet for 35 minutes once in an hour, and the gate came within two minutes
+    of merging inside that window.
+
+    The proposal is a function of ONE thing: the canonical wager ledger the
+    importer reads. A destination commit that adds a market snapshot or a report
+    changes nothing about which rows this batch would write. So the branch is
+    rebuilt when THAT moves, and kept otherwise.
+
+    Keeping it is safe because the pull request's own change is still fully
+    inspected -- `scripts/merge_delivery_pr.py` diffs the head against ITS OWN
+    PARENT, which is the true merge base, so what the gate reads is exactly what
+    merging would apply. GitHub still has to report the branch cleanly
+    mergeable, and the destination's checks still have to be green. A green
+    check on a slightly older merge result is how every pull request on GitHub
+    already works, and #218 itself merged while behind.
+
+    When the ledger HAS moved, the batch is reconciled against what is on main
+    now: that rebuild legitimately produces a new tree and legitimately restarts
+    CI. Determinism is promised for a fixed ledger, not across a moving one.
     """
-    if remote.is_built_on(base_sha):
+    if remote.exists and not ledger_moved:
         return remote.head, SEED_BRANCH
     return base_sha, SEED_MAIN
 
 
-def decide(base_sha: str, base_tree: str, resulting_tree: str,
-           remote: RemoteBranch) -> tuple[str, str]:
+def decide(proposal_base_tree: str, resulting_tree: str,
+           remote: RemoteBranch, seeded_from_branch: bool) -> tuple[str, str]:
     """(what to do with the importer's output, why).
 
-    Order matters. "Everything is already on main" is checked FIRST, because a
+    `proposal_base_tree` is the tree of the commit this proposal sits on: the
+    destination's main when the batch was rebuilt, the branch's own base when
+    its existing proposal was kept.
+
+    Order matters. "The importer added nothing" is checked FIRST, because a
     branch that still exists while its rows have landed must not be re-proposed
-    -- and because a tree equal to main's is not a delivery at all.
+    -- and because a tree equal to its base's is not a delivery at all.
     """
-    if resulting_tree == base_tree:
+    if resulting_tree == proposal_base_tree:
         return NOTHING_TO_DELIVER, (
-            "the importer's output is identical to the destination's main; "
-            "every row is already recorded")
-    if remote.is_built_on(base_sha) and remote.tree == resulting_tree:
+            "the importer's output is identical to the commit this proposal "
+            "sits on; every row is already recorded")
+    if seeded_from_branch and remote.tree == resulting_tree:
         return ADOPT, (
-            f"{remote.head[:12]} already carries this exact tree on this exact "
-            "base; keeping it so its checks can finish")
-    if remote.exists and not remote.is_built_on(base_sha):
+            f"{remote.head[:12]} already carries this exact tree on the ledger "
+            "it was built from; keeping it so its checks can finish")
+    if remote.exists and not seeded_from_branch:
         return PUSH, (
-            "the existing branch was built on a different base; rebuilding the "
-            "proposal against the destination's current main")
+            "the destination's canonical ledger moved; rebuilding the proposal "
+            "against what is on main now")
     if remote.exists:
-        return PUSH, "the proposal changed on this base; a new commit is required"
+        return PUSH, "the proposal changed; a new commit is required"
     return PUSH, "no delivery branch exists yet"
 
 

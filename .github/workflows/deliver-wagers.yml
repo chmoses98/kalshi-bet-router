@@ -423,6 +423,14 @@ jobs:
             # days, and the destination's own 2026-09-18 report said
             # "Placed bets: 0" -- because the rows were not on main.
             #
+            # THE BASE THE GATE READS IS THE BRANCH'S OWN PARENT, not this
+            # run's clone of main. The router keeps the branch at exactly one
+            # commit, so its parent IS the commit it proposes against -- which
+            # makes a two-dot diff against it the TRUE merge base, readable from
+            # a --depth 2 fetch with no deeper history. That is what lets a
+            # proposal survive destination commits it does not depend on: what
+            # the gate inspects is exactly what merging would apply.
+            #
             # The gate is deterministic and lives in
             # src/kalshi_router/automerge.py, which is pure and separately
             # tested. It merges ONLY when every machine-verifiable condition
@@ -445,7 +453,7 @@ jobs:
               --rerun-receipts "${rerun_receipts}" \
               --rerun-changed-tree "${rerun_changed_tree}" \
               --partial "$([ "${partial}" -eq 1 ] && echo true || echo false)" \
-              --base-ref "${base_sha}" \
+              --base-ref "$(git -C "${work}" rev-parse HEAD^)" \
               $([ "${DRY_RUN}" = "true" ] && echo --dry-run) || merge_status=$?
 
             case "${merge_status}" in
