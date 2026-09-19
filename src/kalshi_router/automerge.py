@@ -93,7 +93,30 @@ NO_JUDGEMENT_VERDICTS = frozenset({"NEW", "DUPLICATE_NOOP", "CORRECTED"})
 IDEMPOTENT_RERUN_VERDICTS = frozenset({"DUPLICATE_NOOP"})
 
 #: Mergeability states that resolve on their own.
-TRANSIENT_MERGE_STATES = frozenset({"unknown", "behind", "dirty"})
+#:
+#: `unstable` is here because of a real failure, on the first production run
+#: of this gate (deliver-wagers #41 and #42, 2026-09-19). Ten conditions
+#: passed, CI was correctly WAITing on a check that had been running for
+#: seconds -- and this condition REFUSED, turning a perfectly healthy
+#: delivery red.
+#:
+#: GitHub reports `unstable` for "merges cleanly, but a check run is pending,
+#: failing, neutral or skipped". Every one of those is ALREADY decided by
+#: CONTINUOUS_INTEGRATION_IS_GREEN, which reads the check runs directly:
+#: pending waits, failing refuses, neutral and skipped pass. So `unstable`
+#: carries no information this gate does not already have, and refusing on it
+#: double-counts CI -- guaranteeing that the run which pushes a commit is
+#: always red, since CI is by definition still running at that moment.
+#:
+#: This is not a relaxation. Nothing merges while `mergeable` is false or a
+#: check is unfinished; the merge still needs GitHub to agree AND this gate's
+#: own CI condition to pass. What it stops is a red job for a state that
+#: means "the thing you are already waiting for".
+#:
+#: `blocked` stays a REFUSAL, and that distinction is the whole point:
+#: `blocked` is something OTHER than CI -- a required review, a protection
+#: rule -- withholding the merge, and automation must not route around it.
+TRANSIENT_MERGE_STATES = frozenset({"unknown", "behind", "dirty", "unstable"})
 
 #: Check-run conclusions that are not a failure. `skipped` and `neutral` are
 #: included because a check that declined to run is not a check that failed;
@@ -409,6 +432,7 @@ def evaluate(facts: MergeFacts) -> MergeVerdict:
             ok("EVERY_ADDED_ROW_CARRIES_THE_ROUTER_IDENTITY")
 
     # ── the destination's own CI ─────────────────────────────────────
+    continuous_integration_is_green = False
     if not facts.check_runs:
         # No check has reported yet. On a repository with pull-request CI this
         # is "too early", not "nothing runs here": waiting costs one cycle,
@@ -425,12 +449,31 @@ def evaluate(facts: MergeFacts) -> MergeVerdict:
                  f"still running: {pending}")
         else:
             ok("CONTINUOUS_INTEGRATION_IS_GREEN")
+            continuous_integration_is_green = True
 
     # ── mergeability, as GitHub computes it ──────────────────────────
     state = facts.mergeable_state
     if facts.mergeable is None or state in (None, "unknown"):
         wait("THE_DESTINATION_BRANCH_IS_CLEANLY_MERGEABLE",
              "GitHub has not finished computing mergeability")
+    elif state == "unstable" and facts.mergeable:
+        # The branch MERGES cleanly; what makes it "unstable" is a check run
+        # that is pending, failing, neutral or skipped.
+        # CONTINUOUS_INTEGRATION_IS_GREEN above has already read every one of
+        # those -- check runs AND legacy commit statuses -- and reached the
+        # right verdict, so this condition must defer to it rather than
+        # double-count it.
+        if continuous_integration_is_green:
+            # Every check reported and none failed. `unstable` here is
+            # GitHub's accounting of a neutral or skipped check, not a reason
+            # to hold a delivery -- and treating it as one would deadlock,
+            # because nothing about it will ever change.
+            ok("THE_DESTINATION_BRANCH_IS_CLEANLY_MERGEABLE")
+        else:
+            wait("THE_DESTINATION_BRANCH_IS_CLEANLY_MERGEABLE",
+                 "mergeable, with a check run unfinished or not passing (GitHub "
+                 "calls this 'unstable'); CONTINUOUS_INTEGRATION_IS_GREEN above "
+                 "is the verdict on those checks")
     elif not facts.mergeable or state in TRANSIENT_MERGE_STATES:
         # `dirty` and `behind` both resolve by themselves here, because the
         # next run rebuilds this branch from the destination's current main.

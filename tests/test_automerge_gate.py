@@ -288,6 +288,89 @@ def test_a_transient_merge_state_waits(state):
     assert "THE_DESTINATION_BRANCH_IS_CLEANLY_MERGEABLE" in verdict.waiting_on
 
 
+# ── the 2026-09-19 regression: 'unstable' is not a refusal ─────────────
+
+def test_a_pending_check_makes_github_say_unstable_and_that_is_a_WAIT():
+    """PRODUCTION FAILURE, deliver-wagers runs #41 and #42 (2026-09-19).
+
+    The first real runs of this gate. Ten conditions passed, CI correctly
+    WAITed on a check that had been running for seconds -- and this
+    condition REFUSED, turning a healthy delivery red and annotating
+    "something other than this gate is withholding the merge" when the
+    thing withholding it was the CI this gate was already waiting on.
+
+    GitHub says `unstable` for "merges cleanly, but a check is pending or
+    not passing". That is by definition the state on the run that just
+    pushed a commit, so refusing on it made that run ALWAYS red.
+    """
+    verdict = automerge.evaluate(facts(
+        mergeable=True, mergeable_state="unstable",
+        check_runs=(("test", "in_progress", None),),
+    ))
+    assert verdict.verdict == automerge.WAIT, verdict.render()
+    assert not verdict.failed, verdict.render()
+    assert "CONTINUOUS_INTEGRATION_IS_GREEN" in verdict.waiting_on
+    assert "THE_DESTINATION_BRANCH_IS_CLEANLY_MERGEABLE" in verdict.waiting_on
+
+
+def test_unstable_with_every_check_passed_does_not_deadlock():
+    """The other half. If `unstable` were only ever a WAIT, a repository
+    whose neutral/skipped check keeps it `unstable` forever would never
+    merge -- a deadlock instead of a red job. CI's own verdict decides."""
+    verdict = automerge.evaluate(facts(
+        mergeable=True, mergeable_state="unstable",
+        check_runs=(("test", "completed", "success"),
+                    ("optional", "completed", "skipped")),
+    ))
+    assert verdict.verdict == automerge.MERGE, verdict.render()
+
+
+def test_unstable_never_merges_past_a_FAILING_check():
+    """`unstable` deferring to CI must not become `unstable` ignoring CI."""
+    verdict = automerge.evaluate(facts(
+        mergeable=True, mergeable_state="unstable",
+        check_runs=(("test", "completed", "failure"),),
+    ))
+    assert verdict.verdict == automerge.REFUSE
+    assert "CONTINUOUS_INTEGRATION_IS_GREEN" in verdict.failed
+
+
+def test_unstable_is_not_a_back_door_around_a_conflict():
+    verdict = automerge.evaluate(facts(mergeable=False, mergeable_state="unstable"))
+    assert verdict.verdict == automerge.WAIT
+    assert "THE_DESTINATION_BRANCH_IS_CLEANLY_MERGEABLE" in verdict.waiting_on
+
+
+def test_blocked_is_still_a_refusal_and_unstable_is_not():
+    """The distinction the fix rests on: `blocked` is something OTHER than
+    CI withholding the merge, and automation must not route around it."""
+    assert "blocked" not in automerge.TRANSIENT_MERGE_STATES
+    assert "unstable" in automerge.TRANSIENT_MERGE_STATES
+    assert automerge.evaluate(
+        facts(mergeable_state="blocked")).verdict == automerge.REFUSE
+
+
+def test_the_run_that_pushes_a_commit_is_never_red_for_pushing_it(world):  # noqa: F811
+    """End to end, against the committed workflow: run 1 pushes, CI has not
+    finished, and the job must be GREEN with a WAIT -- not red."""
+    drop_the_conflicted_row(world)
+    world["stub"].mergeable_state = "unstable"          # what GitHub reports
+    world["stub"].check_runs = [("test", "in_progress", None)]
+
+    result = run_delivery(world)
+
+    assert "pushed kalshi-router/MLB" in result.stdout
+    assert "verdict: WAIT" in result.stdout
+    # No condition may be in the REFUSE bucket. (Matched on the rendered
+    # prefix, because the condition NAME `IMPORTER_REFUSED_NOTHING` itself
+    # contains the word.)
+    assert "    REFUSE " not in result.stdout, result.stdout
+    assert "the auto-merge gate REFUSED" not in result.stdout
+    assert "destinations that failed: 0" in result.stdout
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert world["stub"].merged_sha is None
+
+
 def test_a_blocked_merge_state_refuses_rather_than_routing_around_it():
     verdict = automerge.evaluate(facts(mergeable_state="blocked"))
     assert verdict.verdict == automerge.REFUSE
