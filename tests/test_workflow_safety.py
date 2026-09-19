@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 import shlex
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -493,19 +494,37 @@ def test_the_destination_default_branch_is_never_pushed_to(name, text):
     # Join shell line-continuations first: the refspec of a wrapped `git push`
     # is on the NEXT line, and checking line by line would read the command as
     # having no destination at all.
-    joined = text.replace("\\\n", " ")
+    label, body = _push_site(name, text)
+    joined = body.replace("\\\n", " ")
 
-    pushes = [line for line in joined.splitlines() if "git" in line and " push" in line]
-    assert pushes, f"{name} never pushes"
-    for line in pushes:
-        # The target is the branch VARIABLE, so the two halves are checked
-        # separately: every push goes to ${branch}, and ${branch} is only ever
-        # set to a router-owned name (below).
-        assert 'HEAD:refs/heads/${branch}' in line, f"{name}: {line.strip()}"
-        assert ":refs/heads/main" not in line
-        assert "--force " not in line, "force-with-lease, never bare force"
+    if _pushes_inline(text):
+        pushes = [line for line in joined.splitlines() if "git" in line and " push" in line]
+        assert pushes, f"{name} never pushes"
+        for line in pushes:
+            # The target is the branch VARIABLE, so the two halves are checked
+            # separately: every push goes to ${branch}, and ${branch} is only
+            # ever set to a router-owned name (below).
+            assert 'HEAD:refs/heads/${branch}' in line, f"{name}: {line.strip()}"
+            assert ":refs/heads/main" not in line
+            assert "--force " not in line, "force-with-lease, never bare force"
+    else:
+        # Same two halves, at the script. The refspec is a literal, and the
+        # branch it interpolates is DERIVED from the router's own namespace by
+        # the same function the merge gate recognises branches with -- so no
+        # argument, and no payload filename, can name a branch outside it.
+        assert 'f"HEAD:refs/heads/{branch}"' in joined, f"{label} pushes somewhere else"
+        assert ":refs/heads/main" not in joined
+        assert '"--force"' not in joined and "--force " not in joined, (
+            "force-with-lease, never bare force")
+        assert "router_branch_for(args.sport)" in joined, (
+            f"{label} does not derive the branch from the router's namespace")
+        assert 'add_argument("--branch"' not in joined, (
+            f"{label} lets a caller name the branch it pushes to")
 
-    assignments = [line.strip() for line in joined.splitlines() if line.strip().startswith("branch=")]
+    # The branch NAME is a property of the workflow, wherever the push lives.
+    workflow_lines = text.replace("\\\n", " ").splitlines()
+    assignments = [line.strip() for line in workflow_lines
+                   if line.strip().startswith("branch=")]
     assert assignments, f"{name} sets no branch"
     for line in assignments:
         assert line.startswith('branch="kalshi-router/'), (
@@ -821,6 +840,41 @@ def test_only_the_health_annotation_may_claim_a_health_verdict(path):
             )
 
 
+#: The script the delivery workflow delegates its branch lifecycle to.
+#:
+#: The push, the lease and the containment check moved here when the branch
+#: lifecycle was repaired -- because the decisions they rest on had to become
+#: testable, and a decision embedded in YAML shell is not. None of the
+#: guarantees below were dropped in the move: `_push_site` follows them to
+#: their new address so they keep being asserted. A workflow that neither
+#: pushes nor delegates to a known push site is itself a failure.
+BRANCH_SCRIPT = ROOT / "scripts/deliver_branch.py"
+
+
+def _pushes_inline(text):
+    """Does this text run `git push` itself?
+
+    LINE BY LINE, deliberately. A whole-text membership test for " push" also
+    matches the word "pushed" in `echo "  pushed ${branch}"`, which would send
+    every assertion below to the wrong body and pass them vacuously.
+    """
+    joined = text.replace("\\\n", " ")
+    return any("git" in line and " push" in line for line in joined.splitlines())
+
+
+def _push_site(name, text):
+    """(label, body) of the place this workflow's destination push happens.
+
+    `recover-wagers.yml` still pushes inline and is checked as shell;
+    `deliver-wagers.yml` delegates and is checked at the script.
+    """
+    if _pushes_inline(text):
+        return name, text
+    assert "scripts/deliver_branch.py" in text, (
+        f"{name} neither pushes nor delegates its push to a known script")
+    return "scripts/deliver_branch.py", BRANCH_SCRIPT.read_text()
+
+
 @pytest.mark.parametrize("name,text", _delivering_workflow_texts(), ids=lambda v: v if isinstance(v, str) and len(v) < 40 else "")
 def test_a_router_commit_may_only_touch_the_data_directory(name, text):
     """`git add -A` writes into SOMEONE ELSE'S repository every 15 minutes.
@@ -833,9 +887,14 @@ def test_a_router_commit_may_only_touch_the_data_directory(name, text):
     So the staged set is checked before committing, and anything outside data/
     stops the delivery rather than riding along.
     """
-    assert "diff --cached --name-only" in text, f"{name} commits without checking what"
-    assert "grep -v '^data/'" in text
-    assert "dirtied files outside data/" in text
+    label, body = _push_site(name, text)
+    assert '"diff", "--cached", "--name-only"' in body or \
+           "diff --cached --name-only" in body, (
+               f"{label} commits without checking what it staged")
+    assert "grep -v '^data/'" in body or "delivery_branch.uncommittable" in body, (
+        f"{label} does not screen the staged set")
+    assert "outside data/" in text, (
+        f"{name} does not say what happened when it refuses")
 
 
 @pytest.mark.parametrize("name,text", _delivering_workflow_texts(), ids=lambda v: v if isinstance(v, str) and len(v) < 40 else "")
@@ -919,15 +978,24 @@ def test_the_lease_carries_an_explicit_expected_value(name, text):
     The first run succeeds (the branch does not exist yet), which is precisely
     why this would have looked fine exactly once.
     """
-    joined = text.replace("\\\n", " ")
-    pushes = [line for line in joined.splitlines() if "git" in line and " push" in line]
-    assert pushes
-    for line in pushes:
-        assert "--force-with-lease=" in line, (
-            f"{name}: a bare --force-with-lease is rejected as stale info from a "
-            f"shallow clone: {line.strip()}"
-        )
-        assert '${expected}' in line
+    label, body = _push_site(name, text)
+    joined = body.replace("\\\n", " ")
+
+    if _pushes_inline(text):
+        pushes = [line for line in joined.splitlines() if "git" in line and " push" in line]
+        assert pushes
+        for line in pushes:
+            assert "--force-with-lease=" in line, (
+                f"{name}: a bare --force-with-lease is rejected as stale info from a "
+                f"shallow clone: {line.strip()}"
+            )
+            assert '${expected}' in line
+    else:
+        assert 'f"--force-with-lease=refs/heads/{branch}:{expected}"' in joined, (
+            f"{label}: a bare --force-with-lease is rejected as stale info from a "
+            "shallow clone")
+        assert 'expected = remote.head or ""' in joined, (
+            f"{label}: the expectation must be the remote's own tip, or empty")
 
 
 @pytest.mark.parametrize("name,text", _delivering_workflow_texts(), ids=lambda v: v if isinstance(v, str) and len(v) < 40 else "")
@@ -935,21 +1003,47 @@ def test_the_expected_value_comes_from_an_explicitly_fetched_ref(name, text):
     """Fetching is NECESSARY and not sufficient -- but without it, rev-parse
     finds nothing and the lease would always read "must not exist", which would
     silently turn the lease off rather than fail."""
-    joined = text.replace("\\\n", " ")
-    fetches = [line for line in joined.splitlines() if "fetch" in line and "refs/remotes/origin" in line]
-    assert fetches, f"{name} never fetches the branch it leases against"
-    assert any("expected=" in line for line in joined.splitlines())
+    label, body = _push_site(name, text)
+    joined = body.replace("\\\n", " ")
+
+    if _pushes_inline(text):
+        fetches = [line for line in joined.splitlines()
+                   if "fetch" in line and "refs/remotes/origin" in line]
+        assert fetches, f"{label} never fetches the branch it leases against"
+        assert any("expected=" in line for line in joined.splitlines())
+    else:
+        # A multi-line call in Python, so the comparison is on collapsed
+        # whitespace rather than on any one line.
+        compact = " ".join(joined.split())
+        assert ('"fetch", "-q", "--depth", "2", "origin", '
+                'f"+refs/heads/{branch}:refs/remotes/origin/{branch}"') in compact, (
+            f"{label} never fetches the branch it leases against")
+        assert 'ref = f"refs/remotes/origin/{branch}"' in joined, (
+            f"{label} reads the expectation from somewhere other than the fetched ref")
+        assert 'expected = remote.head or ""' in joined, (
+            f"{label} never forms a lease expectation")
 
 
 @pytest.mark.parametrize("name,text", _delivering_workflow_texts(), ids=lambda v: v if isinstance(v, str) and len(v) < 40 else "")
 def test_a_missing_branch_yields_an_empty_expectation_not_a_failure(name, text):
     """On the first run the branch does not exist. rev-parse must fall back to
     an empty string, which the lease reads as "must not exist yet"."""
-    joined = text.replace("\\\n", " ")
-    assert any(
-        "rev-parse" in line and 'echo ""' in line
-        for line in joined.splitlines()
-    ), f"{name}: the first run would fail on a missing ref"
+    label, body = _push_site(name, text)
+    joined = body.replace("\\\n", " ")
+
+    if _pushes_inline(text):
+        assert any(
+            "rev-parse" in line and 'echo ""' in line
+            for line in joined.splitlines()
+        ), f"{name}: the first run would fail on a missing ref"
+    else:
+        # --verify --quiet is the whole mechanism: without it a bare
+        # `git rev-parse <missing-ref>` ECHOES ITS ARGUMENT before failing, and
+        # the lease is handed a ref NAME where an object name belongs.
+        assert '"rev-parse", "--verify", "--quiet"' in joined, (
+            f"{label}: a missing ref would come back as its own name")
+        assert "return delivery_branch.RemoteBranch()" in joined, (
+            f"{label}: a missing branch must produce an EMPTY expectation")
 
 
 # ============ the receipts block is code, and it was untested ================
@@ -978,9 +1072,13 @@ def _receipts_block(path):
             script = step.get("run")
             if not isinstance(script, str) or "PYEOF" not in script:
                 continue
-            match = re.search(r"<<'PYEOF'\n(.*?)\n\s*PYEOF", script, re.S)
-            if match:
-                return match.group(1)
+            # BY CONTENT, NOT BY POSITION. The delivery step embeds more than
+            # one heredoc -- it also resolves the destination repository
+            # through one -- and taking the first would silently test the
+            # wrong block while still passing.
+            for match in re.finditer(r"<<'PYEOF'\n(.*?)\n\s*PYEOF", script, re.S):
+                if "duplicateStatus" in match.group(1):
+                    return match.group(1)
     return None
 
 
@@ -1254,10 +1352,14 @@ LEASE_EXPECTED_LINE = re.compile(r'^\s*(expected="\$\(git .*rev-parse.*\)")\s*$'
 
 RECOVER_WORKFLOW = ROOT / ".github/workflows/recover-wagers.yml"
 
-#: Every workflow that pushes to a destination under a lease. `recover-wagers`
-#: carried the identical broken line, and it is the path a controlled recovery
-#: would use -- so fixing only the workflow that happened to fail would have
-#: left the repair itself standing on the defect it was repairing.
+#: Every workflow that still forms its lease expectation in SHELL.
+#:
+#: `recover-wagers` carried the identical broken line and is the path a
+#: controlled recovery would use, so it is still pinned here. `deliver-wagers`
+#: moved its lease into `scripts/deliver_branch.py` when the branch lifecycle
+#: was repaired -- it is not exempt, it is covered by the three tests at the end
+#: of this section, which EXECUTE that script instead of a reconstruction of it.
+SHELL_LEASE_WORKFLOWS = (RECOVER_WORKFLOW,)
 PUSHING_WORKFLOWS = (DELIVER_WORKFLOW, RECOVER_WORKFLOW)
 
 
@@ -1320,7 +1422,7 @@ def shallow_destination_clone(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "workflow", PUSHING_WORKFLOWS, ids=lambda path: path.name
+    "workflow", SHELL_LEASE_WORKFLOWS, ids=lambda path: path.name
 )
 def test_the_lease_expectation_is_empty_when_the_branch_does_not_exist(workflow, tmp_path):
     """The first run, which is the run that failed in production.
@@ -1350,41 +1452,51 @@ def test_the_lease_expectation_is_empty_when_the_branch_does_not_exist(workflow,
     )
 
 
+#: The delivery path's push, executed rather than described. These run the
+#: COMMITTED script against a real shallow clone and a real bare remote, so
+#: what is under test is the code production runs -- not a shell snippet
+#: reassembled by a test, which is what they replaced.
+def _run_branch_script(work, base_sha, *args):
+    return subprocess.run(
+        [sys.executable, str(ROOT / "scripts/deliver_branch.py"),
+         "--work", str(work), "--sport", "MLB", "--base-sha", base_sha, *args],
+        capture_output=True, text=True,
+    )
+
+
+def _head_of(work):
+    return subprocess.run(
+        ["git", "-C", str(work), "rev-parse", "HEAD"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+
+
 def test_the_first_delivery_to_a_new_branch_actually_pushes(tmp_path):
     """End to end: the exact failure, at the exact step, with a real push.
 
-    The assertion above pins the value; this pins the CONSEQUENCE. Production
-    did not fail on a variable, it failed on `git push` exiting 129 with the
-    wager already imported and nothing sent.
+    Production did not fail on a variable, it failed on `git push` exiting 129
+    with the wager already imported and nothing sent -- because a missing
+    branch yielded the ref's own NAME where an object name belonged. The first
+    run, on a branch that does not exist, is the only run that can catch it.
     """
     remote, work = shallow_destination_clone(tmp_path)
     branch = "kalshi-router/MLB"
+    base = _head_of(work)
+
+    seeded = _run_branch_script(work, base, "seed")
+    assert seeded.returncode == 0, seeded.stderr
+    assert seeded.stdout.strip() == base, (
+        f"a missing branch must seed from main; got {seeded.stdout.strip()!r}")
 
     with (work / "data" / "bets.jsonl").open("a", encoding="utf-8") as handle:
         handle.write('{"imported": true}\n')
-    subprocess.run(["git", "-C", str(work), "checkout", "-q", "-b", branch], check=True)
-    subprocess.run(["git", "-C", str(work), "add", "-A"], check=True)
-    subprocess.run(["git", "-C", str(work), "commit", "-qm", "import"], check=True)
-    subprocess.run(
-        ["git", "-C", str(work), "fetch", "-q", "--depth", "1", "origin",
-         f"+refs/heads/{branch}:refs/remotes/origin/{branch}"],
-        capture_output=True,
-    )
 
-    script = (
-        f'set -euo pipefail\n'
-        f'work={shlex.quote(str(work))}; branch={shlex.quote(branch)}\n'
-        f'{deliver_expected_assignment()}\n'
-        f'git -C "${{work}}" push -q '
-        f'--force-with-lease="refs/heads/${{branch}}:${{expected}}" '
-        f'origin "HEAD:refs/heads/${{branch}}"'
-    )
-    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+    settled = _run_branch_script(work, base, "settle", "--message", "import")
+    assert settled.returncode == 0, (
+        f"the first delivery to a new branch failed "
+        f"(exit {settled.returncode}): {settled.stderr.strip()}")
+    assert settled.stdout.strip() == "PUSH", settled.stdout
 
-    assert result.returncode == 0, (
-        f"the first delivery to a new branch failed (exit {result.returncode}): "
-        f"{result.stderr.strip()}"
-    )
     landed = subprocess.run(
         ["git", "--git-dir", str(remote), "for-each-ref", "--format=%(refname)"],
         check=True, capture_output=True, text=True,
@@ -1392,8 +1504,48 @@ def test_the_first_delivery_to_a_new_branch_actually_pushes(tmp_path):
     assert f"refs/heads/{branch}" in landed, "the branch never reached the remote"
 
 
+def test_a_second_identical_delivery_adopts_the_head_instead_of_pushing(tmp_path):
+    """The repair, at the push site: an unchanged proposal moves no ref.
+
+    The ledger content is written identically here rather than by an importer,
+    which is the case the lifecycle has to survive -- the destination's own
+    importer produces exactly this when it recognises rows it already wrote.
+    """
+    remote, work = shallow_destination_clone(tmp_path)
+    branch = "kalshi-router/MLB"
+    base = _head_of(work)
+
+    _run_branch_script(work, base, "seed")
+    with (work / "data" / "bets.jsonl").open("a", encoding="utf-8") as handle:
+        handle.write('{"imported": true}\n')
+    assert _run_branch_script(work, base, "settle", "--message", "import").stdout.strip() == "PUSH"
+
+    def remote_head():
+        return subprocess.run(
+            ["git", "--git-dir", str(remote), "rev-parse", f"refs/heads/{branch}"],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+
+    first = remote_head()
+
+    # A fresh clone, exactly as the next scheduled run would make one.
+    later = tmp_path / "later"
+    subprocess.run(["git", "clone", "-q", "--depth", "1", f"file://{remote}", str(later)],
+                   check=True)
+    for key, value in (("user.email", "t@example.invalid"), ("user.name", "t")):
+        subprocess.run(["git", "-C", str(later), "config", key, value], check=True)
+
+    seeded = _run_branch_script(later, base, "seed")
+    assert seeded.stdout.strip() == first, "the second run did not seed from the branch"
+
+    settled = _run_branch_script(later, base, "settle", "--message", "import")
+    assert settled.returncode == 0, settled.stderr
+    assert settled.stdout.strip() == "ADOPT", settled.stdout
+    assert remote_head() == first, "an unchanged proposal moved the ref"
+
+
 def test_the_lease_still_refuses_when_someone_else_moved_the_branch(tmp_path):
-    """The property the lease exists for, which the fix must not cost.
+    """The property the lease exists for, which the repair must not cost.
 
     A fix that simply forced the push would make the first run pass and quietly
     destroy a concurrent writer's commit. So a second clone pushes in between,
@@ -1401,39 +1553,28 @@ def test_the_lease_still_refuses_when_someone_else_moved_the_branch(tmp_path):
     """
     remote, work = shallow_destination_clone(tmp_path)
     branch = "kalshi-router/MLB"
+    base = _head_of(work)
 
     # A first delivery, so the branch exists and the lease is non-empty.
-    subprocess.run(["git", "-C", str(work), "checkout", "-q", "-b", branch], check=True)
-    (work / "data" / "bets.jsonl").write_text('{"first": true}\n', encoding="utf-8")
-    subprocess.run(["git", "-C", str(work), "add", "-A"], check=True)
-    subprocess.run(["git", "-C", str(work), "commit", "-qm", "first"], check=True)
-    subprocess.run(
-        ["git", "-C", str(work), "push", "-q", "origin", f"HEAD:refs/heads/{branch}"],
-        check=True, capture_output=True,
-    )
+    _run_branch_script(work, base, "seed")
+    with (work / "data" / "bets.jsonl").open("a", encoding="utf-8") as handle:
+        handle.write('{"first": true}\n')
+    assert _run_branch_script(work, base, "settle", "--message", "first").returncode == 0
 
     # A new run reads the lease...
     later = tmp_path / "later"
-    subprocess.run(
-        ["git", "clone", "-q", "--depth", "1", f"file://{remote}", str(later)], check=True
-    )
+    subprocess.run(["git", "clone", "-q", "--depth", "1", f"file://{remote}", str(later)],
+                   check=True)
     for key, value in (("user.email", "t@example.invalid"), ("user.name", "t")):
         subprocess.run(["git", "-C", str(later), "config", key, value], check=True)
-    subprocess.run(["git", "-C", str(later), "checkout", "-q", "-b", branch], check=True)
-    (later / "data" / "bets.jsonl").write_text('{"later": true}\n', encoding="utf-8")
-    subprocess.run(["git", "-C", str(later), "add", "-A"], check=True)
-    subprocess.run(["git", "-C", str(later), "commit", "-qm", "later"], check=True)
-    subprocess.run(
-        ["git", "-C", str(later), "fetch", "-q", "--depth", "1", "origin",
-         f"+refs/heads/{branch}:refs/remotes/origin/{branch}"],
-        capture_output=True,
-    )
+    _run_branch_script(later, base, "seed")
+    with (later / "data" / "bets.jsonl").open("a", encoding="utf-8") as handle:
+        handle.write('{"later": true}\n')
 
     # ...and somebody else moves the branch before it pushes.
     intruder = tmp_path / "intruder"
-    subprocess.run(
-        ["git", "clone", "-q", "--depth", "1", f"file://{remote}", str(intruder)], check=True
-    )
+    subprocess.run(["git", "clone", "-q", "--depth", "1", f"file://{remote}", str(intruder)],
+                   check=True)
     for key, value in (("user.email", "x@example.invalid"), ("user.name", "x")):
         subprocess.run(["git", "-C", str(intruder), "config", key, value], check=True)
     subprocess.run(["git", "-C", str(intruder), "checkout", "-q", "-b", branch], check=True)
@@ -1445,21 +1586,19 @@ def test_the_lease_still_refuses_when_someone_else_moved_the_branch(tmp_path):
          f"HEAD:refs/heads/{branch}"],
         check=True, capture_output=True,
     )
+    moved = subprocess.run(
+        ["git", "--git-dir", str(remote), "rev-parse", f"refs/heads/{branch}"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
 
-    script = (
-        f'set -euo pipefail\n'
-        f'work={shlex.quote(str(later))}; branch={shlex.quote(branch)}\n'
-        f'{deliver_expected_assignment()}\n'
-        f'git -C "${{work}}" push -q '
-        f'--force-with-lease="refs/heads/${{branch}}:${{expected}}" '
-        f'origin "HEAD:refs/heads/${{branch}}"'
-    )
-    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+    settled = _run_branch_script(later, base, "settle", "--message", "later")
 
-    assert result.returncode != 0, (
-        "the lease accepted a push over a branch someone else had moved"
-    )
-    assert "stale info" in result.stderr, result.stderr
+    assert settled.returncode != 0, (
+        "the lease accepted a push over a branch someone else had moved")
+    assert subprocess.run(
+        ["git", "--git-dir", str(remote), "rev-parse", f"refs/heads/{branch}"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip() == moved, "a concurrent writer's commit was destroyed"
 
 
 # ============ The one-time historical catch-up ==============================

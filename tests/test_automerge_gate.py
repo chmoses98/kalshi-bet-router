@@ -145,6 +145,123 @@ def test_a_row_with_no_canonical_bet_id_refuses_the_merge():
     assert "EVERY_ROW_NEEDED_NO_HUMAN_JUDGEMENT" in verdict.failed
 
 
+# ── MERGEABILITY vs CI: the 2026-09-19 contradiction ──────────────────
+#
+# Production run 35466474703 read, in a single evaluation:
+#
+#     WAIT   CONTINUOUS_INTEGRATION_IS_GREEN        (test still running)
+#     REFUSE THE_DESTINATION_BRANCH_IS_CLEANLY_MERGEABLE
+#            (mergeable=true, mergeable_state='unstable')
+#
+# Two opposite readings of one fact. `unstable` is GitHub restating the check
+# rollup -- it says "mergeable, but the checks are not all green", and a check
+# that is still RUNNING is not a check that failed. The gate's own contract
+# says pending CI is a WAIT that resolves itself, so refusing on the
+# restatement of that same pendingness was simply a bug.
+
+def test_pending_ci_with_an_unstable_but_mergeable_pr_WAITS():
+    """THE EXACT PRODUCTION STATE. It must never produce REFUSE."""
+    verdict = automerge.evaluate(facts(
+        mergeable=True,
+        mergeable_state="unstable",
+        check_runs=(("test", "in_progress", None),),
+    ))
+    assert verdict.verdict == automerge.WAIT, verdict.render()
+    assert not verdict.failed, verdict.render()
+    assert "CONTINUOUS_INTEGRATION_IS_GREEN" in verdict.waiting_on
+    assert "THE_DESTINATION_BRANCH_IS_CLEANLY_MERGEABLE" in verdict.waiting_on
+
+
+def test_an_unstable_pr_whose_checks_have_not_reported_yet_WAITS():
+    """The window between a push and the first check-run row."""
+    verdict = automerge.evaluate(facts(
+        mergeable=True, mergeable_state="unstable", check_runs=(),
+    ))
+    assert verdict.verdict == automerge.WAIT
+    assert not verdict.failed
+
+
+def test_an_unstable_pr_whose_checks_FAILED_refuses():
+    """The other half of `unstable`, and it must still fail closed."""
+    verdict = automerge.evaluate(facts(
+        mergeable=True,
+        mergeable_state="unstable",
+        check_runs=(("test", "completed", "failure"),),
+    ))
+    assert verdict.verdict == automerge.REFUSE
+    assert "CONTINUOUS_INTEGRATION_IS_GREEN" in verdict.failed
+    assert "THE_DESTINATION_BRANCH_IS_CLEANLY_MERGEABLE" in verdict.failed
+
+
+def test_an_unstable_pr_with_every_visible_check_green_refuses():
+    """FAIL CLOSED on the case the gate cannot explain.
+
+    If every check this gate can see is green and GitHub still will not call
+    the branch clean, something it CANNOT see -- a required check that never
+    reported, a rule the gate does not model -- is withholding the merge.
+    Waiting forever would be wrong and merging would be worse, so it refuses
+    and names the contradiction for a person.
+    """
+    verdict = automerge.evaluate(facts(
+        mergeable=True,
+        mergeable_state="unstable",
+        check_runs=(("test", "completed", "success"),),
+    ))
+    assert verdict.verdict == automerge.REFUSE
+    assert "THE_DESTINATION_BRANCH_IS_CLEANLY_MERGEABLE" in verdict.failed
+    assert "CONTINUOUS_INTEGRATION_IS_GREEN" in verdict.passed
+
+
+def test_a_human_protection_block_is_never_routed_around():
+    """`blocked` is a required review or a branch-protection rule. That is a
+    person's decision, and the WAIT above must not have become a way past it."""
+    verdict = automerge.evaluate(facts(mergeable=True, mergeable_state="blocked"))
+    assert verdict.verdict == automerge.REFUSE
+    assert "THE_DESTINATION_BRANCH_IS_CLEANLY_MERGEABLE" in verdict.failed
+
+
+def test_a_draft_is_never_merged():
+    """Also a deliberate human signal."""
+    verdict = automerge.evaluate(facts(draft=True))
+    assert verdict.verdict == automerge.REFUSE
+    assert "PULL_REQUEST_IS_OPEN_AND_NOT_A_DRAFT" in verdict.failed
+
+
+def test_mergeability_not_yet_computed_WAITS():
+    verdict = automerge.evaluate(facts(mergeable=None, mergeable_state=None))
+    assert verdict.verdict == automerge.WAIT
+    assert "THE_DESTINATION_BRANCH_IS_CLEANLY_MERGEABLE" in verdict.waiting_on
+
+
+def test_a_real_merge_conflict_waits_for_the_rebuild_and_never_merges():
+    """`dirty` is a conflict. The next run rebuilds the branch from the
+    destination's current main, so this resolves itself -- but nothing merges
+    in the meantime."""
+    verdict = automerge.evaluate(facts(mergeable=False, mergeable_state="dirty"))
+    assert verdict.verdict == automerge.WAIT
+    assert verdict.may_merge is False
+    assert "THE_DESTINATION_BRANCH_IS_CLEANLY_MERGEABLE" in verdict.waiting_on
+
+
+def test_a_completely_green_and_clean_pull_request_MERGES():
+    verdict = automerge.evaluate(facts(
+        mergeable=True,
+        mergeable_state="clean",
+        check_runs=(("test", "completed", "success"),
+                    ("lint", "completed", "skipped")),
+    ))
+    assert verdict.verdict == automerge.MERGE
+
+
+def test_unstable_is_not_simply_allowlisted_as_transient():
+    """The careless one-line fix would have been adding 'unstable' to
+    TRANSIENT_MERGE_STATES, which WAITs on it unconditionally -- including
+    when a required check has genuinely failed. That would have merged
+    nothing, but it would also have hidden a red destination behind a
+    permanent, silent WAIT."""
+    assert "unstable" not in automerge.TRANSIENT_MERGE_STATES
+
+
 # ── the destructive cases: existing canonical rows ─────────────────────
 
 def test_a_diff_that_removes_an_existing_canonical_row_refuses_the_merge():

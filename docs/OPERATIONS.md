@@ -176,10 +176,22 @@ changes no verdict, and two tests prove it.
 ## Delivery lands as a pull request, not a branch
 
 A branch is not the ledger. Each sport has **one long-lived branch**
-(`kalshi-router/<SPORT>`) and one pull request on it. Every run rebuilds that
-branch from the destination's current `main` and re-runs the importer, so it
-always holds exactly *main plus everything not yet recorded* — content that is
-a function of the account, not of when the job ran.
+(`kalshi-router/<SPORT>`) and one pull request on it, always exactly **one
+commit on top of the destination's `main`** — so the tip's parent *is* the base
+it proposes against, which is what a `--depth 2` fetch can establish on a
+shallow clone and what the next run reads to decide whether the proposal is
+still current.
+
+Every run re-runs the destination's importer, and **where** it runs is chosen,
+not assumed *(revised 2026-09-19 — see "The branch head is now stable" below)*:
+
+* the branch already proposes against the destination's **current** `main` →
+  the importer runs **on top of the branch**, so rows it already proposed come
+  back `DUPLICATE_NOOP` and keep their original canonical bytes;
+* otherwise (no branch, or `main` has moved) → the importer runs on top of
+  `main`, and the batch is reconciled against what is there now.
+
+Either way the branch holds exactly *main plus everything not yet recorded*.
 
 The router never pushes to the destination's `main`. The force-with-lease goes
 only onto its own branch, whose previous tip is this job's own earlier output —
@@ -248,7 +260,7 @@ short-circuit, so one run names everything that is not yet right):
 | `THE_LEDGER_DIFF_IS_APPEND_ONLY` | the diff removes or rewrites an existing canonical row |
 | `EVERY_ADDED_ROW_CARRIES_THE_ROUTER_IDENTITY` | an added row is from another batch, unidentifiable, or has no receipt from this run |
 | `CONTINUOUS_INTEGRATION_IS_GREEN` | a check failed *(and waits while any is running or none has reported)* |
-| `THE_DESTINATION_BRANCH_IS_CLEANLY_MERGEABLE` | `blocked` — a review or protection rule *(waits on `unknown`/`dirty`/`behind`)* |
+| `THE_DESTINATION_BRANCH_IS_CLEANLY_MERGEABLE` | `blocked` — a review or protection rule; or `unstable` while every check the gate can see is green, which means something it *cannot* see is withholding the merge *(waits on `unknown`/`dirty`/`behind`, and on `unstable` while checks are still running)* |
 
 Three verdicts, and the difference between the last two is the whole point:
 
@@ -281,6 +293,96 @@ because a refusal is exactly the case that needs a person.
 > all, so delivery terminated in a dead end. The test that was supposed to
 > catch this only forbade `$RANDOM`, `date` and `GITHUB_RUN_ID`; none appeared,
 > so it passed while testing the wrong property.
+
+## The 2026-09-19 churn: two runs, one payload, two trees
+
+The gate above shipped, and `#218` still did not merge. Two `Deliver wagers
+downstream` runs 27 minutes apart, on the same router commit and the same
+destination base `067c321e`, produced:
+
+| run | destination commit | tree |
+|---|---|---|
+| 35465098715 | `7e7108bc` | `a9591950` |
+| 35466474703 | `673991474` | `de4b2511` |
+
+Same 41-row payload, same 41 canonical bet ids, 17 `DUPLICATE_NOOP` + 24 `NEW`
+and 0 failed rows both times — and two different trees, differing in exactly
+three fields on exactly the 24 new rows:
+
+```
+createdAt              19:50:03Z -> 20:17:33Z
+recordedAt             19:50:03Z -> 20:17:33Z
+provenance.ingestedAt  19:50:03Z -> 20:17:33Z
+```
+
+### Defect 1 — `unstable` was read as a refusal
+
+One evaluation said, in the same breath:
+
+```
+WAIT   CONTINUOUS_INTEGRATION_IS_GREEN            (test still running)
+REFUSE THE_DESTINATION_BRANCH_IS_CLEANLY_MERGEABLE (mergeable=true, state='unstable')
+```
+
+Two opposite readings of one fact. `unstable` is GitHub restating the **check
+rollup** — "mergeable, but the checks are not all green" — and a check that is
+still *running* is not a check that failed. So the gate no longer decides it:
+it delegates to the check runs, which are what it is derived from. Pending →
+**WAIT**. Failing → **REFUSE**. Green everywhere the gate can see, and still
+`unstable` → **REFUSE**, because something it cannot see is withholding the
+merge and that is not a thing to guess at.
+
+`unstable` is deliberately *not* in `TRANSIENT_MERGE_STATES`. The one-line
+version of this fix would have put it there, which waits unconditionally —
+including on a genuinely red destination, forever and silently.
+
+### Defect 2 — "the import is deterministic" was not true
+
+The section above used to say the branch's content is *a function of the
+account, not of when the job ran*. It was not. Seeded from bare `main`, an
+undelivered wager is absent, so the importer writes it as `NEW`, and
+`lib.edgelab.bets.build_manual_bet_record` stamps every new row's `createdAt`,
+`recordedAt` and `provenance.ingestedAt` with `ids.utc_now_iso()`.
+
+A different tree is a new commit; a new commit is a force-push; a force-push
+restarts a ~19-minute check suite on a 15-minute cadence. The branch-reuse
+check added the day before was correct and **could never fire**.
+
+The fix is **where the importer runs, not what it writes**. Those three fields
+are not noise to strip and not values to fake — the row genuinely *was* first
+ingested at 19:50:03Z. The defect was asking the question again from scratch
+when the answer was already on the router's own open branch. So when the branch
+proposes against the current `main`, the importer runs on top of it and its own
+duplicate detection returns the already-stored row untouched. The router still
+never edits a ledger file; the destination's importer remains the only thing
+that writes its ledger.
+
+The destination already held this principle for its other entry point:
+`_content_fingerprint` excludes exactly these fields so that "a rerun against
+an unchanged legacy ledger is a true no-op, not a timestamp-only diff on every
+row every day". The canonical import path simply never had a caller that let
+it apply.
+
+### Why the test suite was green
+
+`test_identical_content_does_not_produce_a_new_commit_every_run` passed because
+the harness's stand-in importer wrote rows with **no timestamps at all**. A
+deterministic fake produced an identical tree on the second run; the real
+importer never could. The fake now stamps the clock like the real one, and
+`FAKE_IMPORT_CLOCK` lets a test advance it between runs — with that alone, and
+without the repair, six tests in `tests/test_delivery_determinism.py` reproduce
+the production churn.
+
+> The rule this keeps re-teaching: a regression test is only worth the fidelity
+> of the thing it substitutes for. Both of the last two delivery incidents were
+> shipped green by a fixture that was easier to satisfy than production.
+
+`scripts/deliver_branch.py` owns the branch lifecycle and is the only thing on
+the delivery path that pushes; every rule it applies lives in the pure
+`src/kalshi_router/delivery_branch.py`. Nothing in either is sport-specific —
+the destination map is `destination.DESTINATION_REPOS`, which the delivery
+workflow now resolves through rather than naming a repository inline, so a
+sport added there inherits the repaired lifecycle instead of a copy of it.
 
 ## A windowed fill walk was considered and is NOT worth doing
 
