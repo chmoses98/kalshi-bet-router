@@ -130,14 +130,37 @@ jobs:
           failures=0
           for payload in "${payloads[@]}"; do
             sport="$(basename "${payload}" .json)"
-            case "${sport}" in
-              MLB) repo="chmoses98/edge-finder-api" ;;
-              *)
-                echo "::error::${sport} has no configured destination repository."
-                failures=$((failures + 1))
-                continue
-                ;;
-            esac
+
+            # THE DESTINATION MAP LIVES IN ONE PLACE, AND IT IS NOT HERE.
+            #
+            # This used to be a `case` naming MLB and its repository inline, so
+            # the router knew a sport's destination in two places that could
+            # disagree -- and adding a second sport meant remembering this file.
+            # `destination.DESTINATION_REPOS` is what the payload writer already
+            # gates production routing on and what the merge gate derives branch
+            # names from, so it is the one that answers here too. A sport absent
+            # from it is still REFUSED rather than defaulted somewhere plausible.
+            repo=""
+            repo="$(python - "${sport}" <<'PYEOF'
+          import os, sys
+          # The checkout's own source, exactly like the two scripts this step
+          # calls. The router is pip-installed above, so this is belt and
+          # braces -- but it is what lets the delivery step be extracted and
+          # exercised by tests/test_partial_delivery_regression.py without an
+          # install standing between the test and production's own code.
+          sys.path.insert(0, os.path.join(os.environ["GITHUB_WORKSPACE"], "src"))
+          from kalshi_router.destination import destination_repo_for
+          repo = destination_repo_for(sys.argv[1])
+          if not repo:
+              sys.exit(1)
+          print(repo)
+          PYEOF
+            )" || repo=""
+            if [ -z "${repo}" ]; then
+              echo "::error::${sport} has no configured destination repository."
+              failures=$((failures + 1))
+              continue
+            fi
 
             echo "=== ${sport} -> ${repo} ==="
             work="${RUNNER_TEMP}/dest-${sport}"
@@ -154,6 +177,55 @@ jobs:
 
             base_sha="$(git -C "${work}" rev-parse HEAD)"
             echo "destination main: ${base_sha}"
+
+            # ONE LONG-LIVED BRANCH PER SPORT, and one pull request on it.
+            #
+            # The first version of this derived the branch name from the
+            # DESTINATION's HEAD, which moves. Same undelivered wager, two
+            # destination commits, two branches -- and because the branch is
+            # never merged, every run re-imports as NEW. If the destination had
+            # NOT moved it was worse: the same branch name with a different
+            # commit, rejected non-fast-forward, red every 15 minutes.
+            branch="kalshi-router/${sport}"
+
+            # WHERE THE IMPORTER RUNS IS WHAT MAKES A RE-DELIVERY STABLE.
+            #
+            # This step used to run the importer on top of bare `main` every
+            # time. Seeded there, an undelivered wager is absent, so the
+            # importer writes it as NEW -- and the destination stamps every NEW
+            # row's createdAt, recordedAt and provenance.ingestedAt with the
+            # wall clock. Two runs of the SAME payload on the SAME base
+            # therefore produced two different trees (measured 2026-09-19:
+            # a9591950 at 19:50:03Z, de4b2511 at 20:17:33Z, differing in exactly
+            # those three fields on exactly the 24 undelivered rows). A
+            # different tree is a new commit, a new commit is a force-push, and
+            # a force-push restarts a ~19 minute check suite on a 15 minute
+            # cadence. The head was almost never a commit with finished checks,
+            # so the gate below could never fire. #218 churned that way for
+            # three days.
+            #
+            # So when the router's branch already proposes against this exact
+            # main, the importer runs ON TOP OF IT. Rows it already proposed
+            # come back DUPLICATE_NOOP and keep their original canonical bytes
+            # -- by the importer's own contract, not by anything this router
+            # rewrites. Only a genuinely new wager appends. See
+            # src/kalshi_router/delivery_branch.py for why that is the honest
+            # fix rather than faking or stripping the timestamps.
+            #
+            # Per-destination, like everything else in this loop: a clone whose
+            # branch cannot be read must cost THAT sport its run, not abort the
+            # step and take every other destination down with it. stdout is the
+            # seed commit, for a caller that wants it; the human-readable line
+            # naming it is on stderr and reaches this log either way.
+            seed_status=0
+            python "${GITHUB_WORKSPACE}/scripts/deliver_branch.py" \
+              --work "${work}" --sport "${sport}" --base-sha "${base_sha}" \
+              seed >/dev/null || seed_status=$?
+            if [ "${seed_status}" -ne 0 ]; then
+              echo "::error::${sport}: could not prepare the delivery branch (exit ${seed_status}). Nothing was imported or pushed."
+              failures=$((failures + 1))
+              continue
+            fi
 
             # The destination's OWN importer. Never a hand-written ledger edit.
             receipts="${RUNNER_TEMP}/receipts-${sport}.json"
@@ -234,144 +306,79 @@ jobs:
               echo "::error::${sport}: re-applying the IDENTICAL payload changed the ledger. The import is not idempotent; this batch will not auto-merge."
             fi
 
-            if [ -z "$(git -C "${work}" status --porcelain)" ]; then
-              if [ "${partial}" -eq 1 ]; then
-                echo "  the importer refused row(s) and wrote nothing; there is nothing to deliver."
-              else
-                echo "  no ledger change -- every row was already imported (no-op)."
-              fi
-              continue
-            fi
+            # ADOPT, PUSH, OR NOTHING TO DELIVER -- one decision, made once.
+            #
+            # `scripts/deliver_branch.py settle` stages what the importer wrote,
+            # reshapes it into exactly one commit on top of the destination's
+            # main, refuses anything staged outside data/, and then compares the
+            # result with the branch the remote already holds. It is the only
+            # thing in this workflow that pushes, and every rule it applies
+            # lives in src/kalshi_router/delivery_branch.py, which is pure and
+            # separately tested -- including against the exact production state
+            # this incident produced.
+            #
+            # This replaces an emptiness test against the WORKING TREE. That
+            # test asked "did the importer change anything", which stopped being
+            # the right question the moment the importer began running on top of
+            # the delivery branch: with the branch already carrying the
+            # proposal, a clean tree means the proposal is READY, not that there
+            # is nothing to deliver. The question is now asked against main's
+            # tree, which is the only thing that can answer it.
+            settle_status=0
+            action="$(python "${GITHUB_WORKSPACE}/scripts/deliver_branch.py" \
+              --work "${work}" --sport "${sport}" --base-sha "${base_sha}" \
+              settle --message "Import Kalshi wagers via kalshi-bet-router (${sport})" \
+              $([ "${DRY_RUN}" = "true" ] && echo --dry-run))" || settle_status=$?
+
+            case "${settle_status}" in
+              0) ;;
+              3)
+                # The import dirtied files outside data/. `git add -A` is only
+                # safe because the destination's own .gitignore covers what the
+                # importer leaves behind, and that is THEIR property to change.
+                # Nothing was committed and nothing was pushed.
+                echo "::error::${sport}: the import dirtied files outside data/ -- nothing was committed. See the paths above."
+                failures=$((failures + 1))
+                continue ;;
+              *)
+                echo "::error::${sport}: the delivery branch could not be settled (exit ${settle_status}). Nothing was pushed."
+                failures=$((failures + 1))
+                continue ;;
+            esac
+
+            case "${action}" in
+              NOTHING_TO_DELIVER)
+                if [ "${partial}" -eq 1 ]; then
+                  echo "  the importer refused row(s) and wrote nothing; there is nothing to deliver."
+                else
+                  echo "  no ledger change -- every row was already imported (no-op)."
+                fi
+                continue ;;
+              ADOPT|PUSH) ;;
+              *)
+                echo "::error::${sport}: the delivery branch reported an unrecognised action '${action}'."
+                failures=$((failures + 1))
+                continue ;;
+            esac
 
             if [ "${DRY_RUN}" = "true" ]; then
               echo "  DRY RUN: ledger changed, nothing pushed."
-              git -C "${work}" --no-pager diff --stat
+              # --stat, and the word is load-bearing: without it this prints the
+              # added ledger LINES -- ticker, stake, entry price, source key --
+              # into a public Actions log. Against base_sha rather than HEAD so
+              # it says the same thing whether this run would have adopted the
+              # existing head or pushed a new one.
+              git -C "${work}" --no-pager diff --stat "${base_sha}"
               continue
             fi
 
-            # ONE LONG-LIVED BRANCH PER SPORT, and one pull request on it.
-            #
-            # The first version of this derived the branch name from the
-            # DESTINATION's HEAD, which moves. Same undelivered wager, two
-            # destination commits, two branches -- and because the branch is
-            # never merged, every run re-imports as NEW. If the destination
-            # had NOT moved it was worse: the same branch name with a
-            # different commit, rejected non-fast-forward, red every 15
-            # minutes.
-            #
-            # A stable name fixes both. Each run rebuilds the branch from the
-            # destination's current main and re-runs the importer, so the
-            # branch always holds exactly "main + everything not yet
-            # recorded". The import is deterministic and idempotent, so that
-            # content is a function of the account, not of when the job ran.
-            branch="kalshi-router/${sport}"
-
-            git -C "${work}" checkout -q -b "${branch}"
-            git -C "${work}" add -A
-
-            # WHAT GOES INTO SOMEONE ELSE'S REPOSITORY IS CHECKED, NOT ASSUMED.
-            #
-            # `git add -A` is safe here only because the destination's own
-            # .gitignore covers what the importer leaves behind -- measured on
-            # a real clone, it creates three __pycache__ directories and a
-            # bets.jsonl.lock, and ignores all of them. That is a property of
-            # THEIR repository, which can change without anyone telling this
-            # workflow.
-            #
-            # So: a router-authored commit may only touch data/. A lock file or
-            # a .pyc appearing in one means something changed upstream, and
-            # stopping is far better than quietly committing it every 15
-            # minutes.
-            staged="$(git -C "${work}" diff --cached --name-only)"
-            unexpected="$(printf '%s\n' "${staged}" | grep -v '^data/' || true)"
-            if [ -n "${unexpected}" ]; then
-              echo "::error::${sport}: the import dirtied files outside data/ -- refusing to commit them:"
-              printf '%s\n' "${unexpected}"
-              failures=$((failures + 1))
-              continue
-            fi
-
-            git -C "${work}" commit -q -m "Import Kalshi wagers via kalshi-bet-router (${sport})"
-
-            # THE LEASE NEEDS AN EXPLICIT EXPECTED VALUE HERE, and getting
-            # this wrong fails from the SECOND run onward rather than the
-            # first -- so it would have looked fine exactly once.
-            #
-            # A --depth 1 clone is SINGLE-BRANCH: its refspec is
-            # +refs/heads/main:refs/remotes/origin/main and nothing else. So
-            # there is no remote-tracking ref for the router's own branch, a
-            # bare --force-with-lease has nothing to form a lease against, and
-            # git rejects the push as "stale info".
-            #
-            # Fetching the branch is necessary and NOT sufficient: even with
-            # the remote-tracking ref present, the lease still cannot infer an
-            # expected value for a local branch with no configured upstream.
-            # Both of those were measured against a real shallow clone, and the
-            # first attempted fix (fetch alone) was observed to still fail.
-            #
-            # So the expectation is stated outright. An EMPTY value means "the
-            # branch must not exist yet", which is the first run.
-            #
-            # --verify --quiet IS LOAD-BEARING, and its absence cost a real
-            # wager. A bare `git rev-parse <missing-ref>` ECHOES ITS ARGUMENT TO
-            # STDOUT before failing, so `expected` became the literal string
-            # "refs/remotes/origin/kalshi-router/MLB" and the push died with
-            # "cannot parse expected object name" (exit 129) -- after the
-            # importer had already returned a canonical bet id. The `|| echo ""`
-            # never helped: rev-parse had written to stdout before it ran.
-            #
-            # With --verify --quiet a missing ref prints NOTHING and exits 1,
-            # which is the empty value the line above describes.
-            # --depth 2, not 1: the reuse check below needs the branch tip's
-            # PARENT to know which `main` that tip was built from.
-            git -C "${work}" fetch -q --depth 2 origin \
-              "+refs/heads/${branch}:refs/remotes/origin/${branch}" || true
-            expected="$(git -C "${work}" rev-parse --verify --quiet "refs/remotes/origin/${branch}" || echo "")"
-
-            # A NEW COMMIT EVERY FIFTEEN MINUTES IS WHY NOTHING EVER MERGED.
-            #
-            # The import is deterministic, so the branch's CONTENT is a
-            # function of the account -- but a commit also carries a
-            # timestamp, so every run produced a different SHA for identical
-            # content. Force-pushing that SHA restarted the destination's
-            # pull-request CI (~19 minutes) on a cadence of 15, so the head
-            # was essentially never a commit with a finished check suite, and
-            # an auto-merge gate that requires green CI could never fire.
-            # PR #218 was force-pushed like this for three days.
-            #
-            # So: if the remote branch already carries this EXACT tree, built
-            # on this EXACT base, there is nothing to say. Keep its commit,
-            # let its CI finish, and let the gate below act on it.
-            local_tree="$(git -C "${work}" rev-parse "HEAD^{tree}")"
-            reuse_existing=0
-            if [ -n "${expected}" ]; then
-              remote_tree="$(git -C "${work}" rev-parse --verify --quiet "${expected}^{tree}" || echo "")"
-              remote_base="$(git -C "${work}" rev-parse --verify --quiet "${expected}^" || echo "")"
-              # BOTH must match. Same tree on a DIFFERENT base is not the same
-              # proposal: the diff against main would be something this run
-              # never inspected.
-              if [ "${remote_tree}" = "${local_tree}" ] && [ "${remote_base}" = "${base_sha}" ]; then
-                reuse_existing=1
-              fi
-            fi
-
-            if [ "${reuse_existing}" -eq 1 ]; then
-              # Adopt the existing commit so everything downstream -- the
-              # merge gate's diff, its head check -- reasons about the commit
-              # that is actually on the branch.
-              git -C "${work}" reset --hard -q "${expected}"
+            if [ "${action}" = "ADOPT" ]; then
+              # THE POINT OF THE WHOLE REPAIR. Identical content on an unchanged
+              # base keeps the commit that is already there, so the destination's
+              # check suite runs ONCE and is allowed to finish.
               echo "  ${branch} already carries this exact content on this base; not pushing."
-              echo "  destination commit: ${expected} (unchanged)"
             else
-              # ONLY onto this router-owned branch: it is rebuilt from main every
-              # run, so its previous tip is this job's own earlier output. The
-              # lease still refuses if anything else moved it -- verified by
-              # having a second clone push in between.
-              git -C "${work}" push -q \
-                --force-with-lease="refs/heads/${branch}:${expected}" \
-                origin "HEAD:refs/heads/${branch}"
               echo "  pushed ${branch}"
-              echo "  destination commit: $(git -C "${work}" rev-parse HEAD)"
             fi
 
             # A BRANCH IS NOT THE LEDGER. Without a pull request the wager sits

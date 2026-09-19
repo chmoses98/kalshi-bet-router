@@ -75,8 +75,32 @@ Identity is hash(importBatchId, sourceBetKey, marketTicker, side), which is
 the real build_bet_id -- no economics participate, so a row whose price or
 fee changed keeps its identity and lands as a CONFLICT rather than a second
 wager.
+
+IT ALSO STAMPS THE CLOCK, AND THAT IS NOT DECORATION.
+-----------------------------------------------------
+The real `lib.edgelab.bets.build_manual_bet_record` sets `createdAt`,
+`recordedAt` and `provenance.ingestedAt` to `ids.utc_now_iso()` on every NEW
+row. This stand-in did not, and that omission is why the 2026-09-19 incident
+reached production with a green test suite: the branch-reuse check added in
+#78 was correct, and `test_identical_content_does_not_produce_a_new_commit_
+every_run` passed because a deterministic fake importer produced an identical
+tree on the second run. The real importer never could. So the fake stamps the
+clock too, and `FAKE_IMPORT_CLOCK` lets a test advance it the way wall time
+advances between two scheduled runs.
+
+The two rules that make re-delivery survivable are the real ones, and both
+are modelled here:
+
+  * a DUPLICATE_NOOP writes NOTHING and returns the ALREADY-STORED row, so an
+    existing row's timestamps are preserved byte for byte
+    (`write_placed_bet`: "nothing is written, the ALREADY-STORED row is
+    returned in the receipt");
+  * a CONFLICT is decided on economics alone, never on a timestamp -- the
+    real `_content_fingerprint` pops createdAt/updatedAt/recordedAt and
+    provenance.ingestedAt before comparing, precisely so a clock tick is not
+    a content change.
 """
-import argparse, hashlib, json, os, sys
+import argparse, datetime, hashlib, json, os, sys
 
 LEDGER = "data/edgelab/bets/bets.jsonl"
 ECONOMICS = ("contracts", "entryPrice", "exchangeFee", "stake")
@@ -85,6 +109,14 @@ ECONOMICS = ("contracts", "entryPrice", "exchangeFee", "stake")
 def bet_id(batch, row):
     parts = [batch, row["sourceBetKey"], row["marketTicker"], row["side"]]
     return hashlib.sha256("|".join(parts).encode()).hexdigest()[:40]
+
+
+def now_iso():
+    """The destination's ids.utc_now_iso(), or whatever a test pinned it to."""
+    pinned = os.environ.get("FAKE_IMPORT_CLOCK")
+    if pinned:
+        return pinned
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def main():
@@ -110,7 +142,12 @@ def main():
         ident = bet_id(batch, row)
         prior = existing.get(ident)
         if prior is None:
-            record = dict(row, betId=ident, importBatchId=batch)
+            stamped = now_iso()
+            record = dict(row, betId=ident, importBatchId=batch,
+                          createdAt=stamped, recordedAt=stamped,
+                          provenance={"sourceSystem": "manual_entry",
+                                      "capturedAt": row.get("entryTimestamp"),
+                                      "ingestedAt": stamped})
             # ONE ROW AT A TIME -- this is the whole point of the contract.
             os.makedirs(os.path.dirname(LEDGER), exist_ok=True)
             with open(LEDGER, "a") as fh:
@@ -343,12 +380,32 @@ def branch_ledger(world) -> list[dict]:
     return [json.loads(line) for line in text.splitlines() if line.strip()]
 
 
+#: The script the delivery step delegates the branch lifecycle to. It is
+#: production code invoked by production's own step, so the tests below still
+#: run the real thing -- but the tripwire has to know where "the real thing"
+#: now lives, or it would pass while testing a fixture.
+BRANCH_SCRIPT = ROOT / "scripts/deliver_branch.py"
+
+
 def test_the_delivery_step_is_the_committed_one():
-    """If the step is renamed or its body extracted to a script, every test
-    below would silently stop testing production. This is the tripwire."""
+    """If the step is renamed, or its work moved somewhere these tests do not
+    reach, every test below would silently stop testing production. This is
+    the tripwire.
+
+    The push and the lease moved into `scripts/deliver_branch.py` when the
+    branch lifecycle was repaired. That is not an escape from this test: the
+    step still calls that script, `run_delivery` still executes the step, and
+    the assertions simply follow the code. What they must NOT do is stop
+    asserting, so the lease is still pinned -- at its new address.
+    """
     body = delivery_step()
     assert "import_bet_batch.py" in body
-    assert "force-with-lease" in body
+    assert "scripts/deliver_branch.py" in body, (
+        "the delivery step no longer drives the branch lifecycle")
+
+    script = BRANCH_SCRIPT.read_text()
+    assert "force-with-lease" in script
+    assert "git" in script and "push" in script, "the push left the script too"
 
 
 def test_sixteen_written_rows_survive_a_seventeenth_that_is_refused(world):

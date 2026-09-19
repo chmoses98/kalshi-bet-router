@@ -92,8 +92,33 @@ NO_JUDGEMENT_VERDICTS = frozenset({"NEW", "DUPLICATE_NOOP", "CORRECTED"})
 #: not a function of the row.
 IDEMPOTENT_RERUN_VERDICTS = frozenset({"DUPLICATE_NOOP"})
 
-#: Mergeability states that resolve on their own.
+#: Mergeability states that resolve on their own WITHOUT anything else changing.
+#:
+#: `behind` and `dirty` are here because the next run rebuilds this branch from
+#: the destination's current main, so both are answered by simply running again.
+#: `unstable` is deliberately NOT here -- see CHECK_DERIVED_MERGE_STATES. It is not
+#: self-resolving in general: it means "mergeable, but a check is unhappy", and
+#: whether that resolves depends entirely on WHICH check and HOW, which is a
+#: question only the check runs can answer.
 TRANSIENT_MERGE_STATES = frozenset({"unknown", "behind", "dirty"})
+
+#: `mergeable_state` values GitHub derives from the commit's check/status
+#: rollup rather than from the branch's mergeability.
+#:
+#: GitHub reports `unstable` when a pull request IS mergeable but its checks are
+#: not all green -- and that includes checks that are *still running*. That is
+#: the production state of 2026-09-19: `mergeable=true`, required CI still
+#: `in_progress`, `mergeable_state="unstable"`. The gate read it as "something
+#: other than this gate is withholding the merge" and REFUSED, in the same
+#: breath as it correctly marked CI itself a WAIT. One run, two opposite
+#: readings of one fact.
+#:
+#: So a check-derived state is not decided here at all. It is delegated to the
+#: check runs, which are the thing it is derived FROM -- pending checks mean
+#: WAIT, failing checks mean REFUSE, and a state that persists when every check
+#: this gate can see is green means something it CANNOT see is unhappy, which
+#: fails closed.
+CHECK_DERIVED_MERGE_STATES = frozenset({"unstable"})
 
 #: Check-run conclusions that are not a failure. `skipped` and `neutral` are
 #: included because a check that declined to run is not a check that failed;
@@ -428,23 +453,49 @@ def evaluate(facts: MergeFacts) -> MergeVerdict:
 
     # ── mergeability, as GitHub computes it ──────────────────────────
     state = facts.mergeable_state
+    condition = "THE_DESTINATION_BRANCH_IS_CLEANLY_MERGEABLE"
     if facts.mergeable is None or state in (None, "unknown"):
-        wait("THE_DESTINATION_BRANCH_IS_CLEANLY_MERGEABLE",
-             "GitHub has not finished computing mergeability")
+        wait(condition, "GitHub has not finished computing mergeability")
     elif not facts.mergeable or state in TRANSIENT_MERGE_STATES:
         # `dirty` and `behind` both resolve by themselves here, because the
         # next run rebuilds this branch from the destination's current main.
-        wait("THE_DESTINATION_BRANCH_IS_CLEANLY_MERGEABLE",
+        wait(condition,
              f"mergeable={facts.mergeable} state={state!r}; the next run rebuilds "
              "the branch from the destination's current main")
+    elif state in CHECK_DERIVED_MERGE_STATES:
+        # NOT a mergeability answer -- a restatement of the check rollup. The
+        # check runs are the primary evidence, so they decide, and this
+        # condition simply agrees with the one above it rather than
+        # contradicting it.
+        pending, broken = _check_state(facts.check_runs)
+        if broken:
+            refuse(condition,
+                   f"mergeable_state is {state!r} and check(s) FAILED: {broken}")
+        elif pending or not facts.check_runs:
+            # THE PRODUCTION STATE. mergeable=true, checks still running.
+            # The branch itself merges cleanly; only the rollup is unfinished,
+            # and it finishes on its own. Nobody is paged and nothing merges.
+            still = pending or ["no check has reported yet"]
+            wait(condition,
+                 f"mergeable={facts.mergeable} state={state!r} solely because "
+                 f"check(s) are still running: {still}; the next run re-reads them")
+        else:
+            # Every check this gate can see is green, and GitHub still will not
+            # call it clean. Something it cannot see -- a required check that
+            # has not reported, a rule this gate does not model -- is
+            # withholding the merge. FAIL CLOSED.
+            refuse(condition,
+                   f"mergeable_state is {state!r} although every check this gate "
+                   "can see is green; something it cannot see is withholding the "
+                   "merge, and it will not be guessed at")
     elif state != "clean":
         # `blocked` means a required review or a protection rule. That is a
         # human's decision and automation must not route around it.
-        refuse("THE_DESTINATION_BRANCH_IS_CLEANLY_MERGEABLE",
+        refuse(condition,
                f"mergeable_state is {state!r}, not 'clean'; something other than "
                "this gate is withholding the merge")
     else:
-        ok("THE_DESTINATION_BRANCH_IS_CLEANLY_MERGEABLE")
+        ok(condition)
 
     assert len(passed) + len(failed) + len(waiting) == len(CONDITIONS), (
         "every condition must reach exactly one bucket")
