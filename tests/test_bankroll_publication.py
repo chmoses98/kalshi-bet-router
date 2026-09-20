@@ -136,3 +136,75 @@ def test_the_workflow_does_not_enable_any_trading_command():
         if "kalshi_router.cli" in line
     ]
     assert commands and all("cli bankroll" in line for line in commands), commands
+
+
+# ── the publisher is a SINK in the cross-repo call graph ──────────────
+#
+# edge-finder-api's fetch-slate.yml now DISPATCHES this workflow before it
+# builds a real-money handicapping card, so the card never sizes against a
+# reading nobody refreshed (see that repo's
+# scripts/ci/refresh_bankroll_context.py and
+# tests/test_bankroll_refresh_coupling.py).
+#
+# That makes the call graph edge-finder-api -> this publisher. A single
+# directed edge cannot cycle -- but only for as long as this end stays a
+# SINK. The moment this workflow dispatches anything back, two repositories
+# can trigger each other forever, each run burning a real authenticated
+# Kalshi read. The destination's own suite cannot check that, because this
+# file does not live there. So it is checked here.
+
+#: Ways a workflow can trigger something in another repository.
+_DISPATCH_SHAPES = (
+    "repository_dispatch",
+    "/dispatches",
+    "workflow_run",
+    "peter-evans/repository-dispatch",
+    "benc-uk/workflow-dispatch",
+    "gh workflow run",
+    "gh api",
+)
+
+
+def test_the_publisher_dispatches_nothing_back():
+    """The other half of the loop-safety proof. This workflow's ONLY
+    outbound call to the destination is the sealed-secret PUT, which
+    triggers no workflow there: an Actions secret write fires no event."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    offenders = [shape for shape in _DISPATCH_SHAPES if shape in text]
+    assert offenders == [], (
+        f"publish-bankroll.yml can now trigger another repository ({offenders}). "
+        "edge-finder-api dispatches THIS workflow, so anything dispatched back "
+        "closes a cross-repo loop that would read the account forever.")
+
+
+def test_the_publisher_is_reachable_by_dispatch_at_all():
+    """The coupling depends on it. A schedule-only publisher could not be
+    pulled just in time, and the destination would be back to hoping an
+    unrelated cron fired recently."""
+    spec = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    triggers = spec.get(True) or spec.get("on")
+    assert "workflow_dispatch" in triggers, triggers
+
+
+def test_the_publisher_still_runs_on_its_own_schedule_as_a_backup():
+    """The cron may stay -- it just must not be the only correctness
+    mechanism for dollar sizing any more. Removing it would make a missed
+    dispatch mean no reading at all."""
+    spec = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    triggers = spec.get(True) or spec.get("on")
+    assert "schedule" in triggers, triggers
+
+
+def test_a_second_dispatch_cannot_cancel_a_reading_already_in_flight():
+    """This workflow declares cancel-in-progress, so a duplicate dispatch
+    would KILL the run the destination is waiting on and leave the secret
+    exactly as stale as it was. The destination therefore adopts an
+    in-flight run rather than dispatching a second one
+    (edge-finder-api tests/test_bankroll_refresh_coupling.py::
+    test_a_run_already_in_flight_is_adopted_rather_than_duplicated).
+    This test pins the premise that makes that adoption necessary, so the
+    two cannot drift apart silently."""
+    spec = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    concurrency = spec["concurrency"]
+    assert concurrency["group"] == "publish-bankroll"
+    assert concurrency["cancel-in-progress"] is True
