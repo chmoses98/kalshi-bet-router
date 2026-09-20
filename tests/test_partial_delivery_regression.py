@@ -155,7 +155,15 @@ def main():
             existing[ident] = record
             verdict, ok, disagreeing = "NEW", True, []
         else:
-            disagreeing = [f for f in ECONOMICS if prior.get(f) != row.get(f)]
+            # SAME SHAPE AS THE REAL IMPORTER. lib.edgelab.bets._diff_fields
+            # emits {"field", "existing", "incoming"} dicts, not bare names --
+            # and the delivery step now reads that shape to name the fields
+            # without printing the values. A fake that emitted plain strings
+            # would let a reader-side mistake pass every test here.
+            disagreeing = [
+                {"field": f, "existing": prior.get(f), "incoming": row.get(f)}
+                for f in ECONOMICS if prior.get(f) != row.get(f)
+            ]
             if disagreeing:
                 verdict, ok = "CONFLICT", False
             else:
@@ -456,6 +464,46 @@ def test_the_refusal_is_still_reported(world):
     assert "destinations that failed: 1" in out
     assert "PARTIAL" in world["summary"].read_text()
     assert result.returncode == 1
+
+
+def test_the_refusal_names_the_fields_it_disagrees_on(world):
+    """THE 2026-09-20 00:52 RUN.
+
+    A CONFLICT is correct: the destination's canonical row disagrees with
+    this reading of Kalshi and only a person may decide which is right. But
+    the run log said "CONFLICT: 1" and nothing else, and the scheduled
+    workflow goes red on the same row every fifteen minutes until someone
+    resolves it. A refusal nobody can identify is a refusal nobody can
+    resolve, so the step names the FIELDS that disagree.
+    """
+    out = run_delivery(world).stdout
+    assert "  fields the destination disagrees on (names only): entryPrice" in out
+
+
+def test_the_refusal_still_never_prints_the_values(world):
+    """Names, not numbers. The counterpart to the test above, and the
+    reason it prints `field` rather than the whole receipt entry: the
+    receipt carries `existing` and `incoming`, and both are execution
+    economics that must not reach a public Actions log -- the same rule
+    the step already applies to the stake and the ticker."""
+    out = run_delivery(world).stdout
+
+    receipts = json.loads(world["receipts"].read_text())
+    refused = [r for r in receipts if not r["success"]]
+    assert refused, "the fixture no longer produces a refusal"
+    values = [
+        str(d[k]) for r in refused for d in r["conflictingFields"]
+        for k in ("existing", "incoming") if d[k] is not None
+    ]
+    assert values, "the receipt carries no values -- this test proves nothing"
+
+    # Only the block this step prints. The fake importer dumps its whole
+    # receipt list to stdout (the real one writes it to --receipts-out),
+    # and that dump is not what this test is about.
+    marker = "  fields the destination disagrees on (names only): "
+    line = next(l for l in out.splitlines() if l.startswith(marker))
+    for value in values:
+        assert value not in line, f"{value!r} reached the public log"
 
 
 def test_the_partial_delivery_still_opens_a_pull_request(world):

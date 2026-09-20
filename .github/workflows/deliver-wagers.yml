@@ -246,6 +246,21 @@ jobs:
               print(f"    {verdict}: {count}")
           print(f"  canonical bet ids returned: {sum(1 for r in rows if r.get('betId'))}")
           print(f"  failed rows: {sum(1 for r in rows if not r.get('success'))}")
+          # A REFUSAL NOBODY CAN IDENTIFY IS A REFUSAL NOBODY CAN RESOLVE.
+          # A CONFLICT is correct and deliberate -- the destination's row
+          # disagrees with this reading and only a person may decide which
+          # is right -- but until then EVERY scheduled run refuses the same
+          # row and goes red, and the log above says only "CONFLICT: 1".
+          # Field NAMES make that actionable; the receipt's `existing` and
+          # `incoming` VALUES stay out of a public log, exactly like the
+          # stake and the ticker above.
+          conflicting = sorted({
+              str(d.get("field"))
+              for row in rows
+              for d in (row.get("conflictingFields") or [])
+          })
+          if conflicting:
+              print(f"  fields the destination disagrees on (names only): {', '.join(conflicting)}")
           PYEOF
 
             # A REFUSED ROW MUST NEVER COST THE ROWS THAT SUCCEEDED.
