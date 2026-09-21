@@ -93,6 +93,7 @@ class DestinationProfile:
     being waved through forever by a prefix match."""
 
     ledger_branch_runs_ci: bool
+
     """Whether a pull request into the LEDGER BRANCH gets a check run at all.
 
     *** THE FACT THAT WOULD OTHERWISE STALL EVERY DELIVERY ***
@@ -125,6 +126,15 @@ class DestinationProfile:
     reads."""
 
     requires_season: bool = False
+    #: Whether a batch that PASSES every gate condition may merge itself.
+    #:
+    #: False is an OBSERVATION PERIOD, not a defect and not a weaker gate: the
+    #: gate still runs and still prints its verdict, the rows are still
+    #: delivered to the ledger branch and still open a pull request, and a
+    #: REFUSAL is still red. The only thing withheld is the final merge, so a
+    #: person can read the first few real deliveries before the path closes
+    #: over itself. Flip it to True once those look right.
+    auto_merge: bool = True
     """Whether the importer needs `--season`. True for CFB, whose ledger is one
     file per season and which refuses to infer one from a game date -- a
     college season spans two calendar years."""
@@ -169,6 +179,8 @@ PROFILES: dict[Sport, DestinationProfile] = {
         committable_prefixes=("data/",),
         mergeable_paths=frozenset({"data/edgelab/bets/bets.jsonl"}),
         ledger_branch_runs_ci=True,
+        # Proven in production over many deliveries.
+        auto_merge=True,
         ledger_validator=None,
         row_identity_field="sourceBetKey",
         notes=(
@@ -206,6 +218,12 @@ PROFILES: dict[Sport, DestinationProfile] = {
             "{receipts}",
         ),
         ledger_branch_runs_ci=False,
+        # HELD FOR OBSERVATION. CFB has never completed a real delivery: the
+        # end-to-end path is proven by a dry run and by tests driving the
+        # committed bash, which is not the same as having watched it land.
+        # The first few real batches should be read by a person before the
+        # loop closes. Set to True once they have been.
+        auto_merge=False,
         ledger_validator=(
             "python",
             "{code}/scripts/validate_accounting_ledger.py",

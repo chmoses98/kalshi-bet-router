@@ -50,7 +50,8 @@ import urllib.request
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
-from kalshi_router import automerge  # noqa: E402
+from kalshi_router import automerge
+from kalshi_router.destinations import profile_for  # noqa: E402
 from kalshi_router.receipts import normalise  # noqa: E402
 from kalshi_router.destination import destination_repo_for  # noqa: E402
 
@@ -319,6 +320,22 @@ def main(argv=None):
         return EXIT_REFUSED
     if verdict.verdict == automerge.WAIT:
         print("  nothing merged this run; the next scheduled run re-evaluates.")
+        return EXIT_OK
+
+    # PASSED, but this destination is still being watched. The gate ran, its
+    # verdict is printed above, the rows are delivered and the pull request is
+    # open -- a person merges it. This is not a refusal and not an error: a
+    # destination whose real deliveries nobody has yet read should not close
+    # the loop over itself on the strength of a dry run.
+    if not profile_for(args.sport).auto_merge:
+        print(
+            f"  HELD FOR OBSERVATION: {args.sport} passed every gate condition and was "
+            f"NOT merged. The rows are delivered and the pull request is open for review."
+        )
+        print(
+            "  Set auto_merge=True in that destination's DestinationProfile once the "
+            "first real deliveries have been read."
+        )
         return EXIT_OK
 
     if args.dry_run:

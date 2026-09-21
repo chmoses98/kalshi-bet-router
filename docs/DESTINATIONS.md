@@ -127,6 +127,26 @@ MLB is not settled from here (`settlement_importer=None`); its repository does
 its own. `router_branches()` therefore never produces a settle-MLB branch, and
 that is asserted, not incidental.
 
+## The observation period
+
+`auto_merge` is a profile field. MLB is `True` — proven in production over many
+deliveries. **CFB starts `False`.**
+
+That is not a weaker gate and not a defect. The gate still runs and still
+prints its verdict; the rows are still delivered to `accounting-data`; the pull
+request is still opened; the destination's validator still runs; a REFUSAL is
+still red and still needs a person. The only thing withheld is the final merge.
+
+The reason is narrow and worth stating: CFB has never completed a real
+delivery. The path is proven by a dry run — 41 real wagers, all NEW, 0 failed,
+idempotent on re-import, validator accepted — and by tests that drive the
+committed bash against a two-branch fixture. Neither is the same as having
+watched one land. So the first few real batches are left for a person to read.
+
+Flip it to `True` in `PROFILES` once they look right. That is a one-line,
+reviewable commit, which is the point: turning the loop on is a visible act
+rather than a default nobody chose.
+
 ## Adding a destination
 
 Add a `DestinationProfile`. That is the whole change — `DESTINATION_REPOS`,

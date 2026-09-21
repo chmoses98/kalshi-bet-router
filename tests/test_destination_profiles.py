@@ -279,3 +279,40 @@ def test_the_profile_script_never_opens_a_payload():
     )
     for banned in ("json.load", "open(", "read_text", "readlines"):
         assert banned not in executable, f"the profile script reads a file ({banned})"
+
+
+# ------------------------------------------------------ the observation period
+#
+# CFB has never completed a real delivery. The end-to-end path is proven by a
+# dry run and by tests driving the committed bash, which is not the same as
+# having watched it land. So the first real batches are delivered and left for
+# a person.
+
+
+def test_cfb_starts_held_for_observation():
+    assert profile_for("CFB").auto_merge is False
+
+
+def test_mlb_keeps_merging():
+    """Proven in production over many deliveries; nothing here changes it."""
+    assert profile_for("MLB").auto_merge is True
+
+
+def test_holding_the_merge_is_the_only_thing_withheld():
+    """An observation period must not be a weaker gate. Everything that makes
+    a CFB batch verifiable stays exactly as it was."""
+    cfb = profile_for("CFB")
+    assert cfb.ledger_validator, "the validator still runs"
+    assert cfb.committable_prefixes, "delivery is still confined to the ledger paths"
+    assert cfb.mergeable_paths, "the diff is still constrained"
+    assert cfb.row_identity_field, "rows are still identified"
+
+
+def test_auto_merge_defaults_to_on_for_a_new_destination():
+    """A future destination is not silently held; holding is a stated choice."""
+    import dataclasses
+
+    from kalshi_router.destinations import DestinationProfile
+
+    field = next(f for f in dataclasses.fields(DestinationProfile) if f.name == "auto_merge")
+    assert field.default is True
