@@ -132,6 +132,21 @@ def main(argv=None) -> int:
             "belonging to nothing",
             file=sys.stderr,
         )
+        if orphans == wanted:
+            # EVERY settlement orphaned is a different situation from a few.
+            # It is what a correct system looks like when the wagers simply
+            # have not been delivered yet -- a sequencing condition, not
+            # corrupt data -- and saying so is the difference between an
+            # operator checking the delivery run and an operator hunting a
+            # bug that is not there. The refusal itself does not soften: a
+            # settlement still may not be filed before the wager it settles.
+            print(
+                "  EVERY settlement in this batch is unmatched, which is what it looks "
+                "like when the wagers have not been delivered yet. Check that the "
+                "delivery workflow has landed them (a DRY RUN builds the rows and "
+                "deliberately pushes nothing), then re-run this.",
+                file=sys.stderr,
+            )
         return EXIT_REFUSED
     if not matched:
         print("no settlement matched any season's wagers", file=sys.stderr)

@@ -284,3 +284,61 @@ def test_the_settlement_workflow_is_scheduled_but_not_every_minute():
         assert "/" not in minute, f"{cron} runs several times an hour"
         # Every four hours or less often.
         assert hour in ("*/4", "*/6", "*/8", "*/12") or hour.isdigit(), cron
+
+
+def test_every_settlement_orphaned_names_the_likely_cause(tmp_path, capsys):
+    """Measured in production: the first live settle-live run reached 41 real
+    settled CFB positions and refused all 41, because the wagers were built by
+    a DRY RUN delivery that deliberately pushed nothing.
+
+    That is the system working. But "41 orphans" and "the wagers have not been
+    delivered yet" are the same output, and only one of them tells an operator
+    where to look. The refusal is unchanged; only the diagnosis is added."""
+    import subprocess
+    import sys as _sys
+
+    # The production shape exactly: a ledger that DOES hold wagers (the
+    # cutover rows), and settlements that refer to none of them because the
+    # wagers they belong to were built by a dry run and never pushed.
+    ledger = tmp_path / "ledger"
+    (ledger / "wagers").mkdir(parents=True)
+    (ledger / "wagers" / "2026.jsonl").write_text(
+        '{"source_bet_key": "an-older-cutover-row", "game_date": "2026-09-06"}\n'
+    )
+    payload = tmp_path / "settlements.json"
+    payload.write_text(
+        '{"settlements": [{"source_bet_key": "never-delivered-1"}, '
+        '{"source_bet_key": "never-delivered-2"}]}'
+    )
+    result = subprocess.run(
+        [_sys.executable, "scripts/settlement_season.py",
+         "--payload", str(payload), "--ledger-dir", str(ledger)],
+        capture_output=True, text=True,
+    )
+    assert result.returncode != 0, "a settlement must never be filed before its wager"
+    assert "have not been delivered yet" in result.stderr
+    assert "DRY RUN" in result.stderr
+
+
+def test_a_partial_orphan_batch_does_not_claim_the_wagers_are_undelivered(tmp_path):
+    """Some orphans among matched rows is a DIFFERENT problem, and guessing
+    'not delivered yet' would send the operator to the wrong place."""
+    import subprocess
+    import sys as _sys
+
+    ledger = tmp_path / "ledger"
+    (ledger / "wagers").mkdir(parents=True)
+    (ledger / "wagers" / "2026.jsonl").write_text(
+        '{"source_bet_key": "delivered-1", "gameDate": "2026-09-26"}\n'
+    )
+    payload = tmp_path / "settlements.json"
+    payload.write_text(
+        '{"settlements": [{"source_bet_key": "delivered-1"}, {"source_bet_key": "orphan-1"}]}'
+    )
+    result = subprocess.run(
+        [_sys.executable, "scripts/settlement_season.py",
+         "--payload", str(payload), "--ledger-dir", str(ledger)],
+        capture_output=True, text=True,
+    )
+    assert result.returncode != 0
+    assert "have not been delivered yet" not in result.stderr
