@@ -217,11 +217,25 @@ def test_an_unresolved_sport_is_refused_rather_than_guessed():
 
 
 def test_a_sport_with_no_importer_is_refused():
-    # Phase F read all four repositories: only MLB has an importer. The others
-    # would need their wager contract designed first.
-    for sport in (Sport.NFL, Sport.CFB, Sport.TENNIS):
+    """A sport with no destination profile is refused, never defaulted.
+
+    NFL and Tennis have no profile: NFL's importer needs an NFL week resolved
+    from a schedule capture nobody has verified for a scheduled job, and Tennis
+    is known to settle on a scalar this contract cannot express.
+
+    `SPORTS_WITH_AN_IMPORTER` is derived from the profiles rather than restated
+    here, so this refusal and what production actually routes cannot drift
+    apart in the direction where the shadow path refuses a sport the scheduled
+    job is already delivering."""
+    for sport in (Sport.NFL, Sport.TENNIS):
         _, refusal = build_shadow_wager(settled_episode(), classified(sport), context())
         assert refusal is WagerRefusal.NO_DESTINATION_IMPORTER
+
+
+def test_a_sport_with_a_profile_is_not_refused_for_want_of_a_destination():
+    for sport in (Sport.MLB, Sport.CFB):
+        _, refusal = build_shadow_wager(settled_episode(), classified(sport), context())
+        assert refusal is not WagerRefusal.NO_DESTINATION_IMPORTER
 
 
 def test_an_unestablished_game_date_is_refused():

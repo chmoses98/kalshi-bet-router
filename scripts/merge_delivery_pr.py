@@ -51,6 +51,7 @@ import urllib.request
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
 from kalshi_router import automerge  # noqa: E402
+from kalshi_router.receipts import normalise  # noqa: E402
 from kalshi_router.destination import destination_repo_for  # noqa: E402
 
 EXIT_OK = 0
@@ -107,7 +108,7 @@ def _git(work, *args):
     return result.returncode, result.stdout
 
 
-def ledger_diff(work, base_ref, ledger_path):
+def ledger_diff(work, base_ref, ledger_paths):
     """
     (added rows, removed raw lines) between the destination's base branch and
     this clone's HEAD, for the canonical ledger.
@@ -120,7 +121,9 @@ def ledger_diff(work, base_ref, ledger_path):
     row with no identity, which the gate then refuses. Skipping it would be the
     one way an unparseable ledger line could slip through.
     """
-    status, out = _git(work, "diff", "--unified=0", base_ref, "HEAD", "--", ledger_path)
+    if not ledger_paths:
+        return None, None
+    status, out = _git(work, "diff", "--unified=0", base_ref, "HEAD", "--", *ledger_paths)
     if status != 0:
         return None, None
     added, removed = [], []
@@ -217,6 +220,22 @@ def main(argv=None):
                              "diff -- because the branch is rebuilt from that exact "
                              "commit every run, and a shallow clone has no history to "
                              "compute a merge base from anyway.")
+    parser.add_argument(
+        "--validator-passed", default=None, choices=["true", "false"],
+        help=(
+            "the verdict of the DESTINATION'S OWN ledger validator, for a destination whose "
+            "ledger branch runs no CI. Absent means it has not reported, and the gate waits "
+            "rather than merging."
+        ),
+    )
+    parser.add_argument(
+        "--branch-kind", default=automerge.WAGERS, choices=list(automerge.KINDS),
+        help=(
+            "whether this proposal carries wagers or settlements. They are separate "
+            "branches with separate lifecycles; evaluating the wrong one would read a "
+            "different commit than the one that would merge."
+        ),
+    )
     parser.add_argument("--token-env", default="DOWNSTREAM_REPO_TOKEN")
     parser.add_argument("--merge-method", default="squash",
                         choices=["merge", "squash", "rebase"])
@@ -234,12 +253,17 @@ def main(argv=None):
         print(f"{args.token_env} is empty", file=sys.stderr)
         return EXIT_CONFIG
 
-    branch = automerge.router_branch_for(args.sport)
-    ledger_path = sorted(automerge.MERGEABLE_PATHS)[0]
+    branch = automerge.router_branch_for(args.sport, args.branch_kind)
+    # EVERY mergeable path, not the first one alphabetically. CFB's ledger is
+    # one file per season and one per kind, so a diff over `sorted(...)[0]`
+    # would read `settlements/2024.jsonl` and report that a delivery of 2026
+    # wagers changed nothing -- which makes the append-only check vacuous and
+    # the identity check WAIT forever.
+    ledger_paths = sorted(automerge.mergeable_paths_for(args.sport))
 
     _status, head_sha = _git(args.work, "rev-parse", "HEAD")
     verified_sha = head_sha.strip() or None
-    added, removed = ledger_diff(args.work, args.base_ref, ledger_path)
+    added, removed = ledger_diff(args.work, args.base_ref, ledger_paths)
 
     try:
         pull = find_pull_request(repo, branch, token)
@@ -269,11 +293,21 @@ def main(argv=None):
         changed_files=changed_files(args.work, args.base_ref),
         added_ledger_rows=tuple(added or ()),
         removed_ledger_rows=tuple(removed or ()),
-        receipts=tuple(_load_json(args.receipts, default=[]) or []),
-        rerun_receipts=tuple(_load_json(args.rerun_receipts, default=[]) or []),
+        # NORMALISED at the boundary, so the gate reasons about one shape.
+        # MLB writes a list of camelCase rows; CFB writes an object. Handing
+        # the object straight through would iterate its KEYS and produce
+        # receipts that are strings.
+        receipts=tuple(r.as_dict() for r in normalise(_load_json(args.receipts, default=[]))),
+        rerun_receipts=tuple(
+            r.as_dict() for r in normalise(_load_json(args.rerun_receipts, default=[]))
+        ),
         rerun_changed_the_tree=(None if args.rerun_changed_tree is None
                                 else args.rerun_changed_tree == "true"),
         check_runs=checks,
+        destination_validator_passed=(
+            None if args.validator_passed is None else args.validator_passed == "true"
+        ),
+        branch_kind=args.branch_kind,
         partial_delivery=args.partial == "true",
     )
 

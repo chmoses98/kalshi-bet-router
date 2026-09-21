@@ -31,6 +31,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from .destinations import PROFILES
 from .sports import Sport
 from .wager import ShadowWager
 
@@ -52,11 +53,21 @@ from .wager import ShadowWager
 #: so a future deliberate re-identification is possible and explicit.
 ROUTER_IMPORT_BATCH_ID = "kalshi-router-v1"
 
-#: Where each sport's wagers would go. Only MLB has an importer (Phase F read
-#: all four repositories), so it is the only entry -- and a sport absent from
-#: this map is refused rather than defaulted somewhere plausible.
+#: Where each sport's wagers go, DERIVED from the destination profiles.
+#:
+#: This used to be the whole of what production knew about a destination, and
+#: it was not enough: it could not express that CFB's ledger lives on
+#: `accounting-data` while its importer lives on `main`, which is why the
+#: scheduled job could route MLB and the one-time backfill workflow had to
+#: carry a `case` statement naming all three destinations inline.
+#:
+#: `destinations.PROFILES` is now the one place, and this stays as the view
+#: every existing caller already reads -- the payload writer gates production
+#: on it, the merge gate derives branch names from it, and the delivery
+#: workflow resolves a repository through it. A sport absent from it is still
+#: REFUSED rather than defaulted somewhere plausible.
 DESTINATION_REPOS: dict[Sport, str] = {
-    Sport.MLB: "chmoses98/edge-finder-api",
+    sport: profile.repo for sport, profile in PROFILES.items()
 }
 
 

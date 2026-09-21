@@ -52,7 +52,8 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
 from kalshi_router import delivery_branch  # noqa: E402
-from kalshi_router.automerge import MERGEABLE_PATHS, router_branch_for  # noqa: E402
+from kalshi_router.automerge import mergeable_paths_for, router_branch_for  # noqa: E402
+from kalshi_router.destinations import UnknownDestinationError, profile_for  # noqa: E402
 
 EXIT_OK = 0
 EXIT_CONFIG = 2
@@ -108,7 +109,7 @@ def read_remote_branch(work: str, branch: str) -> delivery_branch.RemoteBranch:
     )
 
 
-def ledger_moved(work: str, old: str | None, new: str) -> bool:
+def ledger_moved(work: str, old: str | None, new: str, sport: str) -> bool:
     """Has the canonical wager ledger changed between two commits?
 
     This is the ONLY thing a proposal depends on, so it is the only thing that
@@ -124,8 +125,13 @@ def ledger_moved(work: str, old: str | None, new: str) -> bool:
     """
     if not old:
         return True
+    paths = sorted(mergeable_paths_for(sport))
+    if not paths:
+        # A destination with no described ledger paths is one this script
+        # cannot reason about. "Moved" is the fail-closed answer: it rebuilds.
+        return True
     result = subprocess.run(
-        ["git", "-C", work, "diff", "--name-only", old, new, "--", *sorted(MERGEABLE_PATHS)],
+        ["git", "-C", work, "diff", "--name-only", old, new, "--", *paths],
         capture_output=True, text=True, check=False)
     if result.returncode != 0:
         return True
@@ -139,7 +145,7 @@ def proposal_base(work: str, args, remote: delivery_branch.RemoteBranch):
     remote-tracking ref is local and `--base-sha` is passed in, so neither can
     move between the two calls within a run.
     """
-    moved = ledger_moved(work, remote.base, args.base_sha)
+    moved = ledger_moved(work, remote.base, args.base_sha, args.sport)
     seed, why = delivery_branch.choose_seed(args.base_sha, remote, moved)
     if why == delivery_branch.SEED_BRANCH:
         return remote.base, True, moved
@@ -157,7 +163,7 @@ def cmd_seed(args) -> int:
         f"+refs/heads/{branch}:refs/remotes/origin/{branch}", check=False)
 
     remote = read_remote_branch(work, branch)
-    moved = ledger_moved(work, remote.base, base_sha)
+    moved = ledger_moved(work, remote.base, base_sha, args.sport)
     seed, why = delivery_branch.choose_seed(base_sha, remote, moved)
 
     if why == delivery_branch.SEED_BRANCH:
@@ -204,9 +210,14 @@ def cmd_settle(args) -> int:
     git(work, "reset", "--soft", "-q", base)
 
     staged = [line for line in git(work, "diff", "--cached", "--name-only").splitlines()]
-    unexpected = delivery_branch.uncommittable(staged)
+    try:
+        prefixes = profile_for(args.sport).committable_prefixes
+    except UnknownDestinationError as exc:
+        log(f"  {exc}")
+        return EXIT_CONFIG
+    unexpected = delivery_branch.uncommittable(staged, prefixes)
     if unexpected:
-        log("  the import dirtied files outside data/ -- refusing to commit them:")
+        log(f"  the import dirtied files outside {list(prefixes)} -- refusing to commit them:")
         for path in unexpected:
             log(f"    {path}")
         return EXIT_REFUSED

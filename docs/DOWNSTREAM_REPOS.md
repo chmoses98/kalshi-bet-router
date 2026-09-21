@@ -12,6 +12,12 @@ Audited at:
 | `chmoses98/cfb-edge-finder` | CFB | `5b687b800fafbf2d006ef442c93dd92ea6703770` |
 | `chmoses98/Tennis-Edge-Finder` | Tennis | `625bc557567a856414ae5b960c81a373a377b1e4` |
 
+> **Superseded in part, 2026-09-21.** CFB has since gained a wager importer,
+> a settlement importer and a ledger branch of its own; the router routes to
+> it in production. See [DESTINATIONS.md](DESTINATIONS.md). This audit is kept
+> as it was written, because its reasoning about NFL and Tennis still holds and
+> its reasoning about CFB is the record of what changed.
+
 ## Headline: only one of four has an importer
 
 | Repo | Canonical wager importer | Wager ledger |

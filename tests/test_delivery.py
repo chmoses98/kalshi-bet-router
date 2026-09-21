@@ -19,6 +19,7 @@ from kalshi_router.destination import (
     plan_delivery,
     write_payloads,
 )
+from kalshi_router.production import ROW_BUILDERS
 from kalshi_router.sports import Sport
 from kalshi_router.wager import GameDateSource, ShadowWager
 
@@ -97,17 +98,28 @@ def test_the_payload_is_reproducible_regardless_of_input_order():
 
 # ------------------------------------------------------------- the destinations
 
-def test_only_mlb_has_a_destination():
-    # Phase F read all four repositories. Three have no importer, and inventing
-    # their ledger contract is the owner's decision.
-    assert set(DESTINATION_REPOS) == {Sport.MLB}
+def test_production_routes_mlb_and_cfb_and_nothing_else():
+    """Adding a destination is a deliberate, verified act, not a default.
+
+    CFB was activated once every part of its contract had been checked end to
+    end: the row builder emits `cfb_accounted_wager.v1`, the destination's own
+    importer validates and deduplicates on `source_bet_key`, its store is
+    append-only, and eighteen CFB wagers had already been delivered through
+    exactly that path by the one-time gap backfill.
+
+    NFL is still absent, and deliberately: its importer needs a real NFL week
+    resolved from a schedule capture on a third branch, and nobody has verified
+    that path for a scheduled job. A sport with no profile is REFUSED."""
+    assert set(DESTINATION_REPOS) == {Sport.MLB, Sport.CFB}
+    assert Sport.NFL not in DESTINATION_REPOS
+    assert Sport.TENNIS not in DESTINATION_REPOS
 
 
 def test_a_sport_without_a_destination_cannot_be_planned():
     # It should have been refused upstream; this asserts the invariant rather
     # than trusting it.
     with pytest.raises(ValueError, match="no destination importer"):
-        plan_delivery([shadow_wager(sport=Sport.NFL)])
+        plan_delivery([shadow_wager(sport=Sport.TENNIS)])
 
 
 def test_a_plan_reports_counts_and_a_public_repo_name_only():
@@ -307,5 +319,11 @@ class TestBackfillPayloads:
 
     def test_the_backfill_did_not_widen_what_production_routes(self):
         """Adding a row shape is not the same decision as adding a destination
-        the every-15-minutes job pushes to."""
-        assert set(DESTINATION_REPOS) == {Sport.MLB}
+        the every-15-minutes job pushes to.
+
+        NFL is the live proof: `production.ROW_BUILDERS` has spoken its
+        vocabulary since the backfill, and it is still not in production's
+        destination map, because nobody has verified its week-resolution path
+        for a scheduled job."""
+        assert "NFL" in ROW_BUILDERS
+        assert Sport.NFL not in DESTINATION_REPOS

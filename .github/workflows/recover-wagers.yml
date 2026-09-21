@@ -125,19 +125,60 @@ jobs:
           failures=0
           for payload in "${payloads[@]}"; do
             sport="$(basename "${payload}" .json)"
-            case "${sport}" in
-              MLB) repo="chmoses98/edge-finder-api" ;;
-              *)
-                echo "::error::${sport} has no configured destination repository."
-                failures=$((failures + 1))
-                continue
-                ;;
-            esac
 
-            echo "=== ${sport} -> ${repo} ==="
+            # THE DESTINATION TABLE LIVES IN ONE PLACE, AND IT IS NOT HERE.
+            # This used to be a `case` naming MLB inline, which is how a
+            # recovery run for any other destination became impossible without
+            # editing a workflow. `kalshi_router.destinations.PROFILES` answers
+            # here exactly as it does for the scheduled delivery, and a sport
+            # absent from it is REFUSED rather than defaulted.
+            profile_status=0
+            repo="$(python "${GITHUB_WORKSPACE}/scripts/destination_profile.py" \
+              "${sport}" --field repo)" || profile_status=$?
+            if [ "${profile_status}" -ne 0 ] || [ -z "${repo}" ]; then
+              echo "::error::${sport} has no destination profile; refusing to guess a repository."
+              failures=$((failures + 1))
+              continue
+            fi
+            ledger_branch="$(python "${GITHUB_WORKSPACE}/scripts/destination_profile.py" \
+              "${sport}" --field ledger_branch)"
+            code_branch="$(python "${GITHUB_WORKSPACE}/scripts/destination_profile.py" \
+              "${sport}" --field code_branch)"
+            needs_code="$(python "${GITHUB_WORKSPACE}/scripts/destination_profile.py" \
+              "${sport}" --field needs_separate_code_checkout)"
+            needs_season="$(python "${GITHUB_WORKSPACE}/scripts/destination_profile.py" \
+              "${sport}" --field requires_season)"
+            mapfile -t allowed_prefixes < <(
+              python "${GITHUB_WORKSPACE}/scripts/destination_profile.py" \
+                "${sport}" --field committable_prefixes
+            )
+
+            echo "=== ${sport} -> ${repo} (${ledger_branch}) ==="
             work="${RUNNER_TEMP}/dest-${sport}"
             rm -rf "${work}"
-            git clone --quiet --depth 1 "https://github.com/${repo}" "${work}"
+            git clone --quiet --depth 1 --branch "${ledger_branch}" \
+              "https://github.com/${repo}" "${work}"
+
+            code="${work}"
+            if [ "${needs_code}" = "true" ]; then
+              code="${RUNNER_TEMP}/code-${sport}"
+              rm -rf "${code}"
+              git clone --quiet --depth 1 --branch "${code_branch}" \
+                "https://github.com/${repo}" "${code}"
+            fi
+
+            season=""
+            if [ "${needs_season}" = "true" ]; then
+              season_status=0
+              season="$(python "${GITHUB_WORKSPACE}/scripts/payload_season.py" \
+                --payload "${payload}" --sport "${sport}")" || season_status=$?
+              if [ "${season_status}" -ne 0 ] || [ -z "${season}" ]; then
+                echo "::error::${sport}: the payload's season could not be established; nothing was imported."
+                failures=$((failures + 1))
+                continue
+              fi
+              echo "  season ledger: ${season}"
+            fi
 
             git -C "${work}" config credential.helper \
               '!f() { echo "username=x-access-token"; echo "password=${DOWNSTREAM_REPO_TOKEN}"; }; f'
@@ -147,22 +188,21 @@ jobs:
             # The importer's stdout carries the receipts, which name markets and
             # stakes. It goes to /dev/null; its stderr is counts only.
             receipts="${RUNNER_TEMP}/receipts-${sport}.json"
+            mapfile -t import_argv < <(
+              python "${GITHUB_WORKSPACE}/scripts/destination_profile.py" "${sport}" \
+                --importer wager --payload "${payload}" --work "${work}" \
+                --code "${code}" --receipts "${receipts}" \
+                ${season:+--season "${season}"}
+            )
+            if [ ${#import_argv[@]} -eq 0 ]; then
+              echo "::error::${sport}: the importer command could not be built."
+              failures=$((failures + 1))
+              continue
+            fi
             import_status=0
-            ( cd "${work}" && python scripts/edgelab/import_bet_batch.py \
-                --file "${payload}" --receipts-out "${receipts}" >/dev/null ) || import_status=$?
+            ( cd "${work}" && "${import_argv[@]}" >/dev/null ) || import_status=$?
 
-            python - "${receipts}" <<'PYEOF'
-          import json, sys
-          rows = json.load(open(sys.argv[1]))
-          verdicts = {}
-          for row in rows:
-              verdicts[row.get("duplicateStatus")] = verdicts.get(row.get("duplicateStatus"), 0) + 1
-          print(f"  rows: {len(rows)}")
-          for verdict, count in sorted(verdicts.items(), key=lambda kv: str(kv[0])):
-              print(f"    {verdict}: {count}")
-          print(f"  canonical bet ids returned: {sum(1 for r in rows if r.get('betId'))}")
-          print(f"  failed rows: {sum(1 for r in rows if not r.get('success'))}")
-          PYEOF
+            python "${GITHUB_WORKSPACE}/scripts/report_receipts.py" --receipts "${receipts}"
 
             # A REFUSED ROW MUST NEVER COST THE ROWS THAT SUCCEEDED.
             #
@@ -241,9 +281,14 @@ jobs:
             # stopping is far better than quietly committing it every 15
             # minutes.
             staged="$(git -C "${work}" diff --cached --name-only)"
-            unexpected="$(printf '%s\n' "${staged}" | grep -v '^data/' || true)"
+            # Screened against the DESTINATION'S OWN prefixes, read from its
+            # profile above. A hardcoded `^data/` was MLB's answer and would
+            # refuse every row a `wagers/`-rooted ledger writes.
+            pattern="$(printf '^%s|' "${allowed_prefixes[@]}")"
+            pattern="${pattern%|}"
+            unexpected="$(printf '%s\n' "${staged}" | grep -Ev "${pattern}" || true)"
             if [ -n "${unexpected}" ]; then
-              echo "::error::${sport}: the import dirtied files outside data/ -- refusing to commit them:"
+              echo "::error::${sport}: the import dirtied files outside ${allowed_prefixes[*]} -- refusing to commit them:"
               printf '%s\n' "${unexpected}"
               failures=$((failures + 1))
               continue

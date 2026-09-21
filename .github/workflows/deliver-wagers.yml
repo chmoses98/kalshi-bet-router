@@ -131,41 +131,77 @@ jobs:
           for payload in "${payloads[@]}"; do
             sport="$(basename "${payload}" .json)"
 
-            # THE DESTINATION MAP LIVES IN ONE PLACE, AND IT IS NOT HERE.
+            # THE DESTINATION TABLE LIVES IN ONE PLACE, AND IT IS NOT HERE.
             #
-            # This used to be a `case` naming MLB and its repository inline, so
-            # the router knew a sport's destination in two places that could
-            # disagree -- and adding a second sport meant remembering this file.
-            # `destination.DESTINATION_REPOS` is what the payload writer already
-            # gates production routing on and what the merge gate derives branch
-            # names from, so it is the one that answers here too. A sport absent
-            # from it is still REFUSED rather than defaulted somewhere plausible.
-            repo=""
-            repo="$(python - "${sport}" <<'PYEOF'
-          import os, sys
-          # The checkout's own source, exactly like the two scripts this step
-          # calls. The router is pip-installed above, so this is belt and
-          # braces -- but it is what lets the delivery step be extracted and
-          # exercised by tests/test_partial_delivery_regression.py without an
-          # install standing between the test and production's own code.
-          sys.path.insert(0, os.path.join(os.environ["GITHUB_WORKSPACE"], "src"))
-          from kalshi_router.destination import destination_repo_for
-          repo = destination_repo_for(sys.argv[1])
-          if not repo:
-              sys.exit(1)
-          print(repo)
-          PYEOF
-            )" || repo=""
-            if [ -z "${repo}" ]; then
-              echo "::error::${sport} has no configured destination repository."
+            # This used to be a `case` naming MLB, its repository, its importer
+            # and its path prefix inline -- so the router knew a destination in
+            # four places that could disagree, and adding a sport meant
+            # remembering all four. It also could not express a destination
+            # whose ledger is on a DATA BRANCH with its importer on `main`,
+            # which is why CFB could be delivered by the one-time backfill
+            # workflow and not by this one.
+            #
+            # `kalshi_router.destinations.PROFILES` is the one place now.
+            # `scripts/destination_profile.py` is how a shell reads it, and it
+            # prints only public facts: a repository, a branch, a prefix, a
+            # command template. A sport absent from the table is REFUSED.
+            profile_status=0
+            repo="$(python "${GITHUB_WORKSPACE}/scripts/destination_profile.py" \
+              "${sport}" --field repo)" || profile_status=$?
+            if [ "${profile_status}" -ne 0 ] || [ -z "${repo}" ]; then
+              echo "::error::${sport} has no destination profile; refusing to guess a repository."
               failures=$((failures + 1))
               continue
             fi
+            ledger_branch="$(python "${GITHUB_WORKSPACE}/scripts/destination_profile.py" \
+              "${sport}" --field ledger_branch)"
+            code_branch="$(python "${GITHUB_WORKSPACE}/scripts/destination_profile.py" \
+              "${sport}" --field code_branch)"
+            needs_code="$(python "${GITHUB_WORKSPACE}/scripts/destination_profile.py" \
+              "${sport}" --field needs_separate_code_checkout)"
+            needs_season="$(python "${GITHUB_WORKSPACE}/scripts/destination_profile.py" \
+              "${sport}" --field requires_season)"
 
-            echo "=== ${sport} -> ${repo} ==="
+            echo "=== ${sport} -> ${repo} (${ledger_branch}) ==="
+
+            # THE LEDGER CHECKOUT. Not necessarily `main`: CFB's canonical
+            # ledger lives on `accounting-data`, and cloning main there would
+            # put the importer's output on a branch that does not hold a
+            # ledger.
             work="${RUNNER_TEMP}/dest-${sport}"
             rm -rf "${work}"
-            git clone --quiet --depth 1 "https://github.com/${repo}" "${work}"
+            git clone --quiet --depth 1 --branch "${ledger_branch}" \
+              "https://github.com/${repo}" "${work}"
+
+            # THE CODE CHECKOUT, when the importer's source is somewhere else.
+            # Conflating the two is how a delivery runs an importer that does
+            # not exist on the branch it is writing.
+            code="${work}"
+            if [ "${needs_code}" = "true" ]; then
+              code="${RUNNER_TEMP}/code-${sport}"
+              rm -rf "${code}"
+              git clone --quiet --depth 1 --branch "${code_branch}" \
+                "https://github.com/${repo}" "${code}"
+            fi
+
+            # THE SEASON, for a ledger that is one file per season. Taken from
+            # the CONTEST DATES in the payload rather than from today's clock:
+            # a delivery run in January would otherwise file a bowl game under
+            # the wrong year. A payload whose dates span two seasons is
+            # refused -- splitting it is the right answer and this workflow is
+            # not where that decision belongs.
+            season=""
+            if [ "${needs_season}" = "true" ]; then
+              season_status=0
+              season="$(python "${GITHUB_WORKSPACE}/scripts/payload_season.py" \
+                --payload "${payload}" --sport "${sport}")" || season_status=$?
+              if [ "${season_status}" -ne 0 ] || [ -z "${season}" ]; then
+                echo "::error::${sport}: the payload's season could not be established; nothing was imported."
+                failures=$((failures + 1))
+                continue
+              fi
+              echo "  season ledger: ${season}"
+            fi
 
             # The token reaches git through a helper that reads it from the
             # environment when a push happens. It is not in the URL, not in
@@ -176,7 +212,7 @@ jobs:
             git -C "${work}" config user.email "noreply@users.noreply.github.com"
 
             base_sha="$(git -C "${work}" rev-parse HEAD)"
-            echo "destination main: ${base_sha}"
+            echo "destination ${ledger_branch}: ${base_sha}"
 
             # ONE LONG-LIVED BRANCH PER SPORT, and one pull request on it.
             #
@@ -227,41 +263,29 @@ jobs:
               continue
             fi
 
-            # The destination's OWN importer. Never a hand-written ledger edit.
+            # The destination's OWN importer, named by its own profile.
+            # Never a hand-written ledger edit and never another destination's
+            # command: the MLB importer speaks camelCase and reads an envelope
+            # batch id, the CFB one speaks snake_case and needs a season, and
+            # running either against the other's ledger writes nothing usable.
             receipts="${RUNNER_TEMP}/receipts-${sport}.json"
+            mapfile -t import_argv < <(
+              python "${GITHUB_WORKSPACE}/scripts/destination_profile.py" "${sport}" \
+                --importer wager --payload "${payload}" --work "${work}" \
+                --code "${code}" --receipts "${receipts}" \
+                ${season:+--season "${season}"}
+            )
+            if [ ${#import_argv[@]} -eq 0 ]; then
+              echo "::error::${sport}: the importer command could not be built."
+              failures=$((failures + 1))
+              continue
+            fi
             import_status=0
-            ( cd "${work}" && python scripts/edgelab/import_bet_batch.py \
-                --file "${payload}" --receipts-out "${receipts}" >/dev/null ) || import_status=$?
+            ( cd "${work}" && "${import_argv[@]}" >/dev/null ) || import_status=$?
 
             # Receipts carry the canonical bet id and the duplicate verdict.
             # Counts and verdicts only -- never the stake or the ticker.
-            python - "${receipts}" <<'PYEOF'
-          import json, sys
-          rows = json.load(open(sys.argv[1]))
-          verdicts = {}
-          for row in rows:
-              verdicts[row.get("duplicateStatus")] = verdicts.get(row.get("duplicateStatus"), 0) + 1
-          print(f"  rows: {len(rows)}")
-          for verdict, count in sorted(verdicts.items(), key=lambda kv: str(kv[0])):
-              print(f"    {verdict}: {count}")
-          print(f"  canonical bet ids returned: {sum(1 for r in rows if r.get('betId'))}")
-          print(f"  failed rows: {sum(1 for r in rows if not r.get('success'))}")
-          # A REFUSAL NOBODY CAN IDENTIFY IS A REFUSAL NOBODY CAN RESOLVE.
-          # A CONFLICT is correct and deliberate -- the destination's row
-          # disagrees with this reading and only a person may decide which
-          # is right -- but until then EVERY scheduled run refuses the same
-          # row and goes red, and the log above says only "CONFLICT: 1".
-          # Field NAMES make that actionable; the receipt's `existing` and
-          # `incoming` VALUES stay out of a public log, exactly like the
-          # stake and the ticker above.
-          conflicting = sorted({
-              str(d.get("field"))
-              for row in rows
-              for d in (row.get("conflictingFields") or [])
-          })
-          if conflicting:
-              print(f"  fields the destination disagrees on (names only): {', '.join(conflicting)}")
-          PYEOF
+            python "${GITHUB_WORKSPACE}/scripts/report_receipts.py" --receipts "${receipts}"
 
             # A REFUSED ROW MUST NEVER COST THE ROWS THAT SUCCEEDED.
             #
@@ -309,8 +333,13 @@ jobs:
             git -C "${work}" add -A
             tree_before_rerun="$(git -C "${work}" write-tree)"
             rerun_receipts="${RUNNER_TEMP}/receipts-rerun-${sport}.json"
-            ( cd "${work}" && python scripts/edgelab/import_bet_batch.py \
-                --file "${payload}" --receipts-out "${rerun_receipts}" >/dev/null ) || true
+            mapfile -t rerun_argv < <(
+              python "${GITHUB_WORKSPACE}/scripts/destination_profile.py" "${sport}" \
+                --importer wager --payload "${payload}" --work "${work}" \
+                --code "${code}" --receipts "${rerun_receipts}" \
+                ${season:+--season "${season}"}
+            )
+            ( cd "${work}" && "${rerun_argv[@]}" >/dev/null ) || true
             git -C "${work}" add -A
             tree_after_rerun="$(git -C "${work}" write-tree)"
             if [ "${tree_before_rerun}" = "${tree_after_rerun}" ]; then
@@ -319,6 +348,50 @@ jobs:
             else
               rerun_changed_tree=true
               echo "::error::${sport}: re-applying the IDENTICAL payload changed the ledger. The import is not idempotent; this batch will not auto-merge."
+            fi
+
+            # THE DESTINATION'S OWN VERDICT ON ITS OWN DATA.
+            #
+            # Most destinations answer through pull-request CI. One cannot:
+            # GitHub runs a `pull_request` workflow only if that workflow file
+            # exists on the pull request's BASE branch, and CFB's base is an
+            # ORPHAN data branch with no `.github/` at all -- measured, not
+            # assumed: its two backfill pull requests have zero workflow runs
+            # between them. A gate that only knew about CI would wait forever
+            # for a signal that cannot arrive, and every automatic delivery
+            # would sit open.
+            #
+            # So such a destination supplies the verdict directly: ITS OWN
+            # validator, from ITS OWN code branch, run against the tree ITS OWN
+            # importer just produced. The router reports the answer and does
+            # not form one.
+            validator_passed=""
+            has_validator="$(python "${GITHUB_WORKSPACE}/scripts/destination_profile.py" \
+              "${sport}" --field has_ledger_validator)"
+            if [ "${has_validator}" = "true" ]; then
+              validator_result="${RUNNER_TEMP}/validator-${sport}.json"
+              mapfile -t validator_argv < <(
+                python "${GITHUB_WORKSPACE}/scripts/destination_profile.py" "${sport}" \
+                  --field ledger_validator
+              )
+              # Rendered here rather than by --importer, which is for importers.
+              rendered=()
+              for part in "${validator_argv[@]}"; do
+                part="${part//\{code\}/${code}}"
+                part="${part//\{work\}/${work}}"
+                part="${part//\{receipts\}/${validator_result}}"
+                rendered+=("${part}")
+              done
+              validator_status=0
+              "${rendered[@]}" || validator_status=$?
+              if [ "${validator_status}" -eq 0 ]; then
+                validator_passed="true"
+                echo "  the destination's own ledger validator accepted this tree."
+              else
+                validator_passed="false"
+                echo "::error::${sport}: the destination's own ledger validator REFUSED the tree this delivery produced. The rows stay on the branch and will not auto-merge."
+                failures=$((failures + 1))
+              fi
             fi
 
             # ADOPT, PUSH, OR NOTHING TO DELIVER -- one decision, made once.
@@ -348,11 +421,12 @@ jobs:
             case "${settle_status}" in
               0) ;;
               3)
-                # The import dirtied files outside data/. `git add -A` is only
-                # safe because the destination's own .gitignore covers what the
-                # importer leaves behind, and that is THEIR property to change.
-                # Nothing was committed and nothing was pushed.
-                echo "::error::${sport}: the import dirtied files outside data/ -- nothing was committed. See the paths above."
+                # The import dirtied files outside the destination's own
+                # committable prefixes. `git add -A` is only safe because the
+                # destination's .gitignore covers what the importer leaves
+                # behind, and that is THEIR property to change. Nothing was
+                # committed and nothing was pushed.
+                echo "::error::${sport}: the import dirtied files outside this destination's ledger paths -- nothing was committed. See the paths above."
                 failures=$((failures + 1))
                 continue ;;
               *)
@@ -407,7 +481,7 @@ jobs:
               -H "Authorization: Bearer ${DOWNSTREAM_REPO_TOKEN}" \
               -H "Accept: application/vnd.github+json" \
               "https://api.github.com/repos/${repo}/pulls" \
-              -d "{\"title\":\"Record Kalshi wagers (${sport})\",\"head\":\"${branch}\",\"base\":\"main\",\"body\":\"Imported by kalshi-bet-router through this repository's own importer. Counts are in the router's run log; the rows are in the diff.\"}")"
+              -d "{\"title\":\"Record Kalshi wagers (${sport})\",\"head\":\"${branch}\",\"base\":\"${ledger_branch}\",\"body\":\"Imported by kalshi-bet-router through this repository's own importer. Counts are in the router's run log; the rows are in the diff.\"}")"
 
             case "${pr_status}" in
               201)
@@ -468,6 +542,7 @@ jobs:
               --rerun-receipts "${rerun_receipts}" \
               --rerun-changed-tree "${rerun_changed_tree}" \
               --partial "$([ "${partial}" -eq 1 ] && echo true || echo false)" \
+              ${validator_passed:+--validator-passed "${validator_passed}"} \
               --base-ref "$(git -C "${work}" rev-parse HEAD^)" \
               $([ "${DRY_RUN}" = "true" ] && echo --dry-run) || merge_status=$?
 

@@ -249,6 +249,35 @@ def _add_settle_parser(sub) -> None:
     settle.set_defaults(show_sensitive_details=False, max_fills=None, page_limit=None)
 
 
+def _add_settle_live_parser(sub) -> None:
+    settle = sub.add_parser(
+        "settle-live",
+        help=(
+            "attribute exchange settlements to POST-CUTOVER wagers and write payloads. "
+            "The production settlement path; `settle` is the one-time historical one and "
+            "structurally cannot reach past the cutover."
+        ),
+    )
+    settle.add_argument(
+        "--out-dir",
+        default=None,
+        metavar="DIR",
+        help=(
+            "Write one settlement payload per destination. Omitted, this command reports "
+            "counts and writes nothing."
+        ),
+    )
+    settle.add_argument(
+        "--allow-stabilization",
+        action="store_true",
+        help=(
+            "admit an order whose fills have stopped arriving, on the same measured "
+            "evidence the delivery job uses"
+        ),
+    )
+    settle.set_defaults(show_sensitive_details=False, max_fills=None, page_limit=None)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="kalshi-router",
@@ -353,6 +382,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_series_probe_parser(sub)
     _add_backfill_parser(sub)
     _add_settle_parser(sub)
+    _add_settle_live_parser(sub)
     return parser
 
 
@@ -647,6 +677,118 @@ def _run_settle(args, client, out, err) -> int:
     return EXIT_OK
 
 
+def _run_settle_live(args, client, out, err) -> int:
+    """Settle POST-CUTOVER wagers. The production settlement path.
+
+    *** WHY THIS IS NOT A FLAG ON `settle` ***
+    `settle` is bounded by `BackfillWindow`, whose END is
+    `PRODUCTION_CUTOVER_ISO` structurally -- there is no input for it and no
+    flag that widens it. That is exactly right for a one-time historical
+    catch-up and it is why the one-time catch-up could never become the live
+    path. Adding a parameter that reached past the cutover would have removed
+    the property the backfill relies on.
+
+    So this is a separate entry point with the opposite bound: it considers the
+    range production owns, and it cannot reach backwards into the range the
+    backfill owns.
+
+    *** THE SPORT IS REUSED, NEVER RE-DERIVED ***
+    A settlement carries a market ticker and nothing else that names a sport.
+    Deciding a destination from a ticker prefix is precisely the inference this
+    system refuses -- `KXNCAAF...` looks like a CFB ticker right up until it is
+    not one. The wager being settled was already classified on Kalshi's own
+    competition evidence, so THAT answer is carried forward. A settlement whose
+    wager this run did not reconstruct is REFUSED: it is a payout with no home,
+    and sending it somewhere chosen by guesswork is worse than not sending it.
+
+    *** MLB IS EXCLUDED STRUCTURALLY ***
+    Not by a default and not by a flag. `edge-finder-api` re-derives every
+    outcome from the MLB Stats API in its own postgame job; a settlement pushed
+    there by this router would be a SECOND authority on one fact, and the two
+    would disagree the first time either was wrong. Its destination profile
+    therefore has no settlement importer, and a destination with no settlement
+    importer cannot be emitted for.
+    """
+    from .destination import write_settlement_payloads
+    from .destinations import PROFILES
+    from .settlement import settle_batch
+
+    destinations = {
+        sport.value
+        for sport, profile in PROFILES.items()
+        if profile.settlement_importer is not None
+    }
+    if not destinations:
+        print(
+            "no destination in the profile table accepts settlements from this router; "
+            "there is nothing this command could deliver",
+            file=err,
+        )
+        return EXIT_CONFIG
+
+    try:
+        result = run_audit(
+            client,
+            max_fills=None,
+            full_history=True,
+            production=True,
+            now=Decimal(int(time.time())),
+            allow_stabilization=args.allow_stabilization,
+        )
+        settlements_walked = _walk_settlements(client)
+    except KalshiRouterError as exc:
+        print(f"settlement pass failed: {type(exc).__name__}: {exc}", file=err)
+        return EXIT_API
+
+    print("post-cutover settlement pass", file=out)
+    print(f"destinations that accept settlements: {sorted(destinations)}", file=out)
+    print("", file=out)
+
+    wagers = [w for w in result.production_wagers if w.sport in destinations]
+    # Latest settlement per ticker. A market settles once, so a second row for
+    # one ticker is a re-observation rather than a second event; taking the
+    # last keeps the most recently reported state without merging two.
+    by_ticker = {s.ticker: s for s in settlements_walked}
+    settlements = settle_batch(wagers, by_ticker)
+
+    established = sum(1 for s in settlements if s.is_established)
+    settled = sum(1 for s in settlements if s.settlement_status == "SETTLED")
+    reasons: dict[str, int] = {}
+    for one in settlements:
+        for reason in one.refusals:
+            reasons[reason] = reasons.get(reason, 0) + 1
+
+    print("settlement attribution (counts only; payouts are NOT printed):", file=out)
+    print(f"  post-cutover wagers for these destinations: {len(wagers)}", file=out)
+    print(f"  settled: {settled}", file=out)
+    print(f"  not settled: {len(wagers) - settled}", file=out)
+    print(f"  profit and loss established: {established}", file=out)
+    print(f"  profit and loss UNESTABLISHED: {len(wagers) - established}", file=out)
+    for reason in sorted(reasons):
+        print(f"    {reason}: {reasons[reason]}", file=out)
+
+    if args.out_dir:
+        # Only SETTLED rows cross. An unsettled wager is recorded downstream by
+        # having no settlement row at all, so sending a PENDING one would be
+        # sending a row the destination is built to refuse.
+        deliverable = [s for s in settlements if s.settlement_status == "SETTLED"]
+        sports = {w.source_key: w.sport for w in wagers}
+        counts = write_settlement_payloads(deliverable, args.out_dir, sports)
+        print("", file=out)
+        print("settlement payloads written (rows per destination; rows are NOT printed):", file=out)
+        if not counts:
+            print("  none -- nothing post-cutover has settled", file=out)
+        for sport, rows in sorted(counts.items()):
+            print(f"  {sport}: {rows}", file=out)
+
+    print("", file=out)
+    print(result.transport.render(), file=out)
+    # A machine-readable line so the scheduled job can annotate itself without
+    # a human reading the report. Counts only, never a market.
+    print(f"SETTLEMENTS_READY={settled}", file=out)
+    return EXIT_OK
+
+
 def _run_bankroll(args, client, out, err) -> int:
     """Publish the minimum, print only what is safe in a public log.
 
@@ -804,6 +946,9 @@ def main(argv: list[str] | None = None, stdout=None, stderr=None) -> int:
 
     if args.command == "settle":
         return _run_settle(args, client, out, err)
+
+    if args.command == "settle-live":
+        return _run_settle_live(args, client, out, err)
 
     try:
         result = run_audit(

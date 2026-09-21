@@ -49,16 +49,22 @@ from .classify import (
     MarketContext,
     UnresolvedReason,
 )
+from .destinations import PROFILES
 from .sports import Sport
 
 ONE = Decimal(1)
 ZERO = Decimal(0)
 
-#: Sports whose ledger repository has an importer to route into. Phase F read
-#: all four repositories: only MLB has one. The other three would need their
-#: wager contract DESIGNED first, which is the owner's decision and not
-#: something to infer from whatever JSON file happens to exist.
-SPORTS_WITH_AN_IMPORTER = frozenset({Sport.MLB})
+#: Sports whose ledger repository has an importer to route into.
+#:
+#: DERIVED from `destinations.PROFILES` rather than restated. When this was a
+#: literal it could disagree with what production actually routed -- the
+#: shadow path would refuse a sport the scheduled job was delivering, or the
+#: reverse -- and neither disagreement is visible from either side. A profile
+#: cannot be written without naming the repository, the ledger branch, the
+#: importer and what it may touch, so a sport nobody has answered those for
+#: still cannot appear here by accident.
+SPORTS_WITH_AN_IMPORTER = frozenset(PROFILES)
 
 #: Settlement results this contract knows how to express. A scalar settlement
 #: pays somewhere strictly between the two, and MLB's ledger has WIN/LOSS/PUSH/

@@ -54,6 +54,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .destination import DESTINATION_REPOS, ROUTER_IMPORT_BATCH_ID
+from .destinations import PROFILES, UnknownDestinationError, profile_for
+from .receipts import (
+    IDEMPOTENT_RERUN_VERDICTS,
+    conflicting_field_names,
+    normalise,
+)
+from .sports import Sport
 
 #: The branch a sport's delivery lives on. One long-lived branch per sport, per
 #: `deliver-wagers.yml`. Derived here from the same map the workflow routes by,
@@ -61,36 +68,88 @@ from .destination import DESTINATION_REPOS, ROUTER_IMPORT_BATCH_ID
 BRANCH_PREFIX = "kalshi-router/"
 
 
-def router_branch_for(sport: str) -> str:
-    return f"{BRANCH_PREFIX}{sport}"
+#: What a router branch carries. A destination receives WAGERS and, where it
+#: does not settle its own, SETTLEMENTS -- and they are separate proposals with
+#: separate lifecycles, so they get separate branches. One branch carrying both
+#: would make a settlement wait on a wager's check suite and vice versa.
+WAGERS = "wagers"
+SETTLEMENTS = "settlements"
+KINDS = (WAGERS, SETTLEMENTS)
+
+
+def router_branch_for(sport: str, kind: str = WAGERS) -> str:
+    if kind not in KINDS:
+        raise ValueError(f"unknown router branch kind {kind!r}; expected one of {KINDS}")
+    prefix = BRANCH_PREFIX if kind == WAGERS else f"{BRANCH_PREFIX}settle-"
+    return f"{prefix}{sport}"
 
 
 def router_branches() -> frozenset[str]:
-    return frozenset(router_branch_for(sport.value) for sport in DESTINATION_REPOS)
+    """Every branch name this router may own, and no others.
+
+    A settlement branch is listed only for a destination that ACCEPTS
+    settlements. MLB settles its own bets, so `kalshi-router/settle-MLB` is not
+    a branch this router may ever push -- and a name in this set is a name the
+    gate is willing to recognise, which is not somewhere to be generous."""
+    names = {router_branch_for(sport.value) for sport in DESTINATION_REPOS}
+    names |= {
+        router_branch_for(sport.value, SETTLEMENTS)
+        for sport, profile in PROFILES.items()
+        if profile.settlement_importer is not None
+    }
+    return frozenset(names)
 
 
-#: The ONLY files a router-authored pull request may change.
+#: The ONLY files a router-authored pull request may change, for MLB.
 #:
-#: Deliberately exact paths, not a `data/` prefix. The delivery workflow already
-#: refuses to COMMIT anything outside `data/`; that is a containment check, and
-#: this is a different, narrower question -- what may be merged to `main`
-#: without a human. A file the importer starts writing later is not
-#: automatically safe to land unread, so it lands here as a refusal and someone
-#: looks once, rather than being waved through forever by a prefix match.
-MERGEABLE_PATHS = frozenset({
-    "data/edgelab/bets/bets.jsonl",
-})
+#: Deliberately exact paths, not a prefix. The delivery workflow already
+#: refuses to COMMIT anything outside the destination's own prefixes; that is a
+#: containment check, and this is a different, narrower question -- what may be
+#: merged to the ledger branch without a human. A file the importer starts
+#: writing later is not automatically safe to land unread, so it lands here as
+#: a refusal and someone looks once, rather than being waved through forever by
+#: a prefix match.
+#:
+#: KEPT AS MLB'S ANSWER, and no longer as THE answer. Every destination has its
+#: own set in its profile; this name remains because `deliver_branch.py` reads
+#: it to decide whether the canonical ledger MOVED, and because a caller that
+#: does not know its sport is better served by MLB's exact paths than by a
+#: prefix. `mergeable_paths_for` is what the gate uses.
+MERGEABLE_PATHS = PROFILES[Sport.MLB].mergeable_paths
 
-#: Importer verdicts that represent a row the destination accepted without
-#: needing anyone's judgement. Anything else -- CONFLICT, UNRESOLVED, an
-#: ambiguous ticker match, a schema refusal -- is a human's call.
-NO_JUDGEMENT_VERDICTS = frozenset({"NEW", "DUPLICATE_NOOP", "CORRECTED"})
 
-#: The verdicts a SECOND, identical import must produce. This is the
-#: idempotency proof: the same payload, applied twice to the same tree, must
-#: change nothing the second time. A `NEW` here would mean a row's identity is
-#: not a function of the row.
-IDEMPOTENT_RERUN_VERDICTS = frozenset({"DUPLICATE_NOOP"})
+def mergeable_paths_for(sport: str) -> frozenset[str]:
+    """What this destination may land on its ledger branch without a human.
+
+    An unknown sport gets an EMPTY set, which makes every changed file
+    unexpected and the gate refuse. That is the correct answer: a destination
+    nobody has described is not one this router may merge into.
+    """
+    try:
+        return profile_for(sport).mergeable_paths
+    except UnknownDestinationError:
+        return frozenset()
+
+
+def ledger_branch_runs_ci(sport: str) -> bool:
+    """Does a pull request into this destination's ledger branch get checked?
+
+    An unknown sport answers TRUE, which makes the gate demand a check run it
+    will never see and therefore WAIT. That is the fail-closed direction: the
+    alternative answer would let a destination nobody has described merge with
+    no verdict at all."""
+    try:
+        return profile_for(sport).ledger_branch_runs_ci
+    except UnknownDestinationError:
+        return True
+
+
+def ledger_branch_for(sport: str) -> str:
+    """The branch a router pull request targets. `main` unless stated."""
+    try:
+        return profile_for(sport).ledger_branch
+    except UnknownDestinationError:
+        return "main"
 
 #: Mergeability states that resolve on their own WITHOUT anything else changing.
 #:
@@ -188,6 +247,13 @@ class MergeFacts:
     check_runs: tuple[tuple[str, str | None, str | None], ...] = ()
     #: True when the delivery step reported a partial import this run.
     partial_delivery: bool = False
+    #: The destination's OWN ledger validator's verdict, for a destination
+    #: whose ledger branch runs no CI. None means it has not reported.
+    destination_validator_passed: bool | None = None
+    #: Whether this proposal carries wagers or settlements. They are separate
+    #: branches with separate lifecycles, and the gate must evaluate the one it
+    #: was pointed at rather than assume wagers.
+    branch_kind: str = WAGERS
 
 
 @dataclass
@@ -273,7 +339,7 @@ def evaluate(facts: MergeFacts) -> MergeVerdict:
         ok("PULL_REQUEST_IS_OPEN_AND_NOT_A_DRAFT")
 
     # ── provenance: this must be the router's own branch ─────────────
-    expected_branch = router_branch_for(facts.sport)
+    expected_branch = router_branch_for(facts.sport, facts.branch_kind)
     problems = []
     if facts.head_ref != expected_branch:
         problems.append(f"head is {facts.head_ref!r}, not {expected_branch!r}")
@@ -281,8 +347,12 @@ def evaluate(facts: MergeFacts) -> MergeVerdict:
         problems.append(
             f"head repository is {facts.head_repo!r}, not the destination "
             f"{facts.destination_repo!r} (a fork cannot be auto-merged)")
-    if facts.base_ref != "main":
-        problems.append(f"base is {facts.base_ref!r}, not 'main'")
+    expected_base = ledger_branch_for(facts.sport)
+    if facts.base_ref != expected_base:
+        # NOT hardcoded to `main` any more. CFB's canonical ledger lives on
+        # `accounting-data`, and a gate that demanded `main` would refuse every
+        # correct CFB delivery while accepting one aimed at the wrong branch.
+        problems.append(f"base is {facts.base_ref!r}, not {expected_base!r}")
     if problems:
         refuse("BRANCH_ORIGINATED_FROM_THE_ROUTER_WORKFLOW",
                "; ".join(problems))
@@ -308,11 +378,13 @@ def evaluate(facts: MergeFacts) -> MergeVerdict:
     # be auto-merged past, either. Both are true at once: the rows that were
     # written are on the branch and in the pull request; the batch simply
     # does not land without someone looking at the refusal.
-    if not facts.receipts:
-        wait("IMPORTER_REFUSED_NOTHING", "this run produced no receipts to check")
-        wait("EVERY_ROW_NEEDED_NO_HUMAN_JUDGEMENT", "this run produced no receipts to check")
+    receipts = normalise(list(facts.receipts))
+    if not receipts:
+        wait("IMPORTER_REFUSED_NOTHING", "this run produced no readable receipts to check")
+        wait("EVERY_ROW_NEEDED_NO_HUMAN_JUDGEMENT",
+             "this run produced no readable receipts to check")
     else:
-        refused = [r.get("sourceBetKey") for r in facts.receipts if not r.get("success")]
+        refused = [r.source_key for r in receipts if not r.success]
         if refused or facts.partial_delivery:
             refuse("IMPORTER_REFUSED_NOTHING",
                    f"the destination importer refused {len(refused)} row(s). The rows it "
@@ -321,49 +393,48 @@ def evaluate(facts: MergeFacts) -> MergeVerdict:
         else:
             ok("IMPORTER_REFUSED_NOTHING")
 
-        judged = sorted({
-            str(r.get("duplicateStatus")) for r in facts.receipts
-            if r.get("duplicateStatus") not in NO_JUDGEMENT_VERDICTS
-        })
-        conflicting = [
-            r.get("sourceBetKey") for r in facts.receipts if r.get("conflictingFields")
-        ]
-        missing_identity = [
-            r.get("sourceBetKey") for r in facts.receipts if not r.get("betId")
-        ]
+        judged = sorted({str(r.verdict) for r in receipts if r.needs_judgement})
+        conflicting = [r.source_key for r in receipts if r.conflicting_fields]
+        missing_identity = [r.source_key for r in receipts if not r.identity]
         problems = []
         if judged:
             problems.append(f"verdict(s) requiring judgement: {judged}")
         if conflicting:
             problems.append(f"{len(conflicting)} row(s) report conflicting fields")
         if missing_identity:
-            problems.append(f"{len(missing_identity)} row(s) came back with no canonical betId")
+            problems.append(
+                f"{len(missing_identity)} row(s) came back with no canonical id. A row the "
+                "destination will not name is a row nobody can refer to later, so it does not "
+                "merge unread"
+            )
+        names = conflicting_field_names(receipts)
+        if names:
+            problems.append(f"fields the destination disagrees on (names only): {list(names)}")
         if problems:
             refuse("EVERY_ROW_NEEDED_NO_HUMAN_JUDGEMENT", "; ".join(problems))
         else:
             ok("EVERY_ROW_NEEDED_NO_HUMAN_JUDGEMENT")
 
     # ── idempotency, proved this run rather than assumed ─────────────
-    if facts.rerun_changed_the_tree is None or not facts.rerun_receipts:
+    rerun = normalise(list(facts.rerun_receipts))
+    if facts.rerun_changed_the_tree is None or not rerun:
         wait("THE_IMPORT_IS_IDEMPOTENT", "this run did not re-apply the payload")
     else:
         problems = []
         if facts.rerun_changed_the_tree:
             problems.append("re-applying the identical payload changed the tree")
         offenders = sorted({
-            str(r.get("duplicateStatus")) for r in facts.rerun_receipts
-            if r.get("duplicateStatus") not in IDEMPOTENT_RERUN_VERDICTS
+            str(r.verdict) for r in rerun if r.verdict not in IDEMPOTENT_RERUN_VERDICTS
         })
         if offenders:
             problems.append(f"second import returned {offenders}, not DUPLICATE_NOOP")
-        if len(facts.rerun_receipts) != len(facts.receipts):
+        if len(rerun) != len(receipts):
             problems.append(
-                f"second import returned {len(facts.rerun_receipts)} receipts, "
-                f"the first returned {len(facts.receipts)}")
-        first = {r.get("sourceBetKey"): r.get("betId") for r in facts.receipts}
+                f"second import returned {len(rerun)} receipts, "
+                f"the first returned {len(receipts)}")
+        first = {r.source_key: r.identity for r in receipts}
         drifted = [
-            key for key, ident in
-            ((r.get("sourceBetKey"), r.get("betId")) for r in facts.rerun_receipts)
+            key for key, ident in ((r.source_key, r.identity) for r in rerun)
             if first.get(key) != ident
         ]
         if drifted:
@@ -378,7 +449,7 @@ def evaluate(facts: MergeFacts) -> MergeVerdict:
         wait("ONLY_CANONICAL_WAGER_FILES_CHANGED",
              "the pull request's file list is not known yet")
     else:
-        unexpected = sorted(set(facts.changed_files) - MERGEABLE_PATHS)
+        unexpected = sorted(set(facts.changed_files) - mergeable_paths_for(facts.sport))
         if unexpected:
             refuse("ONLY_CANONICAL_WAGER_FILES_CHANGED",
                    f"changes {len(unexpected)} file(s) outside the canonical wager "
@@ -402,27 +473,45 @@ def evaluate(facts: MergeFacts) -> MergeVerdict:
         wait("EVERY_ADDED_ROW_CARRIES_THE_ROUTER_IDENTITY",
              "the pull request adds no ledger rows")
     else:
+        # EACH LEDGER SPELLS THESE ITS OWN WAY, and reading only MLB's spelling
+        # would make every CFB row look foreign and unidentified -- which
+        # refuses a correct delivery on every run, forever. Both spellings are
+        # read; neither is inferred from the other.
+        def batch_of(row):
+            return row.get("importBatchId") or row.get("import_batch_id")
+
+        def identity_of(row):
+            return row.get("betId") or row.get("wager_id") or row.get("settlement_id")
+
+        def key_of(row):
+            return row.get("sourceBetKey") or row.get("source_bet_key")
+
         foreign = [
-            row.get("betId") for row in facts.added_ledger_rows
-            if row.get("importBatchId") != ROUTER_IMPORT_BATCH_ID
+            identity_of(row) for row in facts.added_ledger_rows
+            if batch_of(row) != ROUTER_IMPORT_BATCH_ID
         ]
         unidentified = [
             index for index, row in enumerate(facts.added_ledger_rows)
-            if not row.get("betId") or not row.get("sourceBetKey")
+            if not identity_of(row) or not key_of(row)
         ]
         problems = []
         if foreign:
             problems.append(
-                f"{len(foreign)} added row(s) do not carry importBatchId "
+                f"{len(foreign)} added row(s) do not carry the router's import batch id "
                 f"{ROUTER_IMPORT_BATCH_ID!r}")
         if unidentified:
             problems.append(
-                f"{len(unidentified)} added row(s) have no betId or no sourceBetKey")
-        receipt_ids = {r.get("betId") for r in facts.receipts if r.get("betId")}
-        if receipt_ids:
+                f"{len(unidentified)} added row(s) have no canonical id or no source key")
+        # Matched on the SOURCE KEY rather than on the destination's minted id.
+        # The source key is the router's own and every destination echoes it;
+        # the minted id is the destination's and one of them does not return it
+        # in its counts-only receipt shape. Matching on the id would refuse a
+        # correct delivery for want of a field the router never supplied.
+        receipt_keys = {r.source_key for r in receipts if r.source_key}
+        if receipt_keys:
             unreceipted = [
-                row.get("betId") for row in facts.added_ledger_rows
-                if row.get("betId") not in receipt_ids
+                key_of(row) for row in facts.added_ledger_rows
+                if key_of(row) not in receipt_keys
             ]
             if unreceipted:
                 problems.append(
@@ -433,8 +522,34 @@ def evaluate(facts: MergeFacts) -> MergeVerdict:
         else:
             ok("EVERY_ADDED_ROW_CARRIES_THE_ROUTER_IDENTITY")
 
-    # ── the destination's own CI ─────────────────────────────────────
-    if not facts.check_runs:
+    # ── the destination's own verdict on its own data ────────────────
+    #
+    # TWO WAYS TO GET ONE, AND NEVER ZERO.
+    #
+    # Most destinations answer through pull-request CI. One cannot: GitHub runs
+    # a `pull_request` workflow only if that workflow file exists on the pull
+    # request's BASE branch, and CFB's base is an ORPHAN data branch with no
+    # `.github/` at all. Measured, not assumed -- its two backfill pull
+    # requests have zero workflow runs between them. So no check ever reports
+    # there, and a gate that only knew about CI would wait forever for a signal
+    # that cannot arrive.
+    #
+    # Such a destination supplies the verdict a different way: the delivery
+    # runs THAT DESTINATION'S OWN validator, from its own code branch, against
+    # the tree its own importer just produced, and the result is reported here.
+    # It is the destination's judgement either way; only the transport differs.
+    if not ledger_branch_runs_ci(facts.sport):
+        if facts.destination_validator_passed is None:
+            wait("CONTINUOUS_INTEGRATION_IS_GREEN",
+                 "this destination's ledger branch runs no CI and its own validator has not "
+                 "reported yet")
+        elif facts.destination_validator_passed:
+            ok("CONTINUOUS_INTEGRATION_IS_GREEN")
+        else:
+            refuse("CONTINUOUS_INTEGRATION_IS_GREEN",
+                   "the destination's own ledger validator REFUSED the tree this delivery "
+                   "produced")
+    elif not facts.check_runs:
         # No check has reported yet. On a repository with pull-request CI this
         # is "too early", not "nothing runs here": waiting costs one cycle,
         # and merging past an unreported suite is exactly what this is for.

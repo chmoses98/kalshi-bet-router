@@ -27,6 +27,7 @@ order endpoint, and none may be added.
 | `backfill-inspect.yml` | dispatch, `main` only | Kalshi | no — holds no write credential |
 | `backfill-deliver.yml` | dispatch only, never scheduled | Kalshi + downstream | yes |
 | `backfill-settle.yml` | dispatch only, never scheduled | Kalshi + downstream | yes |
+| `settle-wagers.yml` | **every 4 hours**, and dispatch | Kalshi + downstream | yes |
 
 The three `backfill-*` workflows are the one-time historical catch-up and it is
 CLOSED — see `docs/CLOSEOUT.md`. They are never scheduled, because a one-time
@@ -440,13 +441,38 @@ failure, because that is a defect rather than a refusal.
 |---|---|---|
 | **MLB** | **ARMED** (see below) | The only destination with an importer. Every step of the delivery path is proven; the schedule itself has not yet been observed to fire. Nothing has been delivered because nothing has been eligible. |
 | **NFL** | **DISABLED** | `nfl_edge.handicap.schema.Execution` cannot stand alone — it requires a parent `recommendation_id`. A Kalshi execution proves a bet was placed, not that anything recommended it, so synthesizing a parent would be exactly the fabricated provenance this system must not produce. |
-| **CFB** | **DISABLED** | `tests/test_no_recommendation_surface.py` mechanically forbids any symbol containing `stake` across the CFB packages. A wager ledger cannot exist there without deleting that test — and recording a CFB wager would not promote the CFB model in any case. |
+| **CFB** | **ARMED** *(2026-09-21)* | See below. |
 | **TENNIS** | **DISABLED** | `Opportunity.__post_init__` raises *"authority is fixed: this object cannot express a real wager"*. Its schema is research-authority only. |
 
-Three of the four destinations mechanically refuse to hold a wager. That is
-their decision, enforced by their own tests, and this system routes to none of
-them. `WagerRefusal.NO_DESTINATION_IMPORTER` is the refusal, and it is reported
-as `NOT_ROUTABLE` rather than as a fault.
+NFL and Tennis mechanically refuse to hold a wager. That is their decision,
+enforced by their own tests, and this system routes to neither.
+`WagerRefusal.NO_DESTINATION_IMPORTER` is the refusal, and it is reported as
+`NOT_ROUTABLE` rather than as a fault.
+
+### CFB was DISABLED for a reason that no longer holds
+
+The old entry read: *"`tests/test_no_recommendation_surface.py` mechanically
+forbids any symbol containing `stake` across the CFB packages. A wager ledger
+cannot exist there without deleting that test."*
+
+That was a correct reading of the wrong thing. The CFB repository's rule is
+that its **research and prediction** packages may not acquire a staking
+surface — the retired model must not come back as a bet sizer. It says nothing
+about an accounting ledger recording what the owner actually did on Kalshi.
+
+CFB resolved it by separating the two: `src/cfb_edge_finder/accounting/` is a
+package whose own isolation test proves it can neither import from nor be
+imported by the research packages, and its ledger lives on an orphan branch,
+`accounting-data`, that carries no source at all. The `stake` prohibition still
+stands over the research packages, untouched and still enforced.
+
+So the router now has two production destinations. What differs between them,
+and the base-branch CI finding that would otherwise have stalled every CFB
+delivery, is [DESTINATIONS.md](DESTINATIONS.md).
+
+**Verified, not assumed:** `accounting-data` carries 18 wager rows and 18
+settlement rows delivered through this router (PRs #44 and #46), and the
+destination's own validator reports 0 problems against them.
 
 ## The schedule has not been observed to fire yet, and that is normal here
 
