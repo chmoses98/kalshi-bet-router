@@ -361,9 +361,46 @@ def test_a_pull_request_that_is_not_the_routers_refuses_the_merge(override, cond
 
 def test_the_recognised_branches_come_from_the_destination_map():
     """A new destination must not get a branch name the gate silently
-    accepts or silently rejects -- both come from one source."""
-    assert automerge.router_branches() == frozenset(
-        f"kalshi-router/{sport.value}" for sport in DESTINATION_REPOS)
+    accepts or silently rejects -- both come from one source.
+
+    A destination receives WAGERS and, where it does not settle its own,
+    SETTLEMENTS. Those are separate proposals with separate lifecycles, so they
+    get separate branches -- one branch carrying both would make a settlement
+    wait on a wager's check suite and vice versa."""
+    from kalshi_router.destinations import PROFILES
+
+    expected = {f"kalshi-router/{sport.value}" for sport in DESTINATION_REPOS}
+    expected |= {
+        f"kalshi-router/settle-{sport.value}"
+        for sport, profile in PROFILES.items()
+        if profile.settlement_importer is not None
+    }
+    assert automerge.router_branches() == frozenset(expected)
+
+
+def test_a_destination_that_settles_its_own_gets_no_settlement_branch():
+    """MLB re-derives every outcome from the MLB Stats API in its own postgame
+    job. A branch name this gate recognised would be a branch this router might
+    one day push, and a second authority on one fact is the failure."""
+    assert "kalshi-router/settle-MLB" not in automerge.router_branches()
+    assert "kalshi-router/settle-CFB" in automerge.router_branches()
+
+
+def test_the_gate_evaluates_the_branch_kind_it_was_pointed_at():
+    """A settlement proposal evaluated as a wager proposal would compare the
+    head against the WRONG branch name and refuse a correct delivery."""
+    settlement = facts(
+        head_ref="kalshi-router/settle-MLB", branch_kind=automerge.SETTLEMENTS
+    )
+    assert automerge.evaluate(settlement).verdict != automerge.REFUSE or (
+        "BRANCH_ORIGINATED_FROM_THE_ROUTER_WORKFLOW"
+        not in automerge.evaluate(settlement).failed
+    )
+    wager_shaped = facts(head_ref="kalshi-router/settle-MLB")
+    assert (
+        "BRANCH_ORIGINATED_FROM_THE_ROUTER_WORKFLOW"
+        in automerge.evaluate(wager_shaped).failed
+    )
 
 
 # ── CI and mergeability ────────────────────────────────────────────────

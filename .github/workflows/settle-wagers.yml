@@ -1,0 +1,467 @@
+# PRODUCTION SETTLEMENT. The other half of automatic accounting.
+#
+# WHY THIS EXISTS
+#   `deliver-wagers.yml` records what the owner BET. Nothing recorded what it
+#   PAID. `backfill-settle.yml` settles, and its window ends at
+#   PRODUCTION_CUTOVER_ISO structurally -- it is a one-time historical
+#   catch-up and could never become the live path. So every wager delivered
+#   after the cutover sat in the destination's ledger with a null result
+#   forever, and a postmortem asking "how did we do" had nothing to read.
+#
+#   This is the live path. Same attribution code, same refusals, the opposite
+#   bound: `settle-live` considers the range production owns and structurally
+#   cannot reach back into the range the backfill owns.
+#
+# WHY MLB IS NOT HERE, AND IS NOT A FLAG
+#   `edge-finder-api` settles its own bets: `scripts/edgelab/settle_markets.py`
+#   re-derives every outcome from the MLB Stats API and `edgelab-postgame.yml`
+#   runs it. A settlement pushed there by this router would be a SECOND
+#   authority on one fact, and the two would disagree the first time either was
+#   wrong. MLB's destination profile therefore has NO settlement importer, and
+#   `settle-live` emits only for destinations that do. It is a property of the
+#   table, not a `--destination` this workflow happens not to pass.
+#
+# WHY THE CADENCE IS WHAT IT IS
+#   Kalshi settles a college football market minutes after the game ends, and
+#   the last Saturday kickoff finishes around 07:00 UTC Sunday. Hourly would
+#   spend a walk of the whole account's history every hour to find nothing for
+#   most of the week. Every four hours records a Saturday result the same day
+#   and a Sunday-morning result by Sunday lunchtime, which is well inside the
+#   time anyone reads a postmortem -- and it is a quarter of the runs.
+#
+#   The wager job's own measurement applies to the cost: a full history walk
+#   took 5m19s over 1756 orders, and this walks the settlements as well. The
+#   30-minute timeout is roughly three times the observed cost, and the
+#   concurrency group makes a slow run delay the next rather than race it.
+#
+# SECURITY (this repository and every destination are PUBLIC)
+#   * main branch only, scheduled and dispatchable.
+#   * This job holds BOTH credentials -- Kalshi read access to attribute the
+#     settlements and DOWNSTREAM_REPO_TOKEN to deliver them. That is
+#     unavoidable and is why it is one job: passing a payload between jobs
+#     means an artifact, and the payload is the owner's betting activity.
+#   * THE PAYLOAD IS NEVER PRINTED and never uploaded. It is written to
+#     RUNNER_TEMP, consumed by the destination's own importer, and discarded
+#     with the runner. Only counts reach this log.
+#   * The router NEVER edits a ledger file. It hands a payload to the
+#     destination's importer and commits only what that importer produced.
+#   * The token reaches git through a credential helper that reads it from the
+#     environment at push time, so it never appears in a URL, in argv, or in
+#     .git/config.
+#
+# Kalshi remains READ-ONLY. Nothing here creates, modifies or cancels an order.
+name: Settle wagers downstream
+
+on:
+  schedule:
+    - cron: "40 */4 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Import locally, then discard without pushing"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  # Never cancel a settlement in flight: cancellation between the
+  # destination's commit and this job's receipt would leave a canonical
+  # settlement written with no record here that it was.
+  group: settle-wagers
+  cancel-in-progress: false
+
+jobs:
+  settle:
+    name: Settle post-cutover wagers
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Refuse to run credentialed code from an untrusted ref
+        run: |
+          # A scheduled run is always on the default branch; this guards the
+          # dispatch path, where a ref can be chosen.
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::error::This credentialed workflow may only run from refs/heads/main (got ${GITHUB_REF})."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install router
+        run: python -m pip install --disable-pip-version-check --quiet .
+
+      - name: Attribute settlements and build the payloads
+        env:
+          KALSHI_API_KEY_ID: ${{ secrets.KALSHI_API_KEY_ID }}
+          KALSHI_PRIVATE_KEY: ${{ secrets.KALSHI_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/settlements"
+          # --allow-stabilization on the same measured evidence the delivery
+          # job uses: every one of the 1755 orders in this account's history
+          # finished filling within a single second, against a 900-second
+          # window.
+          python -m kalshi_router.cli settle-live \
+            --out-dir "${RUNNER_TEMP}/settlements" \
+            --allow-stabilization | tee "${RUNNER_TEMP}/report.txt"
+          grep -E '^SETTLEMENTS_READY=' "${RUNNER_TEMP}/report.txt" >> "${GITHUB_ENV}"
+
+      - name: Deliver each destination through its own settlement importer
+        env:
+          DOWNSTREAM_REPO_TOKEN: ${{ secrets.DOWNSTREAM_REPO_TOKEN }}
+          # A scheduled run has no inputs, so `inputs.dry_run` is empty there.
+          # Empty must NEVER be read as "go ahead and push" by falling through
+          # a `!= "true"` test, so the scheduled value is stated explicitly and
+          # anything unreadable is refused below.
+          DRY_RUN: ${{ github.event_name == 'schedule' && 'false' || inputs.dry_run }}
+        run: |
+          set -euo pipefail
+
+          case "${DRY_RUN}" in
+            true|false) ;;
+            *)
+              echo "::error::DRY_RUN must be exactly 'true' or 'false' (got '${DRY_RUN}')."
+              exit 1
+              ;;
+          esac
+
+          shopt -s nullglob
+          payloads=("${RUNNER_TEMP}"/settlements/*-settlements.json)
+          if [ ${#payloads[@]} -eq 0 ]; then
+            echo "no settlement payload: nothing post-cutover has settled since the last run."
+            exit 0
+          fi
+
+          # Per-destination, so one failing sport cannot roll back another's
+          # success. Each destination reports its own outcome.
+          failures=0
+          for payload in "${payloads[@]}"; do
+            base="$(basename "${payload}" .json)"
+            sport="${base%-settlements}"
+
+            profile_status=0
+            repo="$(python "${GITHUB_WORKSPACE}/scripts/destination_profile.py" \
+              "${sport}" --field repo)" || profile_status=$?
+            if [ "${profile_status}" -ne 0 ] || [ -z "${repo}" ]; then
+              echo "::error::${sport} has no destination profile; refusing to guess a repository."
+              failures=$((failures + 1))
+              continue
+            fi
+            settles_its_own="$(python "${GITHUB_WORKSPACE}/scripts/destination_profile.py" \
+              "${sport}" --field settles_its_own)"
+            if [ "${settles_its_own}" = "true" ]; then
+              # Unreachable: `settle-live` emits only for destinations with a
+              # settlement importer. Checked anyway, because the one failure
+              # mode here is writing a second authority on a fact a
+              # destination already owns, and that must not depend on a
+              # property of the caller.
+              echo "::error::${sport} settles its own bets; refusing to push a second authority."
+              failures=$((failures + 1))
+              continue
+            fi
+
+            ledger_branch="$(python "${GITHUB_WORKSPACE}/scripts/destination_profile.py" \
+              "${sport}" --field ledger_branch)"
+            code_branch="$(python "${GITHUB_WORKSPACE}/scripts/destination_profile.py" \
+              "${sport}" --field code_branch)"
+            needs_code="$(python "${GITHUB_WORKSPACE}/scripts/destination_profile.py" \
+              "${sport}" --field needs_separate_code_checkout)"
+            needs_season="$(python "${GITHUB_WORKSPACE}/scripts/destination_profile.py" \
+              "${sport}" --field requires_season)"
+            mapfile -t allowed_prefixes < <(
+              python "${GITHUB_WORKSPACE}/scripts/destination_profile.py" \
+                "${sport}" --field committable_prefixes
+            )
+
+            echo "=== ${sport} settlements -> ${repo} (${ledger_branch}) ==="
+
+            work="${RUNNER_TEMP}/settle-${sport}"
+            rm -rf "${work}"
+            git clone --quiet --depth 1 --branch "${ledger_branch}" \
+              "https://github.com/${repo}" "${work}"
+
+            git -C "${work}" config credential.helper \
+              '!f() { echo "username=x-access-token"; echo "password=${DOWNSTREAM_REPO_TOKEN}"; }; f'
+            git -C "${work}" config user.name "kalshi-bet-router"
+            git -C "${work}" config user.email "noreply@users.noreply.github.com"
+            # The clone is single-branch and shallow, so the remote-tracking
+            # ref for the ledger branch has to be asked for by name before the
+            # commit can be reshaped onto it.
+            git -C "${work}" fetch -q --depth 1 origin \
+              "+refs/heads/${ledger_branch}:refs/remotes/origin/${ledger_branch}"
+
+            code="${work}"
+            if [ "${needs_code}" = "true" ]; then
+              code="${RUNNER_TEMP}/settle-code-${sport}"
+              rm -rf "${code}"
+              git clone --quiet --depth 1 --branch "${code_branch}" \
+                "https://github.com/${repo}" "${code}"
+            fi
+
+            # THE SEASON COMES FROM THE WAGERS ALREADY IN THE LEDGER, not from
+            # the settlement rows and not from today's clock. A settlement row
+            # carries no contest date -- it is a payout, and the date it would
+            # have is the date the market settled, which for a New Year's Day
+            # bowl is the wrong year. The wager it settles is already filed
+            # under the right season, so that is the answer.
+            season=""
+            if [ "${needs_season}" = "true" ]; then
+              season_status=0
+              season="$(python "${GITHUB_WORKSPACE}/scripts/settlement_season.py" \
+                --payload "${payload}" --ledger-dir "${work}")" || season_status=$?
+              if [ "${season_status}" -ne 0 ] || [ -z "${season}" ]; then
+                echo "::error::${sport}: the season could not be established from the ledger's own wagers; nothing was imported."
+                failures=$((failures + 1))
+                continue
+              fi
+              echo "  season ledger: ${season}"
+            fi
+
+            receipts="${RUNNER_TEMP}/settle-receipts-${sport}.json"
+            mapfile -t import_argv < <(
+              python "${GITHUB_WORKSPACE}/scripts/destination_profile.py" "${sport}" \
+                --importer settlement --payload "${payload}" --work "${work}" \
+                --code "${code}" --receipts "${receipts}" \
+                ${season:+--season "${season}"}
+            )
+            if [ ${#import_argv[@]} -eq 0 ]; then
+              echo "::error::${sport}: the settlement importer command could not be built."
+              failures=$((failures + 1))
+              continue
+            fi
+
+            # The destination's OWN importer. It is what refuses an ORPHAN --
+            # a settlement for a wager the ledger has no record of -- and a
+            # router that wrote the file directly would bypass that refusal.
+            import_status=0
+            ( cd "${work}" && "${import_argv[@]}" >/dev/null ) || import_status=$?
+
+            python "${GITHUB_WORKSPACE}/scripts/report_receipts.py" --receipts "${receipts}"
+
+            # A REFUSED ROW MUST NOT COST THE ROWS THAT SUCCEEDED. The CFB
+            # settlement importer screens and reports PER ROW: one orphan is
+            # one refusal, and the rest are already written into the working
+            # tree. Skipping the commit would throw them away over one bad row
+            # and would keep doing it on every run for as long as that row
+            # stayed unfixable.
+            partial=0
+            if [ "${import_status}" -ne 0 ]; then
+              echo "::error::${sport}: the destination importer refused at least one settlement. Rows it DID write are still being delivered below."
+              failures=$((failures + 1))
+              partial=1
+            fi
+
+            # IDEMPOTENCY, PROVED EVERY RUN. A market settles once, so the
+            # destination's store keys settlements on the wager's own
+            # source_bet_key and a second observation is a duplicate rather
+            # than a correction. That is a claim about the destination, and a
+            # claim about somebody else's code is exactly the kind this
+            # repository re-measures rather than trusts.
+            git -C "${work}" add -A
+            tree_before="$(git -C "${work}" write-tree)"
+            rerun_receipts="${RUNNER_TEMP}/settle-receipts-rerun-${sport}.json"
+            mapfile -t rerun_argv < <(
+              python "${GITHUB_WORKSPACE}/scripts/destination_profile.py" "${sport}" \
+                --importer settlement --payload "${payload}" --work "${work}" \
+                --code "${code}" --receipts "${rerun_receipts}" \
+                ${season:+--season "${season}"}
+            )
+            ( cd "${work}" && "${rerun_argv[@]}" >/dev/null ) || true
+            git -C "${work}" add -A
+            tree_after="$(git -C "${work}" write-tree)"
+            if [ "${tree_before}" = "${tree_after}" ]; then
+              echo "  idempotency: a second identical settlement import changed nothing."
+            else
+              echo "::error::${sport}: re-applying the IDENTICAL settlement payload changed the ledger. Refusing to push a non-idempotent import."
+              failures=$((failures + 1))
+              continue
+            fi
+
+            if [ -z "$(git -C "${work}" status --porcelain)" ] && \
+               [ "$(git -C "${work}" diff --cached --name-only)" = "" ]; then
+              echo "  no ledger change -- every settlement was already recorded (no-op)."
+              continue
+            fi
+
+            # WHAT GOES INTO SOMEONE ELSE'S REPOSITORY IS CHECKED, NOT ASSUMED.
+            staged="$(git -C "${work}" diff --cached --name-only)"
+            if [ -z "${staged}" ]; then
+              echo "  no ledger change -- every settlement was already recorded (no-op)."
+              continue
+            fi
+            pattern="$(printf '^%s|' "${allowed_prefixes[@]}")"
+            pattern="${pattern%|}"
+            unexpected="$(printf '%s\n' "${staged}" | grep -Ev "${pattern}" || true)"
+            if [ -n "${unexpected}" ]; then
+              echo "::error::${sport}: the settlement import dirtied files outside ${allowed_prefixes[*]} -- refusing to commit them:"
+              printf '%s\n' "${unexpected}"
+              failures=$((failures + 1))
+              continue
+            fi
+
+            if [ "${DRY_RUN}" = "true" ]; then
+              echo "  DRY RUN: ledger changed, nothing pushed."
+              # --stat, and the word is load-bearing: without it this prints
+              # the added ledger LINES -- ticker, payout, P&L, source key --
+              # into a public Actions log.
+              git -C "${work}" --no-pager diff --cached --stat
+              continue
+            fi
+
+            # THE DESTINATION'S OWN VERDICT ON ITS OWN DATA, before anything
+            # is proposed. `accounting-data` is an orphan branch with no
+            # `.github/`, so a pull request into it gets no check runs at all
+            # -- see the delivery workflow for the measurement. The validator
+            # is the signal that replaces them.
+            validator_passed=""
+            has_validator="$(python "${GITHUB_WORKSPACE}/scripts/destination_profile.py" \
+              "${sport}" --field has_ledger_validator)"
+            if [ "${has_validator}" = "true" ]; then
+              validator_result="${RUNNER_TEMP}/settle-validator-${sport}.json"
+              mapfile -t validator_argv < <(
+                python "${GITHUB_WORKSPACE}/scripts/destination_profile.py" \
+                  "${sport}" --field ledger_validator
+              )
+              rendered=()
+              for part in "${validator_argv[@]}"; do
+                part="${part//\{code\}/${code}}"
+                part="${part//\{work\}/${work}}"
+                part="${part//\{receipts\}/${validator_result}}"
+                rendered+=("${part}")
+              done
+              validator_status=0
+              "${rendered[@]}" || validator_status=$?
+              if [ "${validator_status}" -eq 0 ]; then
+                validator_passed="true"
+                echo "  the destination's own ledger validator accepted this tree."
+              else
+                validator_passed="false"
+                echo "::error::${sport}: the destination's own ledger validator REFUSED the tree this settlement produced. The rows stay on the branch and will not auto-merge."
+                failures=$((failures + 1))
+              fi
+            fi
+
+            # ONE STABLE BRANCH PER SPORT, in the router's own namespace, and
+            # stable over TIME rather than merely within a run: a name derived
+            # from anything that moves would re-propose the same settlements
+            # under a new branch on every run. SEPARATE from the wager branch,
+            # because a settlement must not wait on a wager's check suite.
+            branch="kalshi-router/settle-${sport}"
+            git -C "${work}" checkout -q -B "${branch}"
+            # Reshaped onto the ledger branch so the branch is exactly ONE
+            # commit whose parent IS the base it proposes against -- which is
+            # what lets the merge gate diff against the true merge base from a
+            # shallow clone.
+            git -C "${work}" reset --soft -q "$(git -C "${work}" rev-parse "origin/${ledger_branch}")"
+            git -C "${work}" commit -q \
+              -m "Record Kalshi settlements via kalshi-bet-router (${sport})"
+
+            # --verify --quiet IS LOAD-BEARING. A bare `git rev-parse` on a
+            # missing ref ECHOES ITS ARGUMENT to stdout before failing, so the
+            # lease would be handed the literal ref string. An EMPTY value
+            # means "the branch must not exist yet", which is a first run.
+            git -C "${work}" fetch -q --depth 1 origin \
+              "+refs/heads/${branch}:refs/remotes/origin/${branch}" || true
+            expected="$(git -C "${work}" rev-parse --verify --quiet "refs/remotes/origin/${branch}" || echo "")"
+            git -C "${work}" push -q \
+              --force-with-lease="refs/heads/${branch}:${expected}" \
+              origin "HEAD:refs/heads/${branch}"
+            echo "  pushed ${branch}"
+
+            # A BRANCH IS NOT THE LEDGER. Without a pull request the settlement
+            # sits somewhere nobody looks and is never recorded.
+            pr_body="${RUNNER_TEMP}/pr-settle-${sport}.json"
+            pr_status="$(curl --silent --show-error --write-out '%{http_code}' \
+              --output "${pr_body}" \
+              -X POST \
+              -H "Authorization: Bearer ${DOWNSTREAM_REPO_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${repo}/pulls" \
+              -d "{\"title\":\"Record Kalshi settlements (${sport})\",\"head\":\"${branch}\",\"base\":\"${ledger_branch}\",\"body\":\"Imported by kalshi-bet-router through this repository's own settlement importer. Counts are in the router's run log; the rows are in the diff.\"}")"
+
+            case "${pr_status}" in
+              201) echo "  opened a pull request" ;;
+              422) echo "  pull request already open for ${branch}" ;;
+              *)
+                echo "::error::${sport}: could not open a pull request (HTTP ${pr_status}). The settlements are on ${branch} but are NOT recorded."
+                failures=$((failures + 1))
+                continue ;;
+            esac
+
+            # A PULL REQUEST IS NOT THE LEDGER EITHER.
+            #
+            # The same gate the wager delivery uses, pointed at the settlement
+            # branch. It merges ONLY when every machine-verifiable condition
+            # passes on THIS commit: router-owned branch, right base, no
+            # importer refusal, no verdict needing judgement, the second
+            # identical import proved idempotent above, only the canonical
+            # ledger changed, the diff is APPEND-ONLY, every added row carries
+            # this router's identity, the destination's own validator accepted
+            # the tree, and GitHub reports the branch cleanly mergeable.
+            #
+            # WAIT is the normal state on the run that first pushes a commit
+            # and costs nothing: the next run adopts the same commit.
+            merge_status=0
+            python "${GITHUB_WORKSPACE}/scripts/merge_delivery_pr.py" \
+              --sport "${sport}" \
+              --branch-kind settlements \
+              --work "${work}" \
+              --receipts "${receipts}" \
+              --rerun-receipts "${rerun_receipts}" \
+              --rerun-changed-tree false \
+              --partial "$([ "${partial}" -eq 1 ] && echo true || echo false)" \
+              ${validator_passed:+--validator-passed "${validator_passed}"} \
+              --base-ref "$(git -C "${work}" rev-parse HEAD^)" \
+              $([ "${DRY_RUN}" = "true" ] && echo --dry-run) || merge_status=$?
+
+            case "${merge_status}" in
+              0) ;;
+              3)
+                echo "::error::${sport}: the auto-merge gate REFUSED this settlement batch. The rows are delivered and remain on ${branch}; they are NOT on ${ledger_branch}. See the named condition above."
+                echo "${sport}: SETTLEMENT MERGE REFUSED -- rows on ${branch}, not merged" >> "${GITHUB_STEP_SUMMARY}"
+                if [ "${partial}" -eq 0 ]; then
+                  failures=$((failures + 1))
+                fi
+                ;;
+              *)
+                echo "::error::${sport}: the auto-merge gate could not run (exit ${merge_status})."
+                failures=$((failures + 1))
+                ;;
+            esac
+
+            if [ "${partial}" -eq 1 ]; then
+              echo "::warning::${sport}: DELIVERED PARTIALLY -- the rows above were written and proposed, and at least one settlement was refused."
+              echo "${sport}: PARTIAL settlement -- delivered what the importer wrote; at least one refused" >> "${GITHUB_STEP_SUMMARY}"
+            fi
+          done
+
+          echo ""
+          echo "destinations that failed: ${failures}"
+          if [ "${failures}" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Annotate the run's outcome
+        run: |
+          set -euo pipefail
+          # NEVER fails the job. "Nothing has settled" is the normal state for
+          # most of the week, and a red job every four hours for the correct
+          # answer would train an operator to ignore it.
+          ready="${SETTLEMENTS_READY:-unknown}"
+          if [ "${ready}" = "0" ]; then
+            echo "::notice::NOTHING NEW -- no post-cutover wager has settled since the last run."
+          elif [ "${ready}" = "unknown" ]; then
+            echo "::warning::the settlement pass reported no count; check the step above."
+          else
+            echo "::notice::${ready} post-cutover wager(s) have settled and were proposed downstream."
+          fi
+          echo "settlements ready: ${ready}" >> "${GITHUB_STEP_SUMMARY}"

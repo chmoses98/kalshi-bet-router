@@ -390,6 +390,7 @@ def _subcommand_argvs(tmp_path):
         "series-probe": [],
         "backfill": ["--since", "2026-09-11T00:00:00Z"],
         "settle": ["--since", "2026-09-11T00:00:00Z", "--destination", "NFL"],
+        "settle-live": ["--out-dir", str(tmp_path / "settlements")],
     }
     return required
 

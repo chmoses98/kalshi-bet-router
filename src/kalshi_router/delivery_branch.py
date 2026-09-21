@@ -72,12 +72,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-#: The only path prefix a router-authored commit may touch in the destination.
+#: The default path prefix a router-authored commit may touch.
 #:
-#: This is a CONTAINMENT rule, and deliberately broader than
-#: `automerge.MERGEABLE_PATHS`, which is what may be MERGED without a human.
-#: The importer is allowed to write anywhere under `data/`; landing it on main
-#: unread is a separate, narrower permission. Both must hold to merge.
+#: This is a CONTAINMENT rule, and deliberately broader than a destination's
+#: `mergeable_paths`, which is what may be MERGED without a human. The importer
+#: is allowed to write anywhere under its prefix; landing that on the ledger
+#: branch unread is a separate, narrower permission. Both must hold to merge.
+#:
+#: It is a DEFAULT rather than the answer, because it was only ever MLB's
+#: answer. CFB's ledger lives at `wagers/` and `settlements/` on its own data
+#: branch, and a containment rule of "data/" would have refused every row it
+#: wrote. `uncommittable` therefore takes the prefixes, and the caller reads
+#: them from the destination profile.
 COMMITTABLE_PREFIX = "data/"
 
 #: The importer runs on top of the destination's `main`.
@@ -199,7 +205,7 @@ def decide(proposal_base_tree: str, resulting_tree: str,
     return PUSH, "no delivery branch exists yet"
 
 
-def uncommittable(paths) -> tuple[str, ...]:
+def uncommittable(paths, prefixes: tuple[str, ...] = (COMMITTABLE_PREFIX,)) -> tuple[str, ...]:
     """Staged paths a router-authored commit may NOT contain.
 
     `git add -A` is only safe because the destination's own `.gitignore` covers
@@ -208,8 +214,18 @@ def uncommittable(paths) -> tuple[str, ...]:
     staged is checked rather than assumed. A `.pyc` or a lock file appearing
     here means something moved upstream, and stopping beats quietly committing
     it every fifteen minutes.
+
+    `prefixes` comes from the destination profile. An EMPTY tuple would allow
+    everything, which is the one answer a containment check must never give, so
+    it is refused rather than treated as "no restriction".
     """
+    allowed = tuple(p for p in prefixes if p)
+    if not allowed:
+        raise ValueError(
+            "a containment check with no allowed prefixes would permit every path; "
+            "the destination profile must name at least one"
+        )
     return tuple(sorted(
         path for path in paths
-        if path.strip() and not path.startswith(COMMITTABLE_PREFIX)
+        if path.strip() and not path.startswith(allowed)
     ))

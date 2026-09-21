@@ -207,12 +207,23 @@ def test_only_data_may_be_committed_into_someone_elses_repository(path):
 
 def test_nothing_in_the_branch_lifecycle_is_sport_specific():
     """The router is cross-sport. A destination added to DESTINATION_REPOS must
-    inherit the repaired lifecycle, not need a copy of it."""
+    inherit the repaired lifecycle, not need a copy of it.
+
+    Scanned over the CODE only. The module's prose now explains WHY its
+    default containment prefix is MLB's answer and not the answer, which means
+    it says "MLB" and "CFB" while promising that nothing branches on them -- a
+    scan that read the comments would fail on the explanation rather than on a
+    breach."""
     source = (ROOT / "src/kalshi_router/delivery_branch.py").read_text()
+    executable = "".join(source.split('"""')[::2])
+    executable = "\n".join(
+        line for line in executable.splitlines() if not line.strip().startswith("#")
+    )
     for sport in DESTINATION_REPOS:
-        assert sport.value not in source.replace("MLB wagers", ""), (
-            f"{sport.value} is named in the branch lifecycle")
-    assert "edge-finder-api" not in source
+        assert sport.value not in executable, (
+            f"{sport.value} is named in the branch lifecycle's code")
+    assert "edge-finder-api" not in executable
+    assert "accounting-data" not in executable
 
 
 # ══════════════════════════════════════════════════════════════════════

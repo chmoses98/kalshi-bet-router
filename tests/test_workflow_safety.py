@@ -241,6 +241,11 @@ def test_only_credentialed_workflows_name_the_downstream_secret():
         # The settlement half of that catch-up. Also added only after this test
         # went red for it.
         "backfill-settle.yml",
+        # PRODUCTION settlement, the live counterpart of the catch-up above.
+        # Added here for the same reason and in the same way: this test went red
+        # the moment the workflow was written, and an entry was made deliberately
+        # rather than the assertion being loosened.
+        "settle-wagers.yml",
     }
     assert set(workflows_referencing(DOWNSTREAM_SECRET)) <= allowed
 
@@ -426,11 +431,34 @@ def test_delivery_never_prints_the_payload(deliver_text):
 
 def test_delivery_runs_the_destinations_own_importer(deliver_text):
     """Bypassing it would bypass duplicate detection, ticker resolution and
-    validation -- the properties that make a re-run safe."""
-    assert "scripts/edgelab/import_bet_batch.py" in deliver_text
-    assert "--receipts-out" in deliver_text
-    # Never a hand-written ledger edit.
+    validation -- the properties that make a re-run safe.
+
+    The command is no longer an MLB literal in this file. It is rendered from
+    the destination's own profile, which is what lets the same workflow run
+    `scripts/edgelab/import_bet_batch.py` for MLB and
+    `scripts/import_routed_wagers.py` for CFB -- and which is why a sport with
+    no profile is refused rather than run with somebody else's command.
+    """
+    assert "destination_profile.py" in deliver_text
+    assert "--importer wager" in deliver_text
+    assert 'import_argv[@]' in deliver_text, (
+        "the rendered command must be EXECUTED, not merely printed"
+    )
+    # Never a hand-written ledger edit, and never another destination's path.
     assert "bets.jsonl" not in deliver_text
+    assert "wagers/" not in deliver_text
+
+    # ...and every profile's importer really is that destination's own script.
+    from kalshi_router.destinations import PROFILES
+
+    for profile in PROFILES.values():
+        assert any(
+            "import" in part for part in profile.wager_importer
+        ), f"{profile.sport.value} has no importer in its command"
+        assert "--receipts-out" in profile.wager_importer, (
+            f"{profile.sport.value} produces no receipts, so the merge gate cannot "
+            "prove idempotency and must never merge it"
+        )
 
 
 def test_delivery_defaults_to_a_dry_run(deliver):
@@ -760,8 +788,15 @@ def test_recovery_sends_the_importers_receipts_to_dev_null(recover_text):
     Measured against the real importer: stdout is the receipts, stderr is the
     one-line count. Only the count may reach a public log.
     """
-    assert "--receipts-out" in recover_text
     assert ">/dev/null" in recover_text
+    # `--receipts-out` is now in the destination's own importer template rather
+    # than inline here, which is what lets the same step run a different
+    # importer per destination. The property is unchanged and is asserted
+    # against the templates themselves.
+    from kalshi_router.destinations import PROFILES
+
+    for profile in PROFILES.values():
+        assert "--receipts-out" in profile.wager_importer
 
 
 def test_recovery_uploads_no_artifact(recover_text):
@@ -884,17 +919,33 @@ def test_a_router_commit_may_only_touch_the_data_directory(name, text):
     directories and a bets.jsonl.lock, all ignored. That is a property of THEIR
     repository, which can change without telling this workflow.
 
-    So the staged set is checked before committing, and anything outside data/
-    stops the delivery rather than riding along.
+    So the staged set is checked before committing, and anything outside the
+    DESTINATION'S OWN committable prefixes stops the delivery rather than
+    riding along. Those prefixes are per destination -- `data/` for MLB,
+    `wagers/` and `settlements/` for CFB on its own data branch -- and a
+    hardcoded `data/` would have refused every correct CFB row.
     """
     label, body = _push_site(name, text)
     assert '"diff", "--cached", "--name-only"' in body or \
            "diff --cached --name-only" in body, (
                f"{label} commits without checking what it staged")
-    assert "grep -v '^data/'" in body or "delivery_branch.uncommittable" in body, (
-        f"{label} does not screen the staged set")
-    assert "outside data/" in text, (
+    assert (
+        "grep -Ev" in body
+        or "grep -v" in body
+        or "delivery_branch.uncommittable" in body
+    ), f"{label} does not screen the staged set"
+    assert "dirtied files outside" in text, (
         f"{name} does not say what happened when it refuses")
+
+    # And the prefixes really do come from the profile, not from a literal.
+    assert "committable_prefixes" in body or "allowed_prefixes" in body, (
+        f"{label} screens the staged set against a hardcoded prefix rather than the "
+        "destination's own"
+    )
+    assert "'^data/'" not in body, (
+        f"{label} still hardcodes MLB's ledger prefix, which refuses every row a "
+        "`wagers/`-rooted ledger writes"
+    )
 
 
 @pytest.mark.parametrize("name,text", _delivering_workflow_texts(), ids=lambda v: v if isinstance(v, str) and len(v) < 40 else "")
@@ -904,7 +955,7 @@ def test_an_unexpected_staged_file_is_a_failure_not_a_warning(name, text):
     joined = text.replace("\\\n", " ")
     lines = joined.splitlines()
     for index, line in enumerate(lines):
-        if "dirtied files outside data/" in line:
+        if "dirtied files outside" in line:
             window = "\n".join(lines[index : index + 6])
             assert "failures=$((failures + 1))" in window, f"{name}: does not count as a failure"
             assert "::error::" in line
@@ -1056,50 +1107,39 @@ def test_a_missing_branch_yields_an_empty_expectation_not_a_failure(name, text):
 # These tests extract it from the YAML exactly as bash would see it and run it.
 
 
-def _receipts_block(path):
-    """The heredoc body, as the shell hands it to python.
+def _receipts_reporter(path):
+    """The script the workflow hands its receipts to, or None.
 
-    YAML strips the block scalar's own indentation, which is why the body
-    reaches python at column zero even though it is indented in the file. That
-    is load-bearing -- an indented top-level statement is a SyntaxError -- so
-    it is extracted rather than retyped.
+    The summary used to be a heredoc inside the delivery step, which meant
+    every workflow that wanted one carried its own copy and each copy could
+    leak something different. It is now one script, so the privacy property is
+    asserted ONCE against the thing that actually runs -- and the assertion
+    still starts from the workflow, so a workflow that stopped calling it
+    fails here rather than quietly printing nothing.
     """
-    import re
-
-    config = load(path)
-    for job in (config.get("jobs") or {}).values():
-        for step in job.get("steps") or []:
-            script = step.get("run")
-            if not isinstance(script, str) or "PYEOF" not in script:
-                continue
-            # BY CONTENT, NOT BY POSITION. The delivery step embeds more than
-            # one heredoc -- it also resolves the destination repository
-            # through one -- and taking the first would silently test the
-            # wrong block while still passing.
-            for match in re.finditer(r"<<'PYEOF'\n(.*?)\n\s*PYEOF", script, re.S):
-                if "duplicateStatus" in match.group(1):
-                    return match.group(1)
-    return None
+    text = path.read_text()
+    if "report_receipts.py" not in text:
+        return None
+    script = ROOT / "scripts/report_receipts.py"
+    return script if script.exists() else None
 
 
 @pytest.mark.parametrize("path", _health_workflows(), ids=lambda p: p.name)
-def test_the_receipts_block_is_valid_python_at_column_zero(path):
-    body = _receipts_block(path)
-    assert body is not None, f"{path.name} has no receipts block"
-    assert not body.splitlines()[0].startswith(" "), (
-        "the block reaches python indented, which is a SyntaxError"
+def test_the_receipts_summary_is_a_script_the_workflow_actually_calls(path):
+    assert _receipts_reporter(path) is not None, (
+        f"{path.name} does not summarise its receipts, so a refusal reaches nobody"
     )
-    compile(body, "receipts", "exec")
 
 
 @pytest.mark.parametrize("path", _health_workflows(), ids=lambda p: p.name)
-def test_the_receipts_block_prints_counts_and_verdicts_only(path, tmp_path, capfd):
+def test_the_receipts_summary_prints_counts_and_verdicts_only(path, tmp_path):
     """Receipts carry marketTicker, stake, entryPrice and the source key. The
     summary must carry none of them into a public Actions log."""
     import json as _j
     import subprocess
     import sys as _sys
 
+    script = _receipts_reporter(path)
     receipts = tmp_path / "r.json"
     receipts.write_text(_j.dumps([
         {
@@ -1110,14 +1150,13 @@ def test_the_receipts_block_prints_counts_and_verdicts_only(path, tmp_path, capf
         {
             "duplicateStatus": "CONFLICT", "betId": "def456", "success": False,
             "sourceBetKey": "kalshi:v1:feedface", "stake": 1.23, "entryPrice": 0.11,
+            "conflictingFields": [{"field": "stake", "existing": 5.37, "incoming": 1.23}],
             "market": {"marketTicker": "KXMLBGAME-26SEP14NYYBOS-BOS", "side": "NO"},
         },
     ]))
-    script = tmp_path / "block.py"
-    script.write_text(_receipts_block(path) + "\n")
 
     result = subprocess.run(
-        [_sys.executable, str(script), str(receipts)],
+        [_sys.executable, str(script), "--receipts", str(receipts)],
         capture_output=True, text=True, check=True,
     )
 
@@ -1125,31 +1164,62 @@ def test_the_receipts_block_prints_counts_and_verdicts_only(path, tmp_path, capf
     assert "NEW: 1" in result.stdout
     assert "CONFLICT: 1" in result.stdout
     assert "failed rows: 1" in result.stdout
+    # A field NAME is actionable and is not a bet; its VALUES are.
+    assert "stake" in result.stdout
 
     for secret in (
         "KXMLB", "5.37", "0.53", "1.23", "0.11",
-        "kalshi:v1", "deadbeef", "feedface", "YES", "NO",
+        "kalshi:v1", "deadbeef", "feedface",
     ):
         assert secret not in result.stdout, f"the receipts summary leaked {secret!r}"
 
 
 @pytest.mark.parametrize("path", _health_workflows(), ids=lambda p: p.name)
-def test_the_receipts_block_survives_an_empty_receipts_file(path, tmp_path):
+def test_the_receipts_summary_reads_every_destinations_shape(path, tmp_path):
+    """MLB writes a LIST of camelCase rows; CFB writes an OBJECT of counts.
+
+    A summary that understood one of them would print `rows: 0` for the other
+    -- which reads exactly like a clean no-op delivery."""
+    import json as _j
+    import subprocess
+    import sys as _sys
+
+    script = _receipts_reporter(path)
+    cfb = tmp_path / "cfb.json"
+    cfb.write_text(_j.dumps({
+        "importBatchId": "kalshi-router-v1",
+        "season": 2026,
+        "written": 2,
+        "alreadyPresent": 1,
+        "refused": 0,
+        "refusals": [],
+        "keysWritten": ["kalshi:v1:aaa", "kalshi:v1:bbb"],
+    }))
+    result = subprocess.run(
+        [_sys.executable, str(script), "--receipts", str(cfb)],
+        capture_output=True, text=True, check=True,
+    )
+    assert "rows: 3" in result.stdout
+    assert "NEW: 2" in result.stdout
+    assert "DUPLICATE_NOOP: 1" in result.stdout
+    for secret in ("kalshi:v1", "aaa", "bbb"):
+        assert secret not in result.stdout
+
+
+@pytest.mark.parametrize("path", _health_workflows(), ids=lambda p: p.name)
+def test_the_receipts_summary_survives_an_empty_receipts_file(path, tmp_path):
     """An import that wrote nothing must not crash the summary and turn a
     clean run red."""
     import subprocess
     import sys as _sys
 
+    script = _receipts_reporter(path)
     receipts = tmp_path / "r.json"
     receipts.write_text("[]")
-    script = tmp_path / "block.py"
-    script.write_text(_receipts_block(path) + "\n")
-
     result = subprocess.run(
-        [_sys.executable, str(script), str(receipts)],
+        [_sys.executable, str(script), "--receipts", str(receipts)],
         capture_output=True, text=True, check=True,
     )
-
     assert "rows: 0" in result.stdout
 
 

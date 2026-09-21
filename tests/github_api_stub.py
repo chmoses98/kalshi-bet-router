@@ -38,12 +38,18 @@ from urllib.parse import urlparse
 
 class GitHubStub:
     def __init__(self, remote_path, destination, *, branch,
+                 base_branch="main",
                  check_runs=(("test", "completed", "success"),),
                  mergeable=True, mergeable_state="clean", draft=False,
                  allow_merge=True, pull_number=218):
         self.remote_path = str(remote_path)
         self.destination = destination
         self.branch = branch
+        #: The branch a router pull request TARGETS. `main` for MLB, but not
+        #: for every destination: CFB's canonical ledger lives on
+        #: `accounting-data`, and a stub that always answered `main` would let
+        #: a gate hardcoded to `main` pass a test it should fail.
+        self.base_branch = base_branch
         self.check_runs = list(check_runs)
         self.mergeable = mergeable
         self.mergeable_state = mergeable_state
@@ -104,7 +110,7 @@ class GitHubStub:
         return self._ref(f"refs/heads/{self.branch}")
 
     def main_sha(self):
-        return self._ref("refs/heads/main")
+        return self._ref(f"refs/heads/{self.base_branch}")
 
     def _pull_payload(self):
         sha = self.branch_sha()
@@ -117,7 +123,7 @@ class GitHubStub:
             "merged": bool(self.merged_sha),
             "head": {"ref": self.branch, "sha": sha,
                      "repo": {"full_name": self.destination}},
-            "base": {"ref": "main"},
+            "base": {"ref": self.base_branch},
             "mergeable": self.mergeable,
             "mergeable_state": self.mergeable_state,
         }
@@ -166,7 +172,8 @@ class GitHubStub:
             return 409, {"message": "head has changed"}
 
         subprocess.run(
-            ["git", f"--git-dir={self.remote_path}", "update-ref", "refs/heads/main", head],
+            ["git", f"--git-dir={self.remote_path}", "update-ref",
+             f"refs/heads/{self.base_branch}", head],
             check=True, capture_output=True,
         )
         self.merged_sha = head
