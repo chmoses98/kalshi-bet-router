@@ -57,7 +57,6 @@ from .destination import DESTINATION_REPOS, ROUTER_IMPORT_BATCH_ID
 from .destinations import PROFILES, UnknownDestinationError, profile_for
 from .receipts import (
     IDEMPOTENT_RERUN_VERDICTS,
-    NO_JUDGEMENT_VERDICTS,
     conflicting_field_names,
     normalise,
 )

@@ -89,7 +89,7 @@ Checked, not assumed:
 |---|---|---|
 | `chmoses98/edge-finder-api` | MLB | **public** |
 | `chmoses98/nfl-edge-finder` | NFL | **public** |
-| `chmoses98/cfb-edge-finder` | CFB | **public** |
+| `chmoses98/cfb-edge-finder` | CFB | **public** (ledger on the `accounting-data` branch) |
 | `chmoses98/Tennis-Edge-Finder` | Tennis | **public** |
 
 A canonical wager row carries `stake`, `entryPrice`, `contracts`, `totalFees`,
@@ -123,13 +123,17 @@ never print a payload, a row, a ticker or an amount. Only counts. That rule is
 already enforced structurally by the diagnostics types and their tests, and
 Phase H does not touch it.
 
-## What exists today *(updated 2026-09-15)*
+## What exists today *(updated 2026-09-21)*
 
 * `write_payloads(wagers, out_dir)` — one importer payload per destination.
   Returns **counts, never rows**: a function that returned the rows would
   eventually have them printed by one of its callers.
-* `DESTINATION_REPOS` — one entry. A sport absent from it is refused upstream by
+* `DESTINATION_REPOS` — **two entries now, MLB and CFB**, and both are derived
+  from `PROFILES` in `src/kalshi_router/destinations.py` rather than written
+  down twice. A sport absent from it is refused upstream by
   `WagerRefusal.NO_DESTINATION_IMPORTER`, never defaulted somewhere plausible.
+  What differs per destination, and why CFB's ledger branch needed a validator
+  instead of CI, is [DESTINATIONS.md](DESTINATIONS.md).
 * No NETWORK reach in this module, by construction and by test. The transport is
   a workflow, and it runs the destination's own importer rather than editing a
   ledger file.

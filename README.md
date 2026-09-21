@@ -439,5 +439,6 @@ a payload, a row, a ticker or an amount.
 * [`docs/PHASE_1_REQUIREMENTS.md`](docs/PHASE_1_REQUIREMENTS.md) — position-accounting research and Phase 1 scope.
 * [`docs/WAGER_CONTRACT.md`](docs/WAGER_CONTRACT.md) — Phase E: why a logical wager is a position episode rather than an order, and how it maps onto the MLB ledger's existing `executionEconomics` slot.
 * [`docs/HISTORY.md`](docs/HISTORY.md) — Phase C: why full replay and the positions checkpoint are complementary rather than alternatives, why settlements are a first-class replay event, why settlement coverage is a second completeness dimension, and the reconciliation invariants.
-* [`docs/DOWNSTREAM_REPOS.md`](docs/DOWNSTREAM_REPOS.md) — what each sport repository can actually accept today (only MLB has an importer).
+* [`docs/DESTINATIONS.md`](docs/DESTINATIONS.md) — the per-destination profile table, CFB activation, why an orphan ledger branch gets zero CI and what replaces it, and live settlement.
+* [`docs/DOWNSTREAM_REPOS.md`](docs/DOWNSTREAM_REPOS.md) — the Phase F audit of what each sport repository could accept at the time. **CFB has since gained an importer**; see DESTINATIONS.md.
 * [`docs/ACCOUNTING.md`](docs/ACCOUNTING.md) — the Phase 1A shadow accounting model: fill/order/position layers, ordering, cost basis, fees, history requirements and the downstream importer contract.
