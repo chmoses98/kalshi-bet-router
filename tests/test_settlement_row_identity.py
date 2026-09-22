@@ -330,6 +330,13 @@ def test_the_kind_is_taken_from_the_delivery_not_inferred_from_the_row():
         head_ref="kalshi-router/MLB", branch_kind=automerge.WAGERS, **common))
     assert "EVERY_ADDED_ROW_CARRIES_THE_ROUTER_IDENTITY" in as_wagers.failed
 
+    # The SAME row, declared as a settlement delivery, is accepted on this
+    # condition -- which is exactly why the declaration may not come from the
+    # row. Both readings exist; the delivery picks one.
+    as_settlements = automerge.evaluate(automerge.MergeFacts(
+        head_ref="kalshi-router/settle-MLB", branch_kind=automerge.SETTLEMENTS, **common))
+    assert "EVERY_ADDED_ROW_CARRIES_THE_ROUTER_IDENTITY" in as_settlements.passed
+
 
 # ══════════════════════════════════════════════════════════════════════
 # the payload contract this gate now depends on
