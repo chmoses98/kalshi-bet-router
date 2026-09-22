@@ -469,6 +469,26 @@ def evaluate(facts: MergeFacts) -> MergeVerdict:
         ok("THE_LEDGER_DIFF_IS_APPEND_ONLY")
 
     # ── every added row is one of ours, and is identifiable ──────────
+    #
+    # *** A WAGER ROW AND A SETTLEMENT ROW DO NOT CARRY THE SAME IDENTITY ***
+    #
+    # A wager row carries an import batch id: it is the row's provenance, the
+    # destination schemas declare it REQUIRED, and `_write_payloads` stamps it
+    # on every row of every wager payload.
+    #
+    # A settlement row does not, and that is the contract on BOTH sides rather
+    # than an omission. `_settlement_row` emits no batch id; the destinations'
+    # settlement schemas model none and their importers REFUSE a row carrying
+    # an unknown field, so sending one would not add identity -- it would
+    # refuse all 41 rows at the importer instead of at this gate. A settlement
+    # is keyed on the wager it settles: its canonical id is minted from that
+    # wager's `source_bet_key` alone, and it may only be written at all if that
+    # wager is already in the ledger.
+    #
+    # Reading a settlement row with the wager rule is what refused CFB #53 on
+    # 2026-09-22 -- 41 correct rows, every other condition PASS, marked foreign
+    # for want of a field their schema forbids. The fix is to check the
+    # identity each kind ACTUALLY has, not to stop checking.
     if not facts.added_ledger_rows:
         wait("EVERY_ADDED_ROW_CARRIES_THE_ROUTER_IDENTITY",
              "the pull request adds no ledger rows")
@@ -486,27 +506,48 @@ def evaluate(facts: MergeFacts) -> MergeVerdict:
         def key_of(row):
             return row.get("sourceBetKey") or row.get("source_bet_key")
 
-        foreign = [
-            identity_of(row) for row in facts.added_ledger_rows
-            if batch_of(row) != ROUTER_IMPORT_BATCH_ID
-        ]
-        unidentified = [
-            index for index, row in enumerate(facts.added_ledger_rows)
-            if not identity_of(row) or not key_of(row)
-        ]
+        settlements = facts.branch_kind == SETTLEMENTS
         problems = []
+
+        if settlements:
+            # A settlement row is not REQUIRED to carry a batch id. One that
+            # does carry a foreign one is still foreign -- absence is the
+            # contract, a stranger's value never is.
+            foreign = [
+                identity_of(row) for row in facts.added_ledger_rows
+                if batch_of(row) is not None and batch_of(row) != ROUTER_IMPORT_BATCH_ID
+            ]
+        else:
+            foreign = [
+                identity_of(row) for row in facts.added_ledger_rows
+                if batch_of(row) != ROUTER_IMPORT_BATCH_ID
+            ]
         if foreign:
             problems.append(
                 f"{len(foreign)} added row(s) do not carry the router's import batch id "
                 f"{ROUTER_IMPORT_BATCH_ID!r}")
+
+        unidentified = [
+            index for index, row in enumerate(facts.added_ledger_rows)
+            if not identity_of(row) or not key_of(row)
+        ]
         if unidentified:
             problems.append(
                 f"{len(unidentified)} added row(s) have no canonical id or no source key")
+
         # Matched on the SOURCE KEY rather than on the destination's minted id.
         # The source key is the router's own and every destination echoes it;
         # the minted id is the destination's and one of them does not return it
         # in its counts-only receipt shape. Matching on the id would refuse a
         # correct delivery for want of a field the router never supplied.
+        #
+        # *** LOAD-BEARING FOR SETTLEMENTS, SO IT IS NOT OPTIONAL THERE ***
+        # For a wager batch the constant batch id is a second, independent
+        # answer to "is this ours". A settlement has no such constant, so this
+        # receipt match IS the answer -- and a missing answer must refuse
+        # rather than skip. It is also the stronger of the two: a batch id is a
+        # literal anybody could write into a row, whereas this set was produced
+        # by THIS RUN'S import of THIS payload.
         receipt_keys = {r.source_key for r in receipts if r.source_key}
         if receipt_keys:
             unreceipted = [
@@ -517,6 +558,11 @@ def evaluate(facts: MergeFacts) -> MergeVerdict:
                 problems.append(
                     f"{len(unreceipted)} added row(s) have no matching receipt from "
                     "this run's import")
+        elif settlements:
+            problems.append(
+                "this run produced no usable receipts, so there is nothing proving the "
+                "added settlement rows came from it")
+
         if problems:
             refuse("EVERY_ADDED_ROW_CARRIES_THE_ROUTER_IDENTITY", "; ".join(problems))
         else:
