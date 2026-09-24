@@ -100,3 +100,13 @@ def test_both_delivery_workflows_reconcile_every_destination():
         # called on the no-op path as well as after a delivery
         assert text.count("\n                reconcile\n") + text.count("\n              reconcile\n") >= 1
         assert "\n            reconcile\n          done" in text
+
+
+def test_a_conflict_on_a_key_already_on_the_ledger_is_refused_not_delivered(tmp_path, capsys):
+    """The live MLB case of 2026-09-24: the ledger holds the order with different economics."""
+    repo = _repo(tmp_path, {"data/edgelab/bets/bets.jsonl": json.dumps({"sourceBetKey": "m1"}) + "\n"})
+    payload = {"rows": [{"sourceBetKey": "m1"}]}
+    receipts = [{"sourceBetKey": "m1", "betId": "b1", "duplicateStatus": "CONFLICT", "success": False}]
+    assert _run(tmp_path, repo, "MLB", payload, receipts) == 0
+    out = capsys.readouterr().out
+    assert "on ledger 0" in out and "refused 1" in out and "CONFLICT" in out
