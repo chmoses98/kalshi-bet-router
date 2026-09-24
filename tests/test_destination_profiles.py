@@ -104,7 +104,11 @@ def test_nfls_mergeable_files_are_exactly_the_minted_record_shapes():
         assert is_mergeable_path("NFL", path), path
     for path in bad:
         assert not is_mergeable_path("NFL", path), path
-    assert ledger_pathspecs_for("NFL") == ("data/imported_wagers/", "data/wager_settlements/")
+    assert ledger_pathspecs_for("NFL") == ("data/imported_wagers/", "data/wager_settlements/",
+                                           "data/wager_settlement_amendments/")
+    assert is_mergeable_path(
+        "NFL", "data/wager_settlement_amendments/2026/week_02/amd-0123456789abcdef01234567.json")
+    assert not is_mergeable_path("NFL", "data/wager_settlement_amendments/2026/week_02/amd-x.json")
     assert ledger_pathspecs_for("MLB") == ("data/edgelab/bets/bets.jsonl",)
     assert not is_mergeable_path("TENNIS", ok[0])
 
@@ -347,3 +351,9 @@ def test_auto_merge_defaults_to_on_for_a_new_destination():
 
     field = next(f for f in dataclasses.fields(DestinationProfile) if f.name == "auto_merge")
     assert field.default is True
+
+
+
+def test_nfl_receives_v2_settlement_economics_and_cfb_stays_v1_until_it_can_amend():
+    assert profile_for("NFL").settlement_economics == "router-settlement-economics.v2"
+    assert profile_for("CFB").settlement_economics == "router-settlement-economics.v1"
