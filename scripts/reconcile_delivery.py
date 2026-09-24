@@ -126,10 +126,16 @@ def classify(keys: list, on_ledger: set, receipts) -> dict:
     counts = {ON_LEDGER: 0, PROPOSED: 0, REFUSED: 0, UNACCOUNTED: 0}
     reasons: dict = {}
     for key in keys:
+        r = by_key.get(key)
+        # A destination that REFUSED this run's row outranks the key being on the ledger: a CONFLICT means the
+        # ledger holds this order with DIFFERENT economics, which is not "delivered" -- it needs a person.
+        if r is not None and not (r.verdict in ACCEPTED and r.success):
+            counts[REFUSED] += 1
+            reasons[str(r.verdict)] = reasons.get(str(r.verdict), 0) + 1
+            continue
         if key and key in on_ledger:
             counts[ON_LEDGER] += 1
             continue
-        r = by_key.get(key)
         if r is not None and r.verdict in ACCEPTED and r.success:
             counts[PROPOSED] += 1
         elif r is not None and not (r.verdict in ACCEPTED and r.success):

@@ -419,9 +419,9 @@ def main(argv=None):
               f"{body.get('message')}", file=sys.stderr)
         return EXIT_API
 
-    print(f"  MERGED #{facts.pull_number} into {repo}@main "
+    print(f"  MERGED #{facts.pull_number} into {repo}@{facts.base_ref or automerge.ledger_branch_for(args.sport)} "
           f"({(body.get('sha') or '')[:12]})")
-    print(f"  rows landed on main: {len(facts.added_ledger_rows)}")
+    print(f"  rows landed on the ledger branch: {len(facts.added_ledger_rows)}")
     return EXIT_OK
 
 
