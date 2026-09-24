@@ -170,12 +170,16 @@ def write_settlement_payloads(settlements, out_dir: str, allowed_sports_by_key: 
 def _settlement_row(settlement) -> dict:
     """One settlement in the shape both destinations' importers accept.
 
+    ``economics_version`` is emitted ONLY for a v2 settlement. A v1 destination (CFB, whose importer refuses a
+    field it does not model) receives byte-for-byte the row it always has; a v2 destination (NFL) learns which
+    formula produced the net, which is what lets it tell a correction from a conflict.
+
     Money crosses to float here because that is what the destination schemas
     declare. Every value was computed in Decimal and is converted once, at this
     boundary. A figure the router refused stays None -- never zero, which is a
     settlement that paid nothing and a different claim entirely.
     """
-    return {
+    row = {
         "source_bet_key": settlement.source_bet_key,
         "market_ticker": settlement.market_ticker,
         "side": settlement.side,
@@ -192,6 +196,11 @@ def _settlement_row(settlement) -> dict:
         "refusals": list(settlement.refusals),
         "venue": "kalshi",
     }
+    from .settlement import ECONOMICS_V1
+    version = getattr(settlement, "economics_version", ECONOMICS_V1)
+    if version != ECONOMICS_V1:
+        row["economics_version"] = version
+    return row
 
 
 def _write_payloads(wagers, out_dir: str, *, import_batch_id: str, allowed_sports, why: str) -> dict[str, int]:

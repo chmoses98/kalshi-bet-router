@@ -711,7 +711,7 @@ def _run_settle_live(args, client, out, err) -> int:
     """
     from .destination import write_settlement_payloads
     from .destinations import PROFILES
-    from .settlement import settle_batch
+    from .settlement import fee_evidence, settle_batch
 
     destinations = {
         sport.value
@@ -749,7 +749,16 @@ def _run_settle_live(args, client, out, err) -> int:
     # one ticker is a re-observation rather than a second event; taking the
     # last keeps the most recently reported state without merging two.
     by_ticker = {s.ticker: s for s in settlements_walked}
-    settlements = settle_batch(wagers, by_ticker)
+    economics = {sport.value: profile.settlement_economics for sport, profile in PROFILES.items()}
+    settlements = settle_batch(wagers, by_ticker, economics)
+    print(f"settlement economics by destination: {dict(sorted(economics.items()))}", file=out)
+
+    # RAW FEE EVIDENCE, every sport the production filter admitted (not just the destinations that accept
+    # settlements), counts only: what the exchange's fee_cost is, measured against the orders' own fills.
+    print("fee evidence (settled markets; counts only):", file=out)
+    for key, count in fee_evidence(result.production_wagers, by_ticker).items():
+        print(f"  {key}: {count}", file=out)
+    print("", file=out)
 
     established = sum(1 for s in settlements if s.is_established)
     settled = sum(1 for s in settlements if s.settlement_status == "SETTLED")
