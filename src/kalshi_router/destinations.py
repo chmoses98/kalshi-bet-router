@@ -153,6 +153,14 @@ class DestinationProfile:
     FILES as rows, and any modified, deleted or renamed ledger file as a
     rewrite -- the same append-only property, in that ledger's own shape."""
 
+    settlement_economics: str = "router-settlement-economics.v1"
+    """Which settlement-economics contract this destination receives (`kalshi_router.settlement`).
+
+    v1 subtracts the position's trading fee a second time (see `settlement.ECONOMICS_V1`); it stays only where
+    the destination cannot yet accept the v2 row or reconcile its already-filed v1 settlements. Moving a
+    destination to v2 requires it to accept `economics_version` and to answer a v1-vs-v2 difference with an
+    append-only amendment rather than a conflict or a rewrite."""
+
     mergeable_patterns: tuple[str, ...] = ()
     """Full-match regular expressions for ledgers whose paths are not a fixed set.
 
@@ -428,6 +436,7 @@ def describe(sport_name: str) -> dict[str, Any]:
         "row_identity_field": profile.row_identity_field,
         "requires_season": profile.requires_season,
         "record_layout": profile.record_layout,
+        "settlement_economics": profile.settlement_economics,
         "mergeable_patterns": list(profile.mergeable_patterns),
         "notes": list(profile.notes),
     }
