@@ -389,7 +389,8 @@ def test_a_destination_whose_branch_does_run_ci_still_reads_its_checks():
     assert not ledger_branch_runs_ci("CFB")
     # An unknown sport answers TRUE, which makes the gate demand a check run it
     # will never see: the fail-closed direction.
-    assert ledger_branch_runs_ci("NFL")
+    assert not ledger_branch_runs_ci("NFL")          # handicap-data has no .github/
+    assert ledger_branch_runs_ci("TENNIS")
 
 
 def test_a_row_the_destination_will_not_name_does_not_merge_unread():

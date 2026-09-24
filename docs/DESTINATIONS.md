@@ -147,6 +147,33 @@ Flip it to `True` in `PROFILES` once they look right. That is a one-line,
 reviewable commit, which is the point: turning the loop on is a visible act
 rather than a default nobody chose.
 
+## NFL activation (2026-09-24)
+
+**What was lost.** NFL had a row shape (`to_nfl_import_row`) from the gap backfill onward, but no profile. Every
+post-cutover NFL order was therefore refused as `NO_DESTINATION_IMPORTER`, which `BY_DESIGN_REFUSALS` counted as
+correct behaviour: health read `not_routable`, never `blocked`, and no run went red. Week 1 had reached
+`handicap-data` only through the one-time backfill, whose window ends at the cutover, so **2026 week 2's NFL
+wagers were never delivered** (`no destination importer: 18` on every scheduled run).
+
+**Never silent again.** A sport that HAS a row shape but no active profile is now refused as
+`DESTINATION_NOT_ACTIVATED`, which is not excused and so derives into `NEEDS_ATTENTION_REFUSALS`: health is
+`blocked` and a person is asked. `NO_DESTINATION_IMPORTER` remains for a sport no repository can hold (TENNIS).
+
+**The profile.** Ledger `handicap-data`, importer on `main` (two checkouts, like CFB). The destination resolves the
+week from the real nflverse schedule (`--allow-schedule-download`) and refuses a date matching no single week. Its
+importers return one receipt per row (`source_bet_key`, `imported_wager_id` / `settlement_id`, `status` in NEW /
+DUPLICATE_NOOP / CONFLICT / REFUSED), and a re-delivery that disagrees with a filed record is a CONFLICT, never a
+rewrite. `handicap-data` has no `.github/`, so `scripts/handicap/validate_routed_ledger.py` (the destination's own
+whole-ledger rules) supplies the verdict.
+
+**One record per file.** `record_layout="json_per_file"`: the gate reads ADDED files under
+`data/imported_wagers/` / `data/wager_settlements/` as rows and any modified, deleted or renamed ledger file as a
+rewrite (`merge_delivery_pr.ledger_diff_per_file`). `mergeable_patterns` admit only the minted shapes
+`routed-<24 hex>.json` and `stl-<24 hex>.json` under `<season>/week_<NN>/`.
+
+**Auto-merge on.** The same importer path landed 24 week-1 wagers and 24 settlements in production (nfl-edge-finder
+#24, #26), and the owner asked for delivery to be hands-off. The gate still decides every batch.
+
 ## Adding a destination
 
 Add a `DestinationProfile`. That is the whole change — `DESTINATION_REPOS`,

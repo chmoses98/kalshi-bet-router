@@ -260,6 +260,14 @@ class ProductionRefusal(str, Enum):
     SPORT_UNRESOLVED = "sport_unresolved"
     #: The sport is known and its repository cannot accept a canonical wager.
     NO_DESTINATION_IMPORTER = "no_destination_importer"
+    #: The sport HAS a destination vocabulary (a row builder) -- its repository
+    #: accepts canonical wagers -- but no production destination profile is
+    #: active for it. NOT by design: this is the state 2026 week 2's NFL wagers
+    #: sat in, counted as NO_DESTINATION_IMPORTER and therefore as correct
+    #: behaviour, so health read "not_routable" while real wagers went
+    #: unrecorded. It needs a person, so it is derived into
+    #: NEEDS_ATTENTION_REFUSALS like every refusal not explicitly excused.
+    DESTINATION_NOT_ACTIVATED = "destination_not_activated"
     #: The destination requires a contest date this evidence cannot establish.
     GAME_DATE_NOT_ESTABLISHED = "game_date_not_established"
     #: A sell/reduction, which is not an original wager and has no agreed
@@ -315,6 +323,7 @@ class ProductionDiagnostics:
     refused_market_not_classified: int = 0
     refused_sport_unresolved: int = 0
     refused_no_destination_importer: int = 0
+    refused_destination_not_activated: int = 0
     refused_game_date_not_established: int = 0
     refused_reduction_not_representable: int = 0
 
@@ -430,6 +439,8 @@ class ProductionDiagnostics:
             f"    market not classified: {self.refused_market_not_classified}",
             f"    sport unresolved: {self.refused_sport_unresolved}",
             f"    no destination importer: {self.refused_no_destination_importer}",
+            f"    destination has a row shape but is NOT ACTIVATED: "
+            f"{self.refused_destination_not_activated}",
             f"    game date not established: "
             f"{self.refused_game_date_not_established}",
             f"    reduction not representable: "
@@ -502,6 +513,7 @@ _REFUSAL_COUNTERS = {
     ProductionRefusal.MARKET_NOT_CLASSIFIED: "refused_market_not_classified",
     ProductionRefusal.SPORT_UNRESOLVED: "refused_sport_unresolved",
     ProductionRefusal.NO_DESTINATION_IMPORTER: "refused_no_destination_importer",
+    ProductionRefusal.DESTINATION_NOT_ACTIVATED: "refused_destination_not_activated",
     ProductionRefusal.GAME_DATE_NOT_ESTABLISHED: "refused_game_date_not_established",
     ProductionRefusal.REDUCTION_NOT_REPRESENTABLE: "refused_reduction_not_representable",
 }
@@ -565,6 +577,11 @@ def evaluate_order(
     if classification_sport in ("UNRESOLVED", "OTHER"):
         return None, ProductionRefusal.SPORT_UNRESOLVED, finality
     if classification_sport not in destinations:
+        # A repository that CAN hold this sport's wagers (it has a row shape)
+        # but is not routed is a gap, not a design decision -- and a gap must
+        # never be counted as correct behaviour.
+        if classification_sport in ROW_BUILDERS:
+            return None, ProductionRefusal.DESTINATION_NOT_ACTIVATED, finality
         return None, ProductionRefusal.NO_DESTINATION_IMPORTER, finality
 
     if not game_date:

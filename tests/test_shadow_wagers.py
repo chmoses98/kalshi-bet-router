@@ -219,15 +219,15 @@ def test_an_unresolved_sport_is_refused_rather_than_guessed():
 def test_a_sport_with_no_importer_is_refused():
     """A sport with no destination profile is refused, never defaulted.
 
-    NFL and Tennis have no profile: NFL's importer needs an NFL week resolved
-    from a schedule capture nobody has verified for a scheduled job, and Tennis
-    is known to settle on a scalar this contract cannot express.
+    Tennis has no profile: it is known to settle on a scalar this contract
+    cannot express. (NFL was the other example until its activation on
+    2026-09-24.)
 
     `SPORTS_WITH_AN_IMPORTER` is derived from the profiles rather than restated
     here, so this refusal and what production actually routes cannot drift
     apart in the direction where the shadow path refuses a sport the scheduled
     job is already delivering."""
-    for sport in (Sport.NFL, Sport.TENNIS):
+    for sport in (Sport.TENNIS,):
         _, refusal = build_shadow_wager(settled_episode(), classified(sport), context())
         assert refusal is WagerRefusal.NO_DESTINATION_IMPORTER
 

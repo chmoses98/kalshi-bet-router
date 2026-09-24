@@ -126,8 +126,13 @@ def test_other_is_refused_as_firmly_as_unresolved():
 
 
 def test_a_sport_with_no_destination_is_refused():
-    for sport in ("NFL", "CFB", "TENNIS"):
-        assert run(order(), sport=sport)[1] is ProductionRefusal.NO_DESTINATION_IMPORTER
+    """A sport this router cannot speak is refused by design; a sport it CAN
+    speak (a row shape exists) but that is not routed here is a gap, refused
+    under a reason that needs attention -- never counted as correct behaviour,
+    which is how 2026 week 2's NFL wagers were lost without a red run."""
+    assert run(order(), sport="TENNIS")[1] is ProductionRefusal.NO_DESTINATION_IMPORTER
+    for sport in ("NFL", "CFB"):
+        assert run(order(), sport=sport)[1] is ProductionRefusal.DESTINATION_NOT_ACTIVATED
 
 
 def test_an_unestablished_game_date_is_refused():

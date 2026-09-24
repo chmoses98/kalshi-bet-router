@@ -107,11 +107,13 @@ def test_production_routes_mlb_and_cfb_and_nothing_else():
     append-only, and eighteen CFB wagers had already been delivered through
     exactly that path by the one-time gap backfill.
 
-    NFL is still absent, and deliberately: its importer needs a real NFL week
-    resolved from a schedule capture on a third branch, and nobody has verified
-    that path for a scheduled job. A sport with no profile is REFUSED."""
-    assert set(DESTINATION_REPOS) == {Sport.MLB, Sport.CFB}
-    assert Sport.NFL not in DESTINATION_REPOS
+    NFL was activated on 2026-09-24, once its scheduled path was verified: the
+    importer resolves the week from the real schedule and refuses an ambiguous
+    date, returns per-row receipts, and ships a whole-ledger validator for a
+    branch that runs no CI. Its absence had silently cost week 2's wagers.
+    TENNIS has no row shape and no profile, and a sport with no profile is
+    REFUSED."""
+    assert set(DESTINATION_REPOS) == {Sport.MLB, Sport.CFB, Sport.NFL}
     assert Sport.TENNIS not in DESTINATION_REPOS
 
 
@@ -195,7 +197,7 @@ def test_a_sport_without_a_destination_cannot_be_written(tmp_path):
     from kalshi_router.sports import Sport
 
     with pytest.raises(ValueError, match="no destination importer"):
-        write_payloads([production_wager(sport=Sport.NFL.value)], str(tmp_path))
+        write_payloads([production_wager(sport=Sport.TENNIS.value)], str(tmp_path))
 
 
 # ------------------------------------------- the HISTORICAL payload write path
@@ -321,9 +323,9 @@ class TestBackfillPayloads:
         """Adding a row shape is not the same decision as adding a destination
         the every-15-minutes job pushes to.
 
-        NFL is the live proof: `production.ROW_BUILDERS` has spoken its
-        vocabulary since the backfill, and it is still not in production's
-        destination map, because nobody has verified its week-resolution path
-        for a scheduled job."""
-        assert "NFL" in ROW_BUILDERS
-        assert Sport.NFL not in DESTINATION_REPOS
+        The backfill writing NFL rows did not by itself activate NFL; the
+        profile did, separately and deliberately. What must hold is the
+        inverse: nothing production routes lacks a row shape, and a sport the
+        backfill cannot speak (TENNIS) is not routed."""
+        assert set(s.value for s in DESTINATION_REPOS) <= set(ROW_BUILDERS)
+        assert "TENNIS" not in ROW_BUILDERS and Sport.TENNIS not in DESTINATION_REPOS

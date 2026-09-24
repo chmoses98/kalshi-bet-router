@@ -141,6 +141,27 @@ class DestinationProfile:
 
     notes: tuple[str, ...] = field(default_factory=tuple)
 
+    record_layout: str = "jsonl"
+    """How the canonical ledger stores rows.
+
+    "jsonl": one file holds many rows, one per line (MLB, CFB). The gate reads
+    added and removed LINES of the exact `mergeable_paths`.
+
+    "json_per_file": every record is its own JSON file (NFL's handicap-data,
+    `data/imported_wagers/<season>/week_<NN>/<id>.json`). A line diff of a
+    pretty-printed JSON file is not a list of rows, so the gate reads ADDED
+    FILES as rows, and any modified, deleted or renamed ledger file as a
+    rewrite -- the same append-only property, in that ledger's own shape."""
+
+    mergeable_patterns: tuple[str, ...] = ()
+    """Full-match regular expressions for ledgers whose paths are not a fixed set.
+
+    A per-record ledger cannot list its paths in advance, so it names their
+    SHAPE instead -- as narrowly as the importer's own id minting allows (a
+    fixed prefix, a fixed-length hex digest, one directory per season and
+    week). This is the same permission `mergeable_paths` grants, stated as a
+    pattern: a file of any other shape still refuses."""
+
 
 #: Every destination production routing is willing to push to.
 #:
@@ -246,6 +267,75 @@ PROFILES: dict[Sport, DestinationProfile] = {
             "it gets no check runs; the destination's own validator supplies the verdict",
         ),
     ),
+    #: *** NFL ***
+    #: Activated 2026-09-24, after the week-2 wagers were found never to have
+    #: been delivered: with no profile here, every post-cutover NFL order was
+    #: refused as NO_DESTINATION_IMPORTER, which health counted as BY DESIGN,
+    #: so nothing ever turned red. Week 1 had reached the ledger only through
+    #: the one-time gap backfill, whose window ends at the cutover.
+    #:
+    #: What made the scheduled path verifiable (the reason this entry was
+    #: withheld): the importer resolves the week from the REAL nflverse
+    #: schedule (`--allow-schedule-download`, the same schedule the backfill
+    #: proved on 24 wagers) and refuses a date matching no single week; it
+    #: returns one receipt per row in the shared vocabulary; and the
+    #: destination ships its own whole-ledger validator, because handicap-data
+    #: -- like CFB's accounting-data -- carries no `.github/` and gets no
+    #: check runs.
+    Sport.NFL: DestinationProfile(
+        sport=Sport.NFL,
+        repo="chmoses98/nfl-edge-finder",
+        ledger_branch="handicap-data",
+        code_branch="main",
+        wager_importer=(
+            "python",
+            "{code}/scripts/handicap/import_routed_wagers.py",
+            "--payload",
+            "{payload}",
+            "--handicap-root",
+            "{work}",
+            "--allow-schedule-download",
+            "--receipts-out",
+            "{receipts}",
+        ),
+        settlement_importer=(
+            "python",
+            "{code}/scripts/handicap/import_routed_settlements.py",
+            "--payload",
+            "{payload}",
+            "--handicap-root",
+            "{work}",
+            "--receipts-out",
+            "{receipts}",
+        ),
+        committable_prefixes=("data/imported_wagers/", "data/wager_settlements/"),
+        mergeable_paths=frozenset(),
+        record_layout="json_per_file",
+        mergeable_patterns=(
+            r"data/imported_wagers/20\d{2}/week_\d{2}/routed-[0-9a-f]{24}\.json",
+            r"data/wager_settlements/20\d{2}/week_\d{2}/stl-[0-9a-f]{24}\.json",
+        ),
+        ledger_branch_runs_ci=False,
+        ledger_validator=(
+            "python",
+            "{code}/scripts/handicap/validate_routed_ledger.py",
+            "--handicap-root",
+            "{work}",
+            "--result-out",
+            "{receipts}",
+        ),
+        row_identity_field="source_bet_key",
+        # The gate still decides. The importer path it runs is the one that
+        # landed 24 week-1 wagers and 24 settlements in production (PRs #24,
+        # #26), and the owner asked for delivery to be hands-off; the first
+        # scheduled batch was watched as it landed.
+        auto_merge=True,
+        notes=(
+            "ledger on handicap-data, importer on main: two checkouts",
+            "one JSON file per record; the week is resolved by the destination from the real schedule",
+            "handicap-data has no .github/, so the destination's own validator supplies the verdict",
+        ),
+    ),
 }
 
 
@@ -337,5 +427,7 @@ def describe(sport_name: str) -> dict[str, Any]:
         "mergeable_paths": sorted(profile.mergeable_paths),
         "row_identity_field": profile.row_identity_field,
         "requires_season": profile.requires_season,
+        "record_layout": profile.record_layout,
+        "mergeable_patterns": list(profile.mergeable_patterns),
         "notes": list(profile.notes),
     }

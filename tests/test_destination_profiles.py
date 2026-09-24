@@ -63,19 +63,50 @@ def test_cfb_is_activated_in_production():
 
 
 def test_a_sport_with_no_profile_is_refused_not_defaulted():
-    for sport in ("NFL", "TENNIS", "CRICKET", ""):
+    for sport in ("TENNIS", "CRICKET", ""):
         with pytest.raises(UnknownDestinationError):
             profile_for(sport)
         assert destination_repo_for(sport) is None
 
 
-def test_having_a_row_shape_is_not_the_same_as_being_routed():
-    """NFL is the live proof that the two decisions are separate: its
-    vocabulary has existed since the backfill and it is still not in
-    production, because nobody has verified its week-resolution path for a
-    scheduled job."""
-    assert "NFL" in ROW_BUILDERS
-    assert Sport.NFL not in PROFILES
+def test_nfl_is_activated_with_its_ledger_on_handicap_data_and_its_importer_on_main():
+    """NFL's vocabulary existed from the backfill onward, and for a week and a
+    half it was not routed -- during which every NFL order the owner placed was
+    refused as "no destination importer" and counted as correct behaviour."""
+    assert "NFL" in ROW_BUILDERS and Sport.NFL in PROFILES
+    nfl = profile_for("NFL")
+    assert (nfl.repo, nfl.ledger_branch, nfl.code_branch) == (
+        "chmoses98/nfl-edge-finder", "handicap-data", "main")
+    wager = " ".join(nfl.wager_importer)
+    assert "{code}/scripts/handicap/import_routed_wagers.py" in wager
+    # the week comes from the REAL schedule, fetched by the destination
+    assert "--allow-schedule-download" in nfl.wager_importer
+    assert "--receipts-out" in nfl.wager_importer
+    assert "--receipts-out" in nfl.settlement_importer
+    assert not nfl.requires_season
+    # handicap-data has no .github/, so its own validator supplies the verdict
+    assert nfl.ledger_branch_runs_ci is False and nfl.ledger_validator is not None
+    assert "validate_routed_ledger.py" in " ".join(nfl.ledger_validator)
+
+
+def test_nfls_mergeable_files_are_exactly_the_minted_record_shapes():
+    from kalshi_router.automerge import is_mergeable_path, ledger_pathspecs_for
+
+    ok = ("data/imported_wagers/2026/week_02/routed-0123456789abcdef01234567.json",
+          "data/wager_settlements/2026/week_02/stl-0123456789abcdef01234567.json")
+    bad = ("data/imported_wagers/2026/week_02/manual-1.json",
+           "data/imported_wagers/2026/week_02/routed-0123.json",
+           "data/imported_wagers/2026/routed-0123456789abcdef01234567.json",
+           "data/recommendations/2026/week_02/x.json",
+           "README.md",
+           "data/imported_wagers/2026/week_02/routed-0123456789abcdef01234567.json.bak")
+    for path in ok:
+        assert is_mergeable_path("NFL", path), path
+    for path in bad:
+        assert not is_mergeable_path("NFL", path), path
+    assert ledger_pathspecs_for("NFL") == ("data/imported_wagers/", "data/wager_settlements/")
+    assert ledger_pathspecs_for("MLB") == ("data/edgelab/bets/bets.jsonl",)
+    assert not is_mergeable_path("TENNIS", ok[0])
 
 
 def test_every_routed_sport_has_a_row_builder():
@@ -169,7 +200,7 @@ def test_the_mergeable_paths_are_exact_and_per_destination():
 def test_an_unknown_sports_mergeable_set_is_empty_so_the_gate_refuses():
     """Empty makes every changed file unexpected, which is the correct answer
     for a destination nobody has described."""
-    assert mergeable_paths_for("NFL") == frozenset()
+    assert mergeable_paths_for("TENNIS") == frozenset()
 
 
 def test_every_destination_gets_a_router_owned_branch_name():
@@ -219,7 +250,7 @@ def test_the_profile_script_lists_exactly_what_is_routed():
 
 
 def test_the_profile_script_refuses_an_unknown_destination():
-    result = run_profile("NFL")
+    result = run_profile("TENNIS")
     assert result.returncode == 2
     assert not result.stdout.strip()
     assert "refuses rather than defaulting" in result.stderr
