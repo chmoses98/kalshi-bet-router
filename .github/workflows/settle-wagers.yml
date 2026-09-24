@@ -144,6 +144,20 @@ jobs:
           # Per-destination, so one failing sport cannot roll back another's
           # success. Each destination reports its own outcome.
           failures=0
+
+          # RECONCILE BY IDENTITY (scripts/reconcile_delivery.py --kind settlements): every settled row in the
+          # payload must be ON the ledger branch, PROPOSED on the router's branch, or REFUSED with a receipt --
+          # never nowhere. Counts only; skipped on a dry run.
+          reconcile() {
+            [ "${DRY_RUN}" = "true" ] && return 0
+            local status=0
+            python "${GITHUB_WORKSPACE}/scripts/reconcile_delivery.py" --sport "${sport}" --kind settlements \
+              --work "${work}" --payload "${payload}" --receipts "${receipts}" || status=$?
+            if [ "${status}" -ne 0 ]; then
+              echo "::error::${sport}: settlement reconciliation by identity found a settled row that is on no ledger, on no proposal and refused by nobody (exit ${status})."
+              failures=$((failures + 1))
+            fi
+          }
           for payload in "${payloads[@]}"; do
             base="$(basename "${payload}" .json)"
             sport="${base%-settlements}"
@@ -289,6 +303,7 @@ jobs:
             if [ -z "$(git -C "${work}" status --porcelain)" ] && \
                [ "$(git -C "${work}" diff --cached --name-only)" = "" ]; then
               echo "  no ledger change -- every settlement was already recorded (no-op)."
+              reconcile
               continue
             fi
 
@@ -296,6 +311,7 @@ jobs:
             staged="$(git -C "${work}" diff --cached --name-only)"
             if [ -z "${staged}" ]; then
               echo "  no ledger change -- every settlement was already recorded (no-op)."
+              reconcile
               continue
             fi
             pattern="$(printf '^%s|' "${allowed_prefixes[@]}")"
@@ -442,6 +458,7 @@ jobs:
               echo "::warning::${sport}: DELIVERED PARTIALLY -- the rows above were written and proposed, and at least one settlement was refused."
               echo "${sport}: PARTIAL settlement -- delivered what the importer wrote; at least one refused" >> "${GITHUB_STEP_SUMMARY}"
             fi
+            reconcile
           done
 
           echo ""

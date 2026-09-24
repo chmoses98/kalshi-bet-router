@@ -128,6 +128,22 @@ jobs:
           # Per-destination, so one failing sport cannot roll back another's
           # success. Each destination reports its own outcome.
           failures=0
+
+          # RECONCILE BY IDENTITY, after each destination's delivery. The payload holds every eligible wager
+          # for the sport, every run, so each of its source keys must be ON the ledger branch, PROPOSED on the
+          # router's branch, or REFUSED by the destination's importer with a receipt. A key in none of those
+          # is a wager that exists nowhere, and it is a failure (scripts/reconcile_delivery.py). Counts only.
+          # Skipped on a dry run, where nothing was proposed by design.
+          reconcile() {
+            [ "${DRY_RUN}" = "true" ] && return 0
+            local status=0
+            python "${GITHUB_WORKSPACE}/scripts/reconcile_delivery.py" --sport "${sport}" \
+              --work "${work}" --payload "${payload}" --receipts "${receipts}" || status=$?
+            if [ "${status}" -ne 0 ]; then
+              echo "::error::${sport}: reconciliation by identity found a wager that is on no ledger, on no proposal and refused by nobody (exit ${status})."
+              failures=$((failures + 1))
+            fi
+          }
           for payload in "${payloads[@]}"; do
             sport="$(basename "${payload}" .json)"
 
@@ -442,6 +458,7 @@ jobs:
                 else
                   echo "  no ledger change -- every row was already imported (no-op)."
                 fi
+                reconcile
                 continue ;;
               ADOPT|PUSH) ;;
               *)
@@ -569,6 +586,7 @@ jobs:
                 failures=$((failures + 1))
                 ;;
             esac
+            reconcile
           done
 
           echo ""
