@@ -87,7 +87,8 @@ def _from_row(row: dict[str, Any]) -> Receipt:
     verdict = _first(row, "duplicateStatus", "duplicate_status", "status")
     return Receipt(
         source_key=_first(row, "sourceBetKey", "source_bet_key"),
-        identity=_first(row, "betId", "bet_id", "wager_id", "wagerId", "settlement_id"),
+        identity=_first(row, "betId", "bet_id", "wager_id", "wagerId", "imported_wager_id",
+                        "settlement_id"),
         verdict=str(verdict) if verdict is not None else None,
         # `success` absent is read as TRUE only when a verdict is present: an
         # importer that named a verdict and no failure flag reported a written

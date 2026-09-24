@@ -52,7 +52,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
 from kalshi_router import delivery_branch  # noqa: E402
-from kalshi_router.automerge import mergeable_paths_for, router_branch_for  # noqa: E402
+from kalshi_router.automerge import ledger_pathspecs_for, router_branch_for  # noqa: E402
 from kalshi_router.destinations import UnknownDestinationError, profile_for  # noqa: E402
 
 EXIT_OK = 0
@@ -125,7 +125,7 @@ def ledger_moved(work: str, old: str | None, new: str, sport: str) -> bool:
     """
     if not old:
         return True
-    paths = sorted(mergeable_paths_for(sport))
+    paths = list(ledger_pathspecs_for(sport))
     if not paths:
         # A destination with no described ledger paths is one this script
         # cannot reason about. "Moved" is the fail-closed answer: it rebuilds.

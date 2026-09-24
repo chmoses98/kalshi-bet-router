@@ -131,6 +131,45 @@ def mergeable_paths_for(sport: str) -> frozenset[str]:
         return frozenset()
 
 
+def is_mergeable_path(sport: str, path: str) -> bool:
+    """May this file land on the ledger branch without a human?
+
+    An exact `mergeable_paths` entry, or a FULL match of one of the profile's
+    `mergeable_patterns` (a per-record ledger cannot list its paths). An unknown
+    sport matches nothing, so the gate refuses."""
+    import re
+
+    try:
+        profile = profile_for(sport)
+    except UnknownDestinationError:
+        return False
+    if path in profile.mergeable_paths:
+        return True
+    return any(re.fullmatch(pattern, path) for pattern in profile.mergeable_patterns)
+
+
+def record_layout_for(sport: str) -> str:
+    try:
+        return profile_for(sport).record_layout
+    except UnknownDestinationError:
+        return "jsonl"
+
+
+def ledger_pathspecs_for(sport: str) -> tuple[str, ...]:
+    """What `git diff` should be restricted to when asking about the ledger.
+
+    The exact paths for a JSONL ledger; the committable prefixes for a
+    per-record one, whose files cannot be named in advance. Empty for an
+    unknown sport -- callers treat that as "cannot reason about it"."""
+    try:
+        profile = profile_for(sport)
+    except UnknownDestinationError:
+        return ()
+    if profile.record_layout == "json_per_file":
+        return tuple(profile.committable_prefixes)
+    return tuple(sorted(profile.mergeable_paths))
+
+
 def ledger_branch_runs_ci(sport: str) -> bool:
     """Does a pull request into this destination's ledger branch get checked?
 
@@ -449,7 +488,8 @@ def evaluate(facts: MergeFacts) -> MergeVerdict:
         wait("ONLY_CANONICAL_WAGER_FILES_CHANGED",
              "the pull request's file list is not known yet")
     else:
-        unexpected = sorted(set(facts.changed_files) - mergeable_paths_for(facts.sport))
+        unexpected = sorted(p for p in set(facts.changed_files)
+                            if not is_mergeable_path(facts.sport, p))
         if unexpected:
             refuse("ONLY_CANONICAL_WAGER_FILES_CHANGED",
                    f"changes {len(unexpected)} file(s) outside the canonical wager "
@@ -501,7 +541,8 @@ def evaluate(facts: MergeFacts) -> MergeVerdict:
             return row.get("importBatchId") or row.get("import_batch_id")
 
         def identity_of(row):
-            return row.get("betId") or row.get("wager_id") or row.get("settlement_id")
+            return (row.get("betId") or row.get("wager_id") or row.get("imported_wager_id")
+                    or row.get("settlement_id"))
 
         def key_of(row):
             return row.get("sourceBetKey") or row.get("source_bet_key")

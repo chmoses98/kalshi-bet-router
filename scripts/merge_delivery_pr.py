@@ -146,6 +146,44 @@ def ledger_diff(work, base_ref, ledger_paths):
     return added, removed
 
 
+def ledger_diff_per_file(work, base_ref, prefixes):
+    """
+    (added rows, removed/rewritten paths) for a ledger that stores ONE RECORD PER
+    FILE (NFL's handicap-data).
+
+    A line diff of a pretty-printed JSON file is not a list of rows, so this
+    reads the diff by FILE: every ADDED file under the ledger prefixes is one
+    row, read whole from this clone's HEAD; every file that was MODIFIED,
+    DELETED, RENAMED, COPIED or changed type is a rewrite of an existing
+    record, which the gate refuses exactly as it refuses a removed JSONL line.
+
+    A file that fails to parse is returned as a row with no identity, which the
+    gate refuses -- never skipped.
+    """
+    if not prefixes:
+        return None, None
+    status, out = _git(work, "diff", "--name-status", "--no-renames", base_ref, "HEAD",
+                       "--", *prefixes)
+    if status != 0:
+        return None, None
+    added, removed = [], []
+    for line in out.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        code, path = parts[0].strip(), parts[-1].strip()
+        if code == "A":
+            ok, text = _git(work, "show", f"HEAD:{path}")
+            try:
+                row = json.loads(text) if ok == 0 else None
+            except ValueError:
+                row = None
+            added.append(row if isinstance(row, dict) else {"_unparseable": True})
+        else:
+            removed.append(f"{code} {path}")
+    return added, removed
+
+
 def changed_files(work, base_ref):
     status, out = _git(work, "diff", "--name-only", base_ref, "HEAD")
     if status != 0:
@@ -260,11 +298,14 @@ def main(argv=None):
     # would read `settlements/2024.jsonl` and report that a delivery of 2026
     # wagers changed nothing -- which makes the append-only check vacuous and
     # the identity check WAIT forever.
-    ledger_paths = sorted(automerge.mergeable_paths_for(args.sport))
+    ledger_paths = list(automerge.ledger_pathspecs_for(args.sport))
 
     _status, head_sha = _git(args.work, "rev-parse", "HEAD")
     verified_sha = head_sha.strip() or None
-    added, removed = ledger_diff(args.work, args.base_ref, ledger_paths)
+    if automerge.record_layout_for(args.sport) == "json_per_file":
+        added, removed = ledger_diff_per_file(args.work, args.base_ref, ledger_paths)
+    else:
+        added, removed = ledger_diff(args.work, args.base_ref, ledger_paths)
 
     try:
         pull = find_pull_request(repo, branch, token)
