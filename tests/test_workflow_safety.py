@@ -2016,8 +2016,13 @@ def test_mlb_is_not_a_settlement_destination(settle_text):
 def test_the_settlement_pass_writes_only_to_the_settlement_ledger(settle_text):
     """A settlement import that touched a WAGER file would be rewriting a record
     of money that already moved, which both destinations forbid."""
+    import re as _re
     assert "^settlements/" in settle_text
-    assert "^data/wager_settlements/" in settle_text
+    [nfl_allowed] = _re.findall(r"\*\)\s+allowed='([^']+)'", settle_text)
+    # NFL may write settlements and their append-only amendments -- and never a wager record.
+    assert _re.search(nfl_allowed, "data/wager_settlements/2026/week_01/stl-x.json")
+    assert _re.search(nfl_allowed, "data/wager_settlement_amendments/2026/week_01/amd-x.json")
+    assert not _re.search(nfl_allowed, "data/imported_wagers/2026/week_01/routed-x.json")
     assert "outside the settlement ledger" in settle_text
 
 

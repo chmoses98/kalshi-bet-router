@@ -224,7 +224,9 @@ jobs:
             staged="$(git -C "${work}" diff --cached --name-only)"
             case "${sport}" in
               CFB) allowed='^settlements/' ;;
-              *)   allowed='^data/wager_settlements/' ;;
+              # NFL answers a v2 figure for a settlement already filed under v1 with an append-only
+              # amendment beside it (nfl-edge-finder settlement_amendments), never a rewrite.
+              *)   allowed='^data/(wager_settlements|wager_settlement_amendments)/' ;;
             esac
             unexpected="$(printf '%s\n' "${staged}" | grep -v "${allowed}" || true)"
             if [ -n "${unexpected}" ]; then

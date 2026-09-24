@@ -640,7 +640,12 @@ def _run_settle(args, client, out, err) -> int:
     # last keeps the most recently reported state without merging two.
     by_ticker = {s.ticker: s for s in settlements_walked}
 
-    settlements = settle_batch(wagers, by_ticker)
+    # The same per-destination economics contract the live path uses: a v2 destination receives v2 figures
+    # for history too, which it files as append-only amendments beside the v1 records already there.
+    from .destinations import PROFILES
+    economics = {sport.value: profile.settlement_economics for sport, profile in PROFILES.items()}
+    print(f"settlement economics by destination: {dict(sorted(economics.items()))}", file=out)
+    settlements = settle_batch(wagers, by_ticker, economics)
 
     established = sum(1 for s in settlements if s.is_established)
     settled = sum(1 for s in settlements if s.settlement_status == "SETTLED")

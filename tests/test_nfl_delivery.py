@@ -200,3 +200,17 @@ def test_a_routable_sport_with_a_row_shape_but_no_destination_is_blocked_not_by_
     report = ProductionDiagnostics(orders_after_cutover=1, refused_destination_not_activated=1)
     assert report.health is HealthState.BLOCKED
     assert report.blocked_orders == 1
+
+
+def test_an_nfl_settlement_amendment_batch_reaches_merge():
+    """v2 corrections of v1 settlements arrive as amendment files; the destination answers CORRECTED."""
+    sid, aid = "stl-" + "a" * 24, "amd-" + "b" * 24
+    path = f"data/wager_settlement_amendments/2026/week_02/{aid}.json"
+    rec = {"rows": [{"source_bet_key": KEY, "settlement_id": sid, "status": "CORRECTED", "success": True}]}
+    rerun = {"rows": [{"source_bet_key": KEY, "settlement_id": sid, "status": "DUPLICATE_NOOP", "success": True}]}
+    verdict = automerge.evaluate(nfl_facts(
+        head_ref="kalshi-router/settle-NFL", branch_kind=automerge.SETTLEMENTS, changed_files=(path,),
+        added_ledger_rows=({"amendment_id": aid, "amends": sid, "settlement_id": sid, "source_bet_key": KEY},),
+        receipts=tuple(r.as_dict() for r in normalise(rec)),
+        rerun_receipts=tuple(r.as_dict() for r in normalise(rerun))))
+    assert verdict.verdict == automerge.MERGE, verdict.render()

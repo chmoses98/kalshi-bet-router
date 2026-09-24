@@ -316,13 +316,19 @@ PROFILES: dict[Sport, DestinationProfile] = {
             "--receipts-out",
             "{receipts}",
         ),
-        committable_prefixes=("data/imported_wagers/", "data/wager_settlements/"),
+        committable_prefixes=("data/imported_wagers/", "data/wager_settlements/",
+                              "data/wager_settlement_amendments/"),
         mergeable_paths=frozenset(),
         record_layout="json_per_file",
         mergeable_patterns=(
             r"data/imported_wagers/20\d{2}/week_\d{2}/routed-[0-9a-f]{24}\.json",
             r"data/wager_settlements/20\d{2}/week_\d{2}/stl-[0-9a-f]{24}\.json",
+            r"data/wager_settlement_amendments/20\d{2}/week_\d{2}/amd-[0-9a-f]{24}\.json",
         ),
+        # v2: net = gross - stake once the exchange's fee_cost proves no further fee. nfl-edge-finder answers a
+        # v1 settlement already on file with an append-only AMENDMENT record (never a rewrite), which it
+        # re-derives itself before accepting.
+        settlement_economics="router-settlement-economics.v2",
         ledger_branch_runs_ci=False,
         ledger_validator=(
             "python",
