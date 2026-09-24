@@ -210,7 +210,15 @@ def test_an_nfl_settlement_amendment_batch_reaches_merge():
     rerun = {"rows": [{"source_bet_key": KEY, "settlement_id": sid, "status": "DUPLICATE_NOOP", "success": True}]}
     verdict = automerge.evaluate(nfl_facts(
         head_ref="kalshi-router/settle-NFL", branch_kind=automerge.SETTLEMENTS, changed_files=(path,),
-        added_ledger_rows=({"amendment_id": aid, "amends": sid, "settlement_id": sid, "source_bet_key": KEY},),
+        # The REAL amendment record shape (nfl-edge-finder settlement_amendments.build_amendment): no
+        # settlement_id of its own. The first version of this test gave it one and so passed against a gate
+        # that refused every real amendment batch (settle-wagers run 36018002169).
+        added_ledger_rows=({"amendment_id": aid, "schema_version": "nfl_wager_settlement_amendment.v1",
+                            "amends": sid, "amends_kind": "wager_settlements", "source_bet_key": KEY,
+                            "reason_code": "FEE_DOUBLE_COUNT_CORRECTION",
+                            "prior_economics_version": "router-settlement-economics.v1",
+                            "amended_economics_version": "router-settlement-economics.v2",
+                            "superseded_fields": {"net_profit_loss": {"prior": 4.8, "corrected": 4.9}}},),
         receipts=tuple(r.as_dict() for r in normalise(rec)),
         rerun_receipts=tuple(r.as_dict() for r in normalise(rerun))))
     assert verdict.verdict == automerge.MERGE, verdict.render()

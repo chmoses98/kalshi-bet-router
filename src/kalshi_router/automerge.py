@@ -541,8 +541,10 @@ def evaluate(facts: MergeFacts) -> MergeVerdict:
             return row.get("importBatchId") or row.get("import_batch_id")
 
         def identity_of(row):
+            # An NFL settlement AMENDMENT names itself `amendment_id` and the settlement it supersedes
+            # `amends`; it deliberately carries no `settlement_id` of its own (it is not a settlement).
             return (row.get("betId") or row.get("wager_id") or row.get("imported_wager_id")
-                    or row.get("settlement_id"))
+                    or row.get("settlement_id") or row.get("amendment_id"))
 
         def key_of(row):
             return row.get("sourceBetKey") or row.get("source_bet_key")
