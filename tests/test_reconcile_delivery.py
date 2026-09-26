@@ -110,3 +110,35 @@ def test_a_conflict_on_a_key_already_on_the_ledger_is_refused_not_delivered(tmp_
     assert _run(tmp_path, repo, "MLB", payload, receipts) == 0
     out = capsys.readouterr().out
     assert "on ledger 0" in out and "refused 1" in out and "CONFLICT" in out
+
+
+def test_a_settlement_refused_because_its_wager_is_not_on_the_ledger_yet_is_named_as_awaiting_it(tmp_path, capsys):
+    """2026-09-26: a wager on an open, unmerged proposal whose market already settled. The importer refuses the
+    settlement per row; reconciliation keeps it REFUSED -- never proposed, never on the ledger, never UNACCOUNTED --
+    and says it awaits its wager, so an operator looks at the wager proposal rather than for corrupt data."""
+    repo = _repo(tmp_path, {"wagers/2026.jsonl": "".join(json.dumps({"source_bet_key": k}) + "\n"
+                                                         for k in ("w1", "w2", "w3"))})
+    payload = {"settlements": [{"source_bet_key": k} for k in ("w1", "w2", "w3", "pending", "conflicted")]}
+    receipts = {"rows": [
+        {"source_bet_key": "w1", "settlement_id": "stl-1", "duplicate_status": "NEW", "success": True},
+        {"source_bet_key": "w2", "settlement_id": "stl-2", "duplicate_status": "NEW", "success": True},
+        # Refused for a reason that is NOT a missing wager: its wager is on the ledger.
+        {"source_bet_key": "w3", "settlement_id": None, "duplicate_status": "REFUSED", "success": False},
+        {"source_bet_key": "pending", "settlement_id": None, "duplicate_status": "REFUSED", "success": False},
+    ]}
+    # "conflicted" has no receipt at all: that is still UNACCOUNTED, and still fails.
+    assert _run(tmp_path, repo, "CFB", payload, receipts, kind="settlements") == 1
+    out = capsys.readouterr().out
+    assert "proposed not merged 2, refused 2 {'REFUSED': 2} (1 of them await their wager" in out
+    assert "UNACCOUNTED 1" in out
+
+
+def test_the_awaiting_sub_count_never_moves_a_row_out_of_refused():
+    from kalshi_router.receipts import normalise
+    receipts = normalise({"rows": [{"source_bet_key": "p", "duplicate_status": "REFUSED", "success": False}]})
+    with_parents = R.classify(["p"], set(), receipts, parents_on_ledger=set())
+    without = R.classify(["p"], set(), receipts)
+    assert with_parents["counts"] == without["counts"] == {"ON_LEDGER": 0, "PROPOSED_NOT_MERGED": 0,
+                                                           "REFUSED": 1, "UNACCOUNTED": 0}
+    assert with_parents["refused_awaiting_parent"] == 1
+    assert "refused_awaiting_parent" not in without
