@@ -299,6 +299,9 @@ class ProductionWager:
     last_execution_time: Decimal
     fill_count: int
     finality: OrderFinality
+    #: "BUY" / "SELL" when the verb is established, else None. Only destinations whose schema carries it
+    #: (NFL: `execution_action`) receive it.
+    execution_action: str | None = None
 
 
 # ------------------------------------------------ the production filter itself
@@ -326,6 +329,13 @@ class ProductionDiagnostics:
     refused_destination_not_activated: int = 0
     refused_game_date_not_established: int = 0
     refused_reduction_not_representable: int = 0
+
+    #: SELL orders delivered to a destination that still records the CONTRACT traded as the side (every
+    #: destination except those in EXPOSURE_SIDE_DESTINATIONS). Counts only: a non-zero value means such a
+    #: destination holds a sale written as a purchase, and is the evidence needed before its semantics move.
+    sell_orders_recorded_by_contract: int = 0
+    #: SELL orders delivered with side = exposure and execution_action = SELL.
+    sell_orders_recorded_by_exposure: int = 0
 
     #: Post-cutover orders, before any other gate. This is the number that says
     #: whether the system has anything at all to do -- zero means a healthy
@@ -445,6 +455,10 @@ class ProductionDiagnostics:
             f"{self.refused_game_date_not_established}",
             f"    reduction not representable: "
             f"{self.refused_reduction_not_representable}",
+            "  sell orders delivered (orders; the side a sale is recorded under):",
+            f"    by exposure, with execution_action: {self.sell_orders_recorded_by_exposure}",
+            f"    by contract traded (destination semantics unchanged): "
+            f"{self.sell_orders_recorded_by_contract}",
             "",
             "",
             # UNIT CHANGE, and it is load-bearing. Every count above this
@@ -526,6 +540,12 @@ _FINALITY_COUNTERS = {
 }
 
 
+#: Destinations whose row side is the EXPOSURE the order created and which receive `execution_action`.
+#: NFL: every 2026 order matched to the public trade tape had taker direction == recorded side, so no filed
+#: record changes meaning; the destination accepts `execution_action` as optional evidence.
+EXPOSURE_SIDE_DESTINATIONS = frozenset({"NFL"})
+
+
 def evaluate_order(
     order: OrderExecution,
     classification_sport: str | None,
@@ -587,8 +607,17 @@ def evaluate_order(
     if not game_date:
         return None, ProductionRefusal.GAME_DATE_NOT_ESTABLISHED, finality
 
-    long_yes = order.outcome_side.value == "yes"
+    # SIDE = EXPOSURE, not contract, where the destination records it that way. Kalshi's `outcome_side` names
+    # the CONTRACT traded, so a SELL of YES at p reports `yes`; recording that as "YES at p, stake p x q + fee"
+    # writes a sale as a purchase. The exposure it created is NO at 1 - p, which is also exactly what the
+    # order costs and pays on Kalshi's netted book -- so side, price, stake and the per-order settlement
+    # (contracts x value on the side) all stay exact. Other destinations keep the contract semantics until
+    # their own historical sells are checked (see `sell_orders_recorded_by_contract`).
+    by_exposure = classification_sport in EXPOSURE_SIDE_DESTINATIONS and order.exposure_side is not None
+    held = order.exposure_side if by_exposure else order.outcome_side
+    long_yes = held.value == "yes"
     contract_price = order.vwap_price if long_yes else Decimal(1) - order.vwap_price
+    action = order.legacy_action.value.upper() if order.legacy_action is not None else None
     contracts = order.total_quantity
     stake = contract_price * contracts + order.total_fee
 
@@ -609,6 +638,7 @@ def evaluate_order(
             last_execution_time=order.last_execution_time,
             fill_count=order.fill_count,
             finality=finality,
+            execution_action=action,
         ),
         None,
         finality,
@@ -673,6 +703,11 @@ def evaluate_production(
         assert wager is not None
         eligible.append(wager)
         diagnostics.eligible += 1
+        if order.is_sell:
+            if wager.sport in EXPOSURE_SIDE_DESTINATIONS:
+                diagnostics.sell_orders_recorded_by_exposure += 1
+            else:
+                diagnostics.sell_orders_recorded_by_contract += 1
 
     return eligible, diagnostics
 
@@ -820,6 +855,10 @@ def to_nfl_import_row(wager: ProductionWager, import_batch_id: str) -> dict:
         "fees_are_estimated": False,
         "fee_state": "ACTUAL_API_FILL",
         "venue": "kalshi",
+        # BUY / SELL. `side` and `actual_price` above are the EXPOSURE (a sold YES is NO at 1 - p); this says
+        # how it was executed, so a cashout can be told from a purchase downstream. Evidence, not identity:
+        # the NFL importer accepts it optionally and does not compare it on re-delivery.
+        **({"execution_action": wager.execution_action} if wager.execution_action else {}),
     }
 
 
