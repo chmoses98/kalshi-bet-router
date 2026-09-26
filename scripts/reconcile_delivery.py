@@ -14,6 +14,13 @@ the new ones. So after the delivery step, each source key in it must be in exact
     UNACCOUNTED          none of the above: a wager the router built that is on no ledger, on no proposal and
                          was refused by nobody. The one state that must never exist.
 
+For SETTLEMENTS, a REFUSED row is further told apart by WHY it could be refused: a settlement whose own wager is
+not on the canonical WAGER ledger yet is counted as "awaiting its wager". That is a sequencing state, not bad
+data -- the wager can be delivered onto a proposal that has not merged (CFB is held for observation) while its
+market has already settled -- and the importer refused it rather than write a payout for a bet the ledger does
+not hold. It stays REFUSED (never canonical, never proposed, never silently fine) and is re-offered on the next
+run; the sub-count only tells an operator to look at the open wager proposal rather than hunt for corrupt data.
+
 Before 2026-09-24 there was a fourth state nobody could see: 2026 week 2's NFL wagers were refused BEFORE a
 payload existed (no destination profile) and counted as by-design, so no receipt and no ledger ever named them.
 That half is now a BLOCKED health state in the production filter; this is the other half -- the wagers that do
@@ -121,10 +128,14 @@ def ledger_keys(work: str, ref: str, profile, kind: str = "wagers") -> set:
     return keys
 
 
-def classify(keys: list, on_ledger: set, receipts) -> dict:
+def classify(keys: list, on_ledger: set, receipts, parents_on_ledger: set | None = None) -> dict:
+    """`parents_on_ledger`, for settlements only: every source key on the canonical WAGER ledger. When given, a
+    REFUSED settlement whose wager is not among them is also counted as awaiting its wager. It never moves a row
+    out of REFUSED."""
     by_key = {r.source_key: r for r in receipts if r.source_key}
     counts = {ON_LEDGER: 0, PROPOSED: 0, REFUSED: 0, UNACCOUNTED: 0}
     reasons: dict = {}
+    awaiting_parent = 0
     for key in keys:
         r = by_key.get(key)
         # A destination that REFUSED this run's row outranks the key being on the ledger: a CONFLICT means the
@@ -132,6 +143,8 @@ def classify(keys: list, on_ledger: set, receipts) -> dict:
         if r is not None and not (r.verdict in ACCEPTED and r.success):
             counts[REFUSED] += 1
             reasons[str(r.verdict)] = reasons.get(str(r.verdict), 0) + 1
+            if parents_on_ledger is not None and key not in parents_on_ledger:
+                awaiting_parent += 1
             continue
         if key and key in on_ledger:
             counts[ON_LEDGER] += 1
@@ -143,7 +156,10 @@ def classify(keys: list, on_ledger: set, receipts) -> dict:
             reasons[str(r.verdict)] = reasons.get(str(r.verdict), 0) + 1
         else:
             counts[UNACCOUNTED] += 1
-    return {"counts": counts, "refused_by_verdict": dict(sorted(reasons.items())), "payload_rows": len(keys)}
+    result = {"counts": counts, "refused_by_verdict": dict(sorted(reasons.items())), "payload_rows": len(keys)}
+    if parents_on_ledger is not None:
+        result["refused_awaiting_parent"] = awaiting_parent
+    return result
 
 
 def main(argv=None) -> int:
@@ -178,11 +194,22 @@ def main(argv=None) -> int:
     except RuntimeError as exc:
         print(f"  reconciliation could not read the ledger ({exc})", file=sys.stderr)
         return 2
-    result = classify(payload_keys(payload, a.kind), on_ledger, receipts)
+    parents = None
+    if a.kind == "settlements":
+        # Diagnostic only: an unreadable wager ledger drops the sub-count, never the reconciliation.
+        try:
+            parents = ledger_keys(a.work, ref, profile, "wagers")
+        except RuntimeError:
+            parents = None
+    result = classify(payload_keys(payload, a.kind), on_ledger, receipts, parents)
     c = result["counts"]
+    awaiting = ""
+    if result.get("refused_awaiting_parent"):
+        awaiting = (f" ({result['refused_awaiting_parent']} of them await their wager on the canonical ledger -- "
+                    "delivered-but-unmerged or undelivered; re-offered next run)")
     print(f"  reconciliation by identity ({a.sport} {a.kind}, {result['payload_rows']} eligible row(s)): "
           f"on ledger {c[ON_LEDGER]}, proposed not merged {c[PROPOSED]}, refused {c[REFUSED]} "
-          f"{result['refused_by_verdict'] or ''}, UNACCOUNTED {c[UNACCOUNTED]}")
+          f"{result['refused_by_verdict'] or ''}{awaiting}, UNACCOUNTED {c[UNACCOUNTED]}")
     return 1 if c[UNACCOUNTED] else 0
 
 

@@ -323,7 +323,12 @@ def test_every_settlement_orphaned_names_the_likely_cause(tmp_path, capsys):
 
 def test_a_partial_orphan_batch_does_not_claim_the_wagers_are_undelivered(tmp_path):
     """Some orphans among matched rows is a DIFFERENT problem, and guessing
-    'not delivered yet' would send the operator to the wrong place."""
+    'not delivered yet' would send the operator to the wrong place.
+
+    It is also NOT a reason to refuse the batch (the 2026-09-26 incident): the
+    matched row proves the season, and the unmatched one goes on to the
+    destination's importer, which refuses it per row. See
+    tests/test_settlement_unmatched_parents.py."""
     import subprocess
     import sys as _sys
 
@@ -341,5 +346,7 @@ def test_a_partial_orphan_batch_does_not_claim_the_wagers_are_undelivered(tmp_pa
          "--payload", str(payload), "--ledger-dir", str(ledger)],
         capture_output=True, text=True,
     )
-    assert result.returncode != 0
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "2026"
     assert "have not been delivered yet" not in result.stderr
+    assert "unmatched settlement parents: 1" in result.stderr

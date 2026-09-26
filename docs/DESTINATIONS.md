@@ -123,6 +123,25 @@ default on dispatch, one destination at a time, and re-runs the import a second
 time to prove idempotency before the gate will merge. It carries the same
 privacy rules as delivery: counts, never rows.
 
+### A settlement can arrive before its wager is canonical
+
+A wager goes *generated → delivered onto a proposal → merged*, and its market
+can settle while it is still on the unmerged proposal (CFB is held for
+observation, so that can last a while). On 2026-09-26 that was 2 of 43 CFB
+settlements, and `scripts/settlement_season.py` refused the whole batch, so the
+41 whose wagers were on the ledger never reached the importer.
+
+The season a batch belongs to is decided by the rows that **match** a wager on
+the ledger. If at least one matches and every match is in one season, that
+season is used, and the unmatched rows go to the destination importer with the
+rest. It refuses them **per row**. They are never written, the delivery is
+reported PARTIAL (and stays red), and reconciliation counts them as `refused`,
+noting how many "await their wager on the canonical ledger". Every run
+re-offers every settled market, so they land on the first run after their
+wager merges. It still fails closed, before any importer runs, when **no** row
+matches (no season is guessed), when matches span two seasons, or when a row
+has no source key.
+
 MLB is not settled from here (`settlement_importer=None`); its repository does
 its own. `router_branches()` therefore never produces a settle-MLB branch, and
 that is asserted, not incidental.

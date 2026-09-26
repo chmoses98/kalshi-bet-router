@@ -227,6 +227,14 @@ jobs:
             # have is the date the market settled, which for a New Year's Day
             # bowl is the wrong year. The wager it settles is already filed
             # under the right season, so that is the answer.
+            #
+            # WHICH SEASON is decided by the rows that MATCH a wager on the
+            # ledger; a few rows that match none do not stop it (2026-09-26:
+            # 41 matched, 2 settled wagers still on the unmerged wager
+            # proposal, and refusing the batch threw the 41 away). Those rows
+            # go on to the importer below, which refuses them PER ROW, and the
+            # delivery reports PARTIAL. It still fails closed when NO row
+            # matches, when matches span two seasons, or a row has no key.
             season=""
             if [ "${needs_season}" = "true" ]; then
               season_status=0
