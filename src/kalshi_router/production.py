@@ -540,10 +540,18 @@ _FINALITY_COUNTERS = {
 }
 
 
-#: Destinations whose row side is the EXPOSURE the order created and which receive `execution_action`.
-#: NFL: every 2026 order matched to the public trade tape had taker direction == recorded side, so no filed
-#: record changes meaning; the destination accepts `execution_action` as optional evidence.
-EXPOSURE_SIDE_DESTINATIONS = frozenset({"NFL"})
+#: Destinations whose row side would be the EXPOSURE computed from the legacy (action, side) verb rule. EMPTY.
+#:
+#: Enabled for NFL in #94 and withdrawn the same evening: the first production delivery re-derived three filed NFL
+#: orders -- the owner's three cashouts (TNF Love 275, week-2 IND/KC KC-5 and CLE/TB 1H total) -- as the opposite
+#: side (CONFLICT on side/actual_price/stake). Those orders carry action=sell, yet the public trade tape (a single
+#: trade at the same second, same count and price, taker direction NO, fee equal to the taker formula to the cent)
+#: and the owner's own account ("I cashed out") both say their exposure was NO -- exactly what the contract-side
+#: record already says. So `exposure_from_legacy` (sell-NO -> toward YES) is contradicted for these fills, and the
+#: contract-side value is the one the evidence supports. Until the sell sign convention is settled against the
+#: exchange's own position view, no destination's side semantics move. `execution_action` is still sent to NFL as
+#: the exchange-REPORTED verb (evidence, not identity, never used to derive the side).
+EXPOSURE_SIDE_DESTINATIONS: frozenset = frozenset()
 
 
 def evaluate_order(
@@ -855,9 +863,9 @@ def to_nfl_import_row(wager: ProductionWager, import_batch_id: str) -> dict:
         "fees_are_estimated": False,
         "fee_state": "ACTUAL_API_FILL",
         "venue": "kalshi",
-        # BUY / SELL. `side` and `actual_price` above are the EXPOSURE (a sold YES is NO at 1 - p); this says
-        # how it was executed, so a cashout can be told from a purchase downstream. Evidence, not identity:
-        # the NFL importer accepts it optionally and does not compare it on re-delivery.
+        # BUY / SELL exactly as the exchange reported the verb on the order's fills. Evidence, not identity: the
+        # NFL importer accepts it optionally and does not compare it on re-delivery. The side above is NOT
+        # derived from it (see EXPOSURE_SIDE_DESTINATIONS).
         **({"execution_action": wager.execution_action} if wager.execution_action else {}),
     }
 
