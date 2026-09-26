@@ -426,3 +426,23 @@ open:
 6. **Which classifications are routable?** Per the Phase 0.1 verdict: MLB, NFL and
    CFB **only when resolved at L1 event competition**. Tennis is not authorized.
    `OTHER` and `UNRESOLVED` are never routed.
+
+## Production side: exposure, not contract (2026-09-26)
+
+`production.evaluate_order` used the order's `outcome_side` -- the CONTRACT traded -- as the delivered side.
+For a buy that is the exposure; for a SELL it inverts it (a sell of YES at 0.33 would be delivered as "YES at
+0.33, stake 0.33 x q + fee", a sale written as a purchase). `OrderExecution` now carries `exposure_side` and
+`legacy_action`, and for destinations in `EXPOSURE_SIDE_DESTINATIONS` (NFL) the row's side, price and stake are
+the EXPOSURE: a sell of YES at p is NO at 1 - p, which is exactly what the order costs and pays on Kalshi's
+netted book, so the per-order settlement (contracts x value on the side) stays exact. NFL rows also carry
+`execution_action` (BUY/SELL) so the destination can tell a cashout from a purchase
+(nfl-edge-finder `docs/POSITION_LIFECYCLE.md`).
+
+Why NFL only: every 2026 NFL order matched to the public trade tape at its second had taker direction equal to
+the recorded side (no filed NFL record changes meaning). MLB and CFB keep contract semantics until their own
+history is checked; `sell_orders_recorded_by_contract` (counts only, in the production diagnostics) says whether
+any SELL has been delivered to them under the old semantics.
+
+The TNF 2026-09-24 cashout (91.41 on KXNFLPASSYDS-26SEP24ATLGB-GBJLOVE10-275) arrived as outcome_side=no -- a
+BUY of NO -- and closed the 91.41 YES position (CLOSE on the signed axis). The order-per-wager production unit is
+unchanged; the destination derives the position lifecycle from the orders.

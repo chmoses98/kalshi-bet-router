@@ -26,7 +26,7 @@ from decimal import Decimal
 from typing import Iterable
 
 from ..errors import SchemaError
-from ..models import BookSide, NormalizedFill, OutcomeSide
+from ..models import Action, BookSide, NormalizedFill, OutcomeSide
 from .identity import digest_for, order_source_key
 from .ordering import parse_execution_time, sort_fills
 
@@ -40,7 +40,8 @@ class OrderExecution:
 
     order_id: str
     ticker: str
-    #: Canonical direction of the submission.
+    #: The CONTRACT traded (Kalshi's ``outcome_side``). NOT the direction: a sell-YES reports ``yes`` while
+    #: moving the position toward NO. See :attr:`exposure_side`.
     outcome_side: OutcomeSide
     book_side: BookSide | None
     subaccount_number: int | None
@@ -59,6 +60,17 @@ class OrderExecution:
     #: True when every fill in the group reported taker; ``None`` when mixed or
     #: unreported.
     all_taker: bool | None = None
+    #: Which way this order moved the position on the signed YES axis (buy-YES / sell-NO -> YES; buy-NO /
+    #: sell-YES -> NO), from the buy/sell verb together with the contract. Uniform across the order's fills
+    #: (mixed exposure under one order id fails closed above). ``None`` only for hand-built executions.
+    exposure_side: OutcomeSide | None = None
+    #: The deprecated buy/sell verb, when every fill carried the same one; ``None`` otherwise.
+    legacy_action: Action | None = None
+
+    @property
+    def is_sell(self) -> bool:
+        """True when the order SOLD the contract it names (exposure opposite to the contract traded)."""
+        return self.exposure_side is not None and self.exposure_side is not self.outcome_side
 
     @property
     def source_key(self) -> str:
@@ -170,6 +182,7 @@ def aggregate_orders(
         all_taker = taker_flags.pop() if len(taker_flags) == 1 else None
 
         vwap = weighted_average_price(ordered)
+        actions = {f.legacy_action for f in ordered}
 
         execution = OrderExecution(
             order_id=order_id,
@@ -186,6 +199,8 @@ def aggregate_orders(
             total_fee=total_fee,
             fills_with_fee=with_fee,
             all_taker=all_taker if isinstance(all_taker, bool) else None,
+            exposure_side=next(iter(exposures)),
+            legacy_action=next(iter(actions)) if len(actions) == 1 else None,
         )
         executions[order_id] = execution
 
