@@ -564,3 +564,22 @@ the environment at push time. It is never in a URL, never in argv, never in
 `.git/config`. Tests reject `://$TOKEN`, `x-access-token:$TOKEN`, `@github.com`,
 `--password` and `extraheader`. GitHub's own log masking is treated as a
 backstop, never as the mechanism.
+
+## The router conductor (`router-conductor.yml`)
+
+GitHub did not honour the declared crons: `deliver-wagers.yml` (*/15) ran every 3-5 hours between 2026-09-23 and
+2026-09-26, and after Thursday's ATL@GB the owner dispatched delivery and settlement by hand. The conductor keeps
+one runner looping `scripts/router_conductor.py`: each target is dispatched (`--ref main -f dry_run=false`, the
+same value a scheduled run uses) when no run is queued or running and its cadence has elapsed since the last
+start, whoever started it -- delivery 20 minutes, settlement 60 minutes. It chains its successor ~12 minutes
+before its job limit; the hourly cron only restarts a lost chain.
+
+It holds no secret and has `actions: write` + `contents: read` only. Every property that makes a re-run safe
+stays in the dispatched workflow (idempotency re-import, merge gate, reconciliation, `cancel-in-progress: false`).
+A red run is retried on the cadence, never in a loop; a permanent CONFLICT stays red on every attempt.
+
+States, one JSON line per target per pass and a table in the job summary: `RUNNING`, `COMPLETE` (last run green),
+`BLOCKED` (last run red -- needs a person or a new fact), `PARTIAL_COMPLETE` (cancelled / timed out mid-way; the
+idempotent importers finish it next run), `WAITING_FOR_SOURCE` (no run yet).
+
+Off switch without a code change: repository variable `ROUTER_CONDUCTOR=off`. The crons keep running regardless.
