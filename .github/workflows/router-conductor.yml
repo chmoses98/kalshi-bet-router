@@ -1,0 +1,56 @@
+# ROUTER CONDUCTOR -- start delivery and settlement on their declared cadence.
+#
+# GitHub cron is best-effort. `deliver-wagers.yml` declares */15 and ran every 3-5 HOURS between 2026-09-23 and
+# 2026-09-26; after Thursday's ATL@GB the owner dispatched deliver-wagers and settle-wagers by hand. This keeps ONE
+# small runner looping scripts/router_conductor.py, which dispatches each workflow when none is queued or running
+# and its cadence has elapsed (delivery 20 min, settlement 60 min), with dry_run=false -- exactly what a scheduled
+# run does. ~12 minutes before its job limit it dispatches its successor, which waits as this group's single
+# pending run. The hourly cron only restarts a lost chain; the concurrency group collapses any surplus start.
+#
+# SECURITY (this repository is public):
+#   * NO SECRETS. This job never sees the Kalshi key or the downstream write token; it can only ask GitHub to start the two
+#     credentialed workflows, which keep every one of their own gates (main-only, importer, idempotency re-run,
+#     merge gate, reconciliation). GITHUB_TOKEN gets actions:write (to dispatch) and contents:read, nothing else.
+#   * main only, like every workflow that can cause a delivery.
+#   * OFF SWITCH without a code change: set the repository variable ROUTER_CONDUCTOR to `off`. The declared crons
+#     keep running either way.
+name: Router conductor (delivery + settlement)
+
+on:
+  schedule:
+    - cron: "11 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: router-conductor
+  cancel-in-progress: false
+
+jobs:
+  conduct:
+    if: github.ref == 'refs/heads/main' && vars.ROUTER_CONDUCTOR != 'off'
+    runs-on: ubuntu-latest
+    timeout-minutes: 345
+    steps:
+      - name: Refuse to run from an untrusted ref
+        run: |
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::error::The router conductor may only run from refs/heads/main (got ${GITHUB_REF})."
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Loop delivery + settlement dispatch; chain the successor
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          python scripts/router_conductor.py --minutes 330 --interval 120 --ref main \
+            --chain-workflow router-conductor.yml
