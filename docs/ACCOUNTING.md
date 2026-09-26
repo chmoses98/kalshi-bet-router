@@ -427,22 +427,20 @@ open:
    CFB **only when resolved at L1 event competition**. Tennis is not authorized.
    `OTHER` and `UNRESOLVED` are never routed.
 
-## Production side: exposure, not contract (2026-09-26)
+## The sell sign convention is UNSETTLED (2026-09-26)
 
-`production.evaluate_order` used the order's `outcome_side` -- the CONTRACT traded -- as the delivered side.
-For a buy that is the exposure; for a SELL it inverts it (a sell of YES at 0.33 would be delivered as "YES at
-0.33, stake 0.33 x q + fee", a sale written as a purchase). `OrderExecution` now carries `exposure_side` and
-`legacy_action`, and for destinations in `EXPOSURE_SIDE_DESTINATIONS` (NFL) the row's side, price and stake are
-the EXPOSURE: a sell of YES at p is NO at 1 - p, which is exactly what the order costs and pays on Kalshi's
-netted book, so the per-order settlement (contracts x value on the side) stays exact. NFL rows also carry
-`execution_action` (BUY/SELL) so the destination can tell a cashout from a purchase
-(nfl-edge-finder `docs/POSITION_LIFECYCLE.md`).
+#94 derived the NFL row side from `exposure_from_legacy` (buy-YES / sell-NO -> toward YES). The first production
+delivery on that code re-derived three filed NFL orders as the opposite side (CONFLICT: side, actual_price,
+stake). They are the owner's three cashouts: TNF Love 275 (91.41), week-2 IND/KC KC-5 (1,794.08) and CLE/TB 1H
+total (246.08). Each carries action=sell, and yet:
 
-Why NFL only: every 2026 NFL order matched to the public trade tape at its second had taker direction equal to
-the recorded side (no filed NFL record changes meaning). MLB and CFB keep contract semantics until their own
-history is checked; `sell_orders_recorded_by_contract` (counts only, in the production diagnostics) says whether
-any SELL has been delivered to them under the old semantics.
+* the public trade tape shows ONE trade at the same second with the same count and price, taker direction NO, and
+  the exchange fee equals the taker formula to the cent (0.07 x 0.33 x 0.67 x 91.41 = 1.4148) -- the owner was the
+  taker and moved the position toward NO;
+* the owner says the TNF order was a cashout of the YES position.
 
-The TNF 2026-09-24 cashout (91.41 on KXNFLPASSYDS-26SEP24ATLGB-GBJLOVE10-275) arrived as outcome_side=no -- a
-BUY of NO -- and closed the 91.41 YES position (CLOSE on the signed axis). The order-per-wager production unit is
-unchanged; the destination derives the position lifecycle from the orders.
+So for these fills the contract-side value already filed (NO) is the exposure, and the legacy rule's reading
+(toward YES) is contradicted. The rule was withdrawn the same evening (`EXPOSURE_SIDE_DESTINATIONS` is empty);
+NFL rows carry `execution_action` as the exchange-REPORTED verb only. OPEN QUESTION for the accounting engine
+(`accounting/position.py` uses the same rule): settle Kalshi's sell sign convention against
+`GET /portfolio/positions` and settlement counts before trusting sell-bearing episodes.
