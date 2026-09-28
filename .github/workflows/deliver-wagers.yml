@@ -129,6 +129,28 @@ jobs:
           # success. Each destination reports its own outcome.
           failures=0
 
+          # ONE LINE PER DESTINATION IN THE JOB SUMMARY, whichever path the
+          # loop body takes. Run 36424584649 was red because MLB carried a
+          # CONFLICT while CFB and NFL were clean, and the summary said only
+          # "MLB: MERGE REFUSED" and "health: blocked" -- nothing named the
+          # destinations that were fine, so triage started from the log. The
+          # loop body has a dozen exits (`continue` on every refusal), so the
+          # line is written at the START of the next iteration and once after
+          # the loop, not at each exit. Reporting only: exit semantics and the
+          # failure count are untouched.
+          current_sport=""
+          failures_at_start=0
+          sport_note=""
+          note_sport_status() {
+            [ -z "${current_sport}" ] && return 0
+            if [ "${failures}" -gt "${failures_at_start}" ]; then
+              echo "${current_sport}: FAIL -- ${sport_note:-see the error annotations in the run log}" >> "${GITHUB_STEP_SUMMARY}"
+            else
+              echo "${current_sport}: PASS -- ${sport_note:-delivered clean}" >> "${GITHUB_STEP_SUMMARY}"
+            fi
+            current_sport=""
+          }
+
           # RECONCILE BY IDENTITY, after each destination's delivery. The payload holds every eligible wager
           # for the sport, every run, so each of its source keys must be ON the ledger branch, PROPOSED on the
           # router's branch, or REFUSED by the destination's importer with a receipt. A key in none of those
@@ -146,6 +168,10 @@ jobs:
           }
           for payload in "${payloads[@]}"; do
             sport="$(basename "${payload}" .json)"
+            note_sport_status
+            current_sport="${sport}"
+            failures_at_start="${failures}"
+            sport_note=""
 
             # THE DESTINATION TABLE LIVES IN ONE PLACE, AND IT IS NOT HERE.
             #
@@ -329,6 +355,7 @@ jobs:
               echo "::error::${sport}: the destination importer refused at least one row. Rows it DID write are still being delivered below."
               failures=$((failures + 1))
               partial=1
+              sport_note="the importer refused row(s); see the receipt verdicts above"
             fi
 
             # IDEMPOTENCY IS PROVED EVERY RUN, NOT ASSUMED ONCE.
@@ -407,6 +434,7 @@ jobs:
                 validator_passed="false"
                 echo "::error::${sport}: the destination's own ledger validator REFUSED the tree this delivery produced. The rows stay on the branch and will not auto-merge."
                 failures=$((failures + 1))
+                sport_note="${sport_note:+${sport_note}; }the destination's own validator refused the tree"
               fi
             fi
 
@@ -457,6 +485,7 @@ jobs:
                   echo "  the importer refused row(s) and wrote nothing; there is nothing to deliver."
                 else
                   echo "  no ledger change -- every row was already imported (no-op)."
+                  sport_note="no-op; every row already recorded"
                 fi
                 reconcile
                 continue ;;
@@ -469,6 +498,7 @@ jobs:
 
             if [ "${DRY_RUN}" = "true" ]; then
               echo "  DRY RUN: ledger changed, nothing pushed."
+              sport_note="dry run; ledger changed, nothing pushed"
               # --stat, and the word is load-bearing: without it this prints the
               # added ledger LINES -- ticker, stake, entry price, source key --
               # into a public Actions log. Against base_sha rather than HEAD so
@@ -572,6 +602,7 @@ jobs:
                 # red: it needs a person, and the next run will not change it.
                 echo "::error::${sport}: the auto-merge gate REFUSED this batch. The rows are delivered and remain on ${branch}; they are NOT on main. See the named condition above."
                 echo "${sport}: MERGE REFUSED -- rows delivered to ${branch}, not merged" >> "${GITHUB_STEP_SUMMARY}"
+                sport_note="${sport_note:+${sport_note}; }auto-merge gate REFUSED, rows on ${branch} not merged"
                 # A partial import ALREADY counted this destination as failed,
                 # and the gate refusing is that same failure seen a second
                 # time -- not a second destination going wrong. Counting it
@@ -584,10 +615,12 @@ jobs:
               *)
                 echo "::error::${sport}: the auto-merge gate could not run (exit ${merge_status})."
                 failures=$((failures + 1))
+                sport_note="${sport_note:+${sport_note}; }the auto-merge gate could not run (exit ${merge_status})"
                 ;;
             esac
             reconcile
           done
+          note_sport_status
 
           echo ""
           echo "destinations that failed: ${failures}"

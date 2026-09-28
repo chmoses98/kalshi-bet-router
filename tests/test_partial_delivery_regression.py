@@ -635,3 +635,15 @@ def test_a_clean_batch_is_still_a_green_delivery(world):
     assert "refused at least one row" not in result.stdout
     assert "destinations that failed: 0" in result.stdout
     assert len(branch_ledger(world)) == 17   # 16 delivered + the untouched prior row
+
+
+def test_the_job_summary_names_each_destination_and_its_outcome(world):
+    """One line per destination, whatever path the loop took: a reader of the
+    run page sees which sport failed and why without opening the log. The
+    existing PARTIAL line and the exit code are unchanged."""
+    result = run_delivery(world)
+    summary = world["summary"].read_text()
+    assert "MLB: FAIL -- the importer refused row(s)" in summary
+    assert "MLB: PASS" not in summary
+    assert "PARTIAL" in summary
+    assert result.returncode == 1
