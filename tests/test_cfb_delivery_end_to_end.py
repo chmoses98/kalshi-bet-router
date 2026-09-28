@@ -593,3 +593,21 @@ def test_a_file_outside_the_cfb_ledger_paths_still_stops_the_delivery(cfb_world)
     # deliver_branch.py names the offending paths on STDERR, so stdout stays a
     # single parseable token for the workflow to branch on.
     assert "stray.txt" in result.stderr
+
+
+def test_the_job_summary_says_cfb_passed(cfb_world):
+    """A clean delivery gets a PASS line of its own, so a run that is red for
+    ANOTHER destination still shows this one was fine."""
+    result = run_delivery(cfb_world)
+    assert result.returncode == 0, result.stdout + result.stderr
+    summary = cfb_world["summary"].read_text()
+    assert "CFB: PASS -- " in summary
+    assert "CFB: FAIL" not in summary
+
+
+def test_a_second_identical_delivery_reports_a_no_op_pass(cfb_world):
+    run_delivery(cfb_world)
+    cfb_world["summary"].write_text("")
+    result = run_delivery(cfb_world)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "CFB: PASS -- no-op; every row already recorded" in cfb_world["summary"].read_text()
