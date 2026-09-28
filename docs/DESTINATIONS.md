@@ -146,25 +146,58 @@ MLB is not settled from here (`settlement_importer=None`); its repository does
 its own. `router_branches()` therefore never produces a settle-MLB branch, and
 that is asserted, not incidental.
 
+### CFB settlement economics v2 (2026-09-28)
+
+CFB's profile now declares `settlement_economics = router-settlement-economics.v2`,
+so every CFB settlement row the router emits carries `economics_version` and a
+net of `gross − stake` (once the exchange's `fee_cost` reconciles to the
+owner's entry fees). The 93 CFB settlements filed before this were v1 rows,
+whose net subtracted the entry fee twice.
+
+The destination answers a v2 row for a wager it already holds under v1 with an
+**append-only amendment** in `settlement_amendments/<season>.jsonl` — never a
+rewrite of the v1 row — identified deterministically from the wager's key and
+the contract, and receipts it `CORRECTED` with both the `settlement_id` and the
+`amendment_id`. A repeat is `DUPLICATE_NOOP`; a disagreeing correction is
+`REFUSED` and the batch stays for a person. `CORRECTED` and `DUPLICATE_NOOP`
+were already in the gate's no-judgement vocabulary, so nothing in the gate
+changed; what changed is the profile: `settlement_amendments/` is a
+committable prefix and `settlement_amendments/<year>.jsonl` an exact mergeable
+path. `tests/test_cfb_amendment_gate.py` drives the gate to MERGE on a
+receipted amendment and to REFUSE on an unreceipted one, a refused correction,
+a stray file, a removed row, a non-idempotent re-import and a failed validator.
+
+cfb-edge-finder's own backfill (`scripts/amend_settlement_economics.py`) filed
+89 amendments for the rows whose correction the filed row itself proves; the
+router's first v2 run lands on those same ids as no-ops and establishes the
+four 2026-09-19 shared-position rows v1 had refused, from live fee evidence.
+
 ## The observation period
 
 `auto_merge` is a profile field. MLB is `True` — proven in production over many
-deliveries. **CFB starts `False`.**
+deliveries. **CFB started `False` on 2026-09-21 and was flipped to `True` on
+2026-09-28.**
 
-That is not a weaker gate and not a defect. The gate still runs and still
-prints its verdict; the rows are still delivered to `accounting-data`; the pull
-request is still opened; the destination's validator still runs; a REFUSAL is
-still red and still needs a person. The only thing withheld is the final merge.
+Holding was not a weaker gate and not a defect. The gate still ran and still
+printed its verdict; the rows were still delivered to `accounting-data`; the
+pull request was still opened; the destination's validator still ran; a REFUSAL
+was still red and still needed a person. The only thing withheld was the final
+merge.
 
-The reason is narrow and worth stating: CFB has never completed a real
-delivery. The path is proven by a dry run — 41 real wagers, all NEW, 0 failed,
-idempotent on re-import, validator accepted — and by tests that drive the
-committed bash against a two-branch fixture. Neither is the same as having
-watched one land. So the first few real batches are left for a person to read.
+The reason was narrow: CFB had never completed a real delivery. The path was
+proven by a dry run — 41 real wagers, all NEW, 0 failed, idempotent on
+re-import, validator accepted — and by tests that drive the committed bash
+against a two-branch fixture. Neither is the same as having watched one land.
+So the first real batches were left for a person to read.
 
-Flip it to `True` in `PROFILES` once they look right. That is a one-line,
-reviewable commit, which is the point: turning the loop on is a visible act
-rather than a default nobody chose.
+They were read. cfb-edge-finder #58 (27 wagers) and #57 (34 settlements)
+landed by hand on 2026-09-27, and the 2026-09-26 postmortem reconciled 32 of
+32 Saturday wagers with 0 unaccounted. The hold also cost those 27 wagers about
+23 hours on the proposal, during which 2 of their markets settled before the
+wagers were canonical (see above). Closing the observation period is the
+one-field commit this section promised. What did not change: the twelve gate
+conditions, the receipt vocabulary, the validator, the mergeable paths beyond
+the amendment ledger, and the rule that a REFUSAL needs a person.
 
 ## NFL activation (2026-09-24)
 

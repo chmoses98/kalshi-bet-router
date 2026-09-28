@@ -4,7 +4,8 @@
 The scheduled `Settle wagers downstream` run built 43 CFB settlements. 41 of
 them settle wagers already on `accounting-data`. The other 2 settle wagers the
 delivery run had put onto the router's open wager proposal
-(`kalshi-router/CFB`), which is HELD FOR OBSERVATION and so had not merged.
+(`kalshi-router/CFB`), which was HELD FOR OBSERVATION at the time and so had
+not merged (the hold closed 2026-09-28).
 Their Kalshi markets had already settled.
 
 `scripts/settlement_season.py` refused the WHOLE batch because 2 of its 43
@@ -513,10 +514,28 @@ def test_once_the_wager_proposal_merges_the_deferred_settlements_land_with_no_on
     assert "DELIVERED PARTIALLY" not in result.stdout
     proposed = remote_keys(world, SETTLEMENT_BRANCH, SETTLEMENTS_FILE)
     assert sorted(proposed) == sorted(key(i) for i in range(1, ON_LEDGER + ON_PROPOSAL + 1))
-    assert f"proposed not merged {ON_LEDGER + ON_PROPOSAL}, refused 0" in result.stdout
+    # Reconciliation runs after the gate: with the hold closed the 43 are
+    # already canonical by the time it counts them.
+    assert f"on ledger {ON_LEDGER + ON_PROPOSAL}, proposed not merged 0, refused 0" in result.stdout
     assert "UNACCOUNTED 0" in result.stdout
-    # CFB is still held for observation: the gate passed and nothing merged.
-    assert "HELD FOR OBSERVATION" in result.stdout
+    # The observation period closed 2026-09-28: the gate passed on a clean,
+    # idempotent, validator-accepted batch and the router merged it. All 43
+    # settlements are now canonical without anyone touching them.
+    assert "HELD FOR OBSERVATION" not in result.stdout
+    assert f"MERGED #" in result.stdout
+    assert f"rows landed on the ledger branch: {ON_LEDGER + ON_PROPOSAL}" in result.stdout
+    assert sorted(remote_keys(world, LEDGER_BRANCH, SETTLEMENTS_FILE)) == sorted(
+        key(i) for i in range(1, ON_LEDGER + ON_PROPOSAL + 1)
+    )
+
+
+def test_a_partial_delivery_is_never_merged_even_with_the_hold_closed(world):
+    """The first run refuses 2 rows per row. auto_merge is on now, and the
+    gate must still keep that batch off the ledger: a refusal is a person's."""
+    result = run_settle(world)
+    assert result.returncode == 1
+    assert "MERGED #" not in result.stdout
+    assert "REFUSE" in result.stdout
     assert remote_keys(world, LEDGER_BRANCH, SETTLEMENTS_FILE) == []
 
 
