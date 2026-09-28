@@ -195,10 +195,25 @@ PROFILES: dict[Sport, DestinationProfile] = {
         sport=Sport.MLB,
         repo="chmoses98/edge-finder-api",
         ledger_branch="main",
-        code_branch=None,
+        # THE IMPORTER IS CODE, AND CODE COMES FROM THE CODE BRANCH'S HEAD.
+        #
+        # This was None ("the importer lives beside the ledger, run it from
+        # the work tree"). But the work tree is not always main: when the
+        # router's proposal branch already sits on the current ledger, the
+        # importer runs ON TOP OF THAT BRANCH (delivery_branch.seed), whose
+        # tree is the ledger as of the proposal PLUS the importer as of the
+        # proposal. So a fix merged to the destination's main was invisible
+        # until main's LEDGER moved: edge-finder-api #250 (merged 15:05Z on
+        # 2026-09-28) ended the marketObservationLinkage CONFLICT, and
+        # deliver run 36440425803 at 15:17Z still refused the same row,
+        # because it executed kalshi-router/MLB's copy of import_bet_batch.py
+        # from 2026-09-24. A separate checkout of main is what CFB and NFL
+        # already do; the ledger stays in {work} (the importer's data paths
+        # are relative to its working directory) and only the code moves.
+        code_branch="main",
         wager_importer=(
             "python",
-            "scripts/edgelab/import_bet_batch.py",
+            "{code}/scripts/edgelab/import_bet_batch.py",
             "--file",
             "{payload}",
             "--receipts-out",

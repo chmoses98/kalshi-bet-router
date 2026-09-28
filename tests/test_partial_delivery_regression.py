@@ -647,3 +647,36 @@ def test_the_job_summary_names_each_destination_and_its_outcome(world):
     assert "MLB: PASS" not in summary
     assert "PARTIAL" in summary
     assert result.returncode == 1
+
+
+def test_the_importer_runs_from_the_code_branch_not_the_proposal_branch(world):
+    """THE 2026-09-28 15:17Z RUN. edge-finder-api #250 fixed import_bet_batch.py
+    on main at 15:05Z; deliver run 36440425803 twelve minutes later refused the
+    same row again, because the work tree was seeded ON TOP OF kalshi-router/MLB
+    (the ledger had not moved) and MLB ran the importer from that tree -- the
+    proposal's copy, from 2026-09-24.
+
+    Here the proposal branch carries an importer that cannot run at all, main's
+    is fine, and the ledger has not moved -- exactly that shape. The delivery
+    must execute main's copy."""
+    first = run_delivery(world)
+    assert "pushed kalshi-router/MLB" in first.stdout, first.stdout + first.stderr
+
+    # Rewrite the proposal branch's ONE commit so its tree carries a broken
+    # importer. Its parent is still main's head, so the next run seeds from it.
+    saboteur = world["tmp"] / "saboteur"
+    subprocess.run(["git", "clone", "--quiet", "--branch", "kalshi-router/MLB",
+                    str(world["remote"]), str(saboteur)], check=True, capture_output=True)
+    broken = saboteur / "scripts" / "edgelab" / "import_bet_batch.py"
+    broken.write_text("#!/usr/bin/env python3\nimport sys\nsys.exit(99)\n")
+    _git("add", "-A", cwd=saboteur)
+    _git("-c", "user.email=s@example.invalid", "-c", "user.name=s",
+         "commit", "--quiet", "--amend", "--no-edit", cwd=saboteur)
+    _git("push", "--quiet", "--force", "origin", "kalshi-router/MLB", cwd=saboteur)
+
+    result = run_delivery(world)
+    out = result.stdout + result.stderr
+    assert "seeding the importer from kalshi-router/MLB" in out, out
+    assert "  rows: 17" in result.stdout, "main's importer did not run: " + out
+    assert "  failed rows: 1" in result.stdout
+    assert "exit 99" not in out

@@ -398,3 +398,28 @@ def test_nfl_and_cfb_both_receive_v2_settlement_economics():
     on_v1 = [s.value for s, p in PROFILES.items()
              if p.settlement_importer is not None and p.settlement_economics != "router-settlement-economics.v2"]
     assert on_v1 == []
+
+
+# ------------------------------------------- the importer is code, from the code branch
+#
+# deliver run 36440425803 (2026-09-28 15:17Z) executed kalshi-router/MLB's copy of
+# import_bet_batch.py -- the proposal branch's tree from 2026-09-24 -- twelve minutes
+# after edge-finder-api #250 had fixed that importer on main. The work tree is
+# whatever delivery_branch.seed chose, and it is the LEDGER; the importer must come
+# from the code branch's head or a destination fix is invisible until the ledger moves.
+
+
+def test_every_importer_runs_from_the_code_checkout():
+    for profile in PROFILES.values():
+        for argv in (profile.wager_importer, profile.settlement_importer, profile.ledger_validator):
+            if not argv:
+                continue
+            script = next(part for part in argv if part.endswith(".py"))
+            assert script.startswith("{code}/"), (profile.sport, script)
+
+
+def test_mlb_clones_its_code_branch_separately_from_the_work_tree():
+    mlb = profile_for("MLB")
+    assert mlb.code_branch == "main"
+    assert mlb.ledger_branch == "main"
+    assert mlb.wager_importer[1] == "{code}/scripts/edgelab/import_bet_batch.py"
