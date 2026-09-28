@@ -674,9 +674,21 @@ def test_the_importer_runs_from_the_code_branch_not_the_proposal_branch(world):
          "commit", "--quiet", "--amend", "--no-edit", cwd=saboteur)
     _git("push", "--quiet", "--force", "origin", "kalshi-router/MLB", cwd=saboteur)
 
+    # RUNNER_TEMP persists across runs in this world. An importer that exits
+    # without writing receipts would leave the FIRST run's receipts in place,
+    # and the counts printed would be last run's -- which is how a version of
+    # this test passed against the broken profile. So the receipts are removed
+    # first, and the assertions read what THIS run's importer wrote.
+    world["receipts"].unlink()
+    world["rerun_receipts"].unlink(missing_ok=True)
+
     result = run_delivery(world)
     out = result.stdout + result.stderr
     assert "seeding the importer from kalshi-router/MLB" in out, out
-    assert "  rows: 17" in result.stdout, "main's importer did not run: " + out
-    assert "  failed rows: 1" in result.stdout
-    assert "exit 99" not in out
+    assert world["receipts"].exists(), "the importer wrote no receipts: " + out
+    receipts = json.loads(world["receipts"].read_text())
+    assert len(receipts) == 17, receipts
+    # The 16 already on the proposal come back DUPLICATE_NOOP through main's
+    # importer; the sabotaged copy on the branch could not have produced them.
+    assert "    DUPLICATE_NOOP: 16" in result.stdout, out
+    assert "    CONFLICT: 1" in result.stdout, out
