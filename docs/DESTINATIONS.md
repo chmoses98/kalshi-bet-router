@@ -23,7 +23,7 @@ actually differs between MLB and CFB — none of them is speculative generality.
 |---|---|
 | `repo` | where the ledger lives |
 | `ledger_branch` | **MLB writes to `main`. CFB's ledger is an orphan branch, `accounting-data`.** |
-| `code_branch` | the importer script does not live on CFB's ledger branch, so it is cloned separately |
+| `code_branch` | the importer is CODE and comes from this branch's head, in its own checkout. CFB's importer does not live on its ledger branch at all; MLB's does, but the work tree the router imports into is often the *proposal branch* (seeded on top of `kalshi-router/MLB`), whose copy of the importer is as old as the proposal. Run 36440425803 executed that stale copy twelve minutes after edge-finder-api #250 had fixed it on `main`. Every profile now names `{code}/...` |
 | `wager_importer` | argv template, rendered with `{code} {payload} {work} {season} {receipts}` |
 | `settlement_importer` | CFB has one. **MLB does not** — `None` means "this destination settles itself" |
 | `committable_prefixes` | what delivery is allowed to commit. Anything else the importer touched is dropped and logged by path |

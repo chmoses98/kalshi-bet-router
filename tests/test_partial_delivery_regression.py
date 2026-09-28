@@ -647,3 +647,48 @@ def test_the_job_summary_names_each_destination_and_its_outcome(world):
     assert "MLB: PASS" not in summary
     assert "PARTIAL" in summary
     assert result.returncode == 1
+
+
+def test_the_importer_runs_from_the_code_branch_not_the_proposal_branch(world):
+    """THE 2026-09-28 15:17Z RUN. edge-finder-api #250 fixed import_bet_batch.py
+    on main at 15:05Z; deliver run 36440425803 twelve minutes later refused the
+    same row again, because the work tree was seeded ON TOP OF kalshi-router/MLB
+    (the ledger had not moved) and MLB ran the importer from that tree -- the
+    proposal's copy, from 2026-09-24.
+
+    Here the proposal branch carries an importer that cannot run at all, main's
+    is fine, and the ledger has not moved -- exactly that shape. The delivery
+    must execute main's copy."""
+    first = run_delivery(world)
+    assert "pushed kalshi-router/MLB" in first.stdout, first.stdout + first.stderr
+
+    # Rewrite the proposal branch's ONE commit so its tree carries a broken
+    # importer. Its parent is still main's head, so the next run seeds from it.
+    saboteur = world["tmp"] / "saboteur"
+    subprocess.run(["git", "clone", "--quiet", "--branch", "kalshi-router/MLB",
+                    str(world["remote"]), str(saboteur)], check=True, capture_output=True)
+    broken = saboteur / "scripts" / "edgelab" / "import_bet_batch.py"
+    broken.write_text("#!/usr/bin/env python3\nimport sys\nsys.exit(99)\n")
+    _git("add", "-A", cwd=saboteur)
+    _git("-c", "user.email=s@example.invalid", "-c", "user.name=s",
+         "commit", "--quiet", "--amend", "--no-edit", cwd=saboteur)
+    _git("push", "--quiet", "--force", "origin", "kalshi-router/MLB", cwd=saboteur)
+
+    # RUNNER_TEMP persists across runs in this world. An importer that exits
+    # without writing receipts would leave the FIRST run's receipts in place,
+    # and the counts printed would be last run's -- which is how a version of
+    # this test passed against the broken profile. So the receipts are removed
+    # first, and the assertions read what THIS run's importer wrote.
+    world["receipts"].unlink()
+    world["rerun_receipts"].unlink(missing_ok=True)
+
+    result = run_delivery(world)
+    out = result.stdout + result.stderr
+    assert "seeding the importer from kalshi-router/MLB" in out, out
+    assert world["receipts"].exists(), "the importer wrote no receipts: " + out
+    receipts = json.loads(world["receipts"].read_text())
+    assert len(receipts) == 17, receipts
+    # The 16 already on the proposal come back DUPLICATE_NOOP through main's
+    # importer; the sabotaged copy on the branch could not have produced them.
+    assert "    DUPLICATE_NOOP: 16" in result.stdout, out
+    assert "    CONFLICT: 1" in result.stdout, out
