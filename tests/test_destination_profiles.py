@@ -169,20 +169,34 @@ def test_cfb_has_a_settlement_importer():
 
 def test_the_committable_prefixes_are_the_destinations_own():
     assert profile_for("MLB").committable_prefixes == ("data/",)
-    assert profile_for("CFB").committable_prefixes == ("wagers/", "settlements/")
+    assert profile_for("CFB").committable_prefixes == (
+        "wagers/", "settlements/", "settlement_amendments/",
+    )
 
 
 def test_containment_uses_those_prefixes():
     """A `data/` containment rule would refuse every row CFB writes."""
-    staged = ["wagers/2026.jsonl", "settlements/2026.jsonl", "__pycache__/x.pyc"]
+    staged = ["wagers/2026.jsonl", "settlements/2026.jsonl", "settlement_amendments/2026.jsonl",
+              "__pycache__/x.pyc"]
     assert uncommittable(staged, profile_for("CFB").committable_prefixes) == (
         "__pycache__/x.pyc",
     )
     assert uncommittable(staged, profile_for("MLB").committable_prefixes) == (
         "__pycache__/x.pyc",
+        "settlement_amendments/2026.jsonl",
         "settlements/2026.jsonl",
         "wagers/2026.jsonl",
     )
+
+
+def test_cfb_amendments_are_mergeable_only_at_the_exact_season_path():
+    """A CORRECTED settlement lands as an amendment row in its own season
+    file. That exact path merges; a stray file under the prefix does not."""
+    from kalshi_router.automerge import is_mergeable_path
+
+    assert is_mergeable_path("CFB", "settlement_amendments/2026.jsonl")
+    assert not is_mergeable_path("CFB", "settlement_amendments/README.md")
+    assert not is_mergeable_path("CFB", "settlement_amendments/2026/extra.jsonl")
 
 
 def test_containment_with_no_prefixes_is_refused_rather_than_permissive():
@@ -271,7 +285,7 @@ def test_the_profile_script_prints_a_list_field_one_per_line():
     """A shell reads this with `mapfile`; a space-joined string would break the
     first time a path had a space in it."""
     result = run_profile("CFB", "--field", "committable_prefixes")
-    assert result.stdout.splitlines() == ["wagers/", "settlements/"]
+    assert result.stdout.splitlines() == ["wagers/", "settlements/", "settlement_amendments/"]
 
 
 def test_the_profile_script_prints_booleans_as_shell_words():
@@ -318,14 +332,31 @@ def test_the_profile_script_never_opens_a_payload():
 
 # ------------------------------------------------------ the observation period
 #
-# CFB has never completed a real delivery. The end-to-end path is proven by a
-# dry run and by tests driving the committed bash, which is not the same as
-# having watched it land. So the first real batches are delivered and left for
-# a person.
+# CFB was held from 2026-09-21 because it had never completed a real delivery.
+# The first real batches were delivered, left for a person, and read
+# (cfb-edge-finder #57, #58, and the 2026-09-26 postmortem). The hold closed on
+# 2026-09-28.
 
 
-def test_cfb_starts_held_for_observation():
-    assert profile_for("CFB").auto_merge is False
+def test_cfb_observation_period_is_closed():
+    """Closing it is this one field; every gate invariant is asserted separately
+    below and in test_automerge_gate / test_cfb_amendment_gate."""
+    assert profile_for("CFB").auto_merge is True
+
+
+def test_closing_the_observation_period_did_not_touch_the_gate():
+    """Flipping the profile field must not have been accompanied by anything
+    that makes a CFB batch EASIER to merge."""
+    from kalshi_router.receipts import IDEMPOTENT_RERUN_VERDICTS, NO_JUDGEMENT_VERDICTS
+
+    cfb = profile_for("CFB")
+    assert cfb.ledger_branch_runs_ci is False
+    assert cfb.ledger_validator
+    assert set(cfb.committable_prefixes) == {"wagers/", "settlements/", "settlement_amendments/"}
+    assert cfb.ledger_branch == "accounting-data"
+    assert "REFUSED" not in NO_JUDGEMENT_VERDICTS
+    assert "CONFLICT" not in NO_JUDGEMENT_VERDICTS
+    assert IDEMPOTENT_RERUN_VERDICTS == frozenset({"DUPLICATE_NOOP"})
 
 
 def test_mlb_keeps_merging():
@@ -354,6 +385,16 @@ def test_auto_merge_defaults_to_on_for_a_new_destination():
 
 
 
-def test_nfl_receives_v2_settlement_economics_and_cfb_stays_v1_until_it_can_amend():
+def test_nfl_and_cfb_both_receive_v2_settlement_economics():
+    """CFB moved to v2 on 2026-09-28, once its destination could accept
+    `economics_version` and answer a v1 row already on file with an
+    append-only amendment (cfb-edge-finder `settlement_amendments/`) rather
+    than a conflict or a rewrite. No destination is left on the contract that
+    subtracts the entry fee twice."""
+    from kalshi_router.destinations import PROFILES
+
     assert profile_for("NFL").settlement_economics == "router-settlement-economics.v2"
-    assert profile_for("CFB").settlement_economics == "router-settlement-economics.v1"
+    assert profile_for("CFB").settlement_economics == "router-settlement-economics.v2"
+    on_v1 = [s.value for s, p in PROFILES.items()
+             if p.settlement_importer is not None and p.settlement_economics != "router-settlement-economics.v2"]
+    assert on_v1 == []

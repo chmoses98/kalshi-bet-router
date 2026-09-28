@@ -247,12 +247,13 @@ PROFILES: dict[Sport, DestinationProfile] = {
             "{receipts}",
         ),
         ledger_branch_runs_ci=False,
-        # HELD FOR OBSERVATION. CFB has never completed a real delivery: the
-        # end-to-end path is proven by a dry run and by tests driving the
-        # committed bash, which is not the same as having watched it land.
-        # The first few real batches should be read by a person before the
-        # loop closes. Set to True once they have been.
-        auto_merge=False,
+        # Observation period closed 2026-09-28. Real CFB batches were read by
+        # a person before this loop closed: cfb-edge-finder #57 (34
+        # settlements), #58 (27 wagers), and the 2026-09-26 full postmortem
+        # (32 wagers, 0 unaccounted). The gate itself is unchanged; the
+        # amendment path it now also carries is driven to MERGE and REFUSE in
+        # tests/test_cfb_amendment_gate.py.
+        auto_merge=True,
         ledger_validator=(
             "python",
             "{code}/scripts/validate_accounting_ledger.py",
@@ -261,10 +262,20 @@ PROFILES: dict[Sport, DestinationProfile] = {
             "--result-out",
             "{receipts}",
         ),
-        committable_prefixes=("wagers/", "settlements/"),
+        # v2 from 2026-09-28: net = gross - stake once the exchange's fee_cost proves no further fee.
+        # cfb-edge-finder answers a v1 settlement already on file with an append-only AMENDMENT row in
+        # `settlement_amendments/<season>.jsonl` (never a rewrite of the v1 row), identified
+        # deterministically from the wager's key and the contract, and receipts it CORRECTED; a repeat
+        # is DUPLICATE_NOOP and a disagreeing correction is REFUSED. The 89 reconciled historical rows
+        # were amended by the destination's own backfill before this switched; the router's first v2
+        # run lands on the same amendment ids as no-ops and establishes the four shared-position rows
+        # v1 had refused.
+        settlement_economics="router-settlement-economics.v2",
+        committable_prefixes=("wagers/", "settlements/", "settlement_amendments/"),
         mergeable_paths=frozenset(
             {f"wagers/{year}.jsonl" for year in range(2024, 2036)}
             | {f"settlements/{year}.jsonl" for year in range(2024, 2036)}
+            | {f"settlement_amendments/{year}.jsonl" for year in range(2024, 2036)}
         ),
         row_identity_field="source_bet_key",
         requires_season=True,
