@@ -88,8 +88,9 @@ def test_only_destinations_with_a_settlement_importer_are_emitted_for():
         for sport, profile in PROFILES.items()
         if profile.settlement_importer is not None
     }
-    # MLB settles its own bets and must never receive a second authority.
-    assert eligible == {"CFB", "NFL"}
+    # MLB settles its own bets and must never receive a second authority. NHL's accounting ledger has no other
+    # settlement source, so the router's settlement is the only one it receives.
+    assert eligible == {"CFB", "NFL", "NHL"}
 
 
 def test_the_workflow_refuses_a_destination_that_settles_its_own():

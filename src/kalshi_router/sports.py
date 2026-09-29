@@ -5,8 +5,8 @@ Phase 0:
 
 ``OTHER``
     The system positively identified the market as outside MLB / NFL / CFB /
-    Tennis -- for example a series whose category is Economics, or whose sport
-    tag is Basketball.
+    NHL / Tennis -- for example a series whose category is Economics, or whose
+    sport tag is Basketball, or a non-NHL hockey league (KHL, college hockey).
 
 ``UNRESOLVED``
     The system could not prove ownership.  Metadata was missing, contradictory,
@@ -23,19 +23,24 @@ class Sport(str, Enum):
     MLB = "MLB"
     NFL = "NFL"
     CFB = "CFB"
+    #: Added 2026-09-29 for ACCOUNTING ONLY: wagers the owner places manually are recorded in
+    #: NHL-edge-finder's `accounting-data` ledger. Nothing here gives any NHL model a say in a bet.
+    NHL = "NHL"
     TENNIS = "TENNIS"
     OTHER = "OTHER"
     UNRESOLVED = "UNRESOLVED"
 
 
-#: The four sports Phase 1 will eventually route to a downstream repository.
-ROUTABLE_SPORTS = (Sport.MLB, Sport.NFL, Sport.CFB, Sport.TENNIS)
+#: The sports a classification may resolve TO (a league we could route). Whether one is actually delivered is
+#: decided by `destinations.PROFILES` -- Tennis is here and still has no profile, so it is never delivered.
+ROUTABLE_SPORTS = (Sport.MLB, Sport.NFL, Sport.CFB, Sport.NHL, Sport.TENNIS)
 
 #: Stable ordering for aggregate reports.
 REPORT_ORDER = (
     Sport.MLB,
     Sport.NFL,
     Sport.CFB,
+    Sport.NHL,
     Sport.TENNIS,
     Sport.OTHER,
     Sport.UNRESOLVED,

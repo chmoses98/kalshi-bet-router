@@ -1,4 +1,4 @@
-# Destinations — the profile table, and CFB activation
+# Destinations — the profile table, and CFB / NFL / NHL activation
 
 Until 2026-09-21 this router had exactly one production destination. MLB was
 not a *case* in the delivery workflow; MLB was the workflow. Every fact about
@@ -225,6 +225,44 @@ rewrite (`merge_delivery_pr.ledger_diff_per_file`). `mergeable_patterns` admit o
 
 **Auto-merge on.** The same importer path landed 24 week-1 wagers and 24 settlements in production (nfl-edge-finder
 #24, #26), and the owner asked for delivery to be hands-off. The gate still decides every batch.
+
+## NHL activation (2026-09-29) — ACCOUNTING ONLY
+
+NHL is a normal destination for **wagers the owner places by hand on Kalshi**. The router reads the exchange's own fills (read-only
+access), and NHL-edge-finder records them in a ledger that is entirely separate from its research models. Nothing
+about this gives any NHL model a say in a bet: DATA_ONLY_V1 and DATA_ONLY_V2 remain RESEARCH_ONLY, and no row carries
+model provenance. The destination refuses such fields outright.
+
+| | |
+|---|---|
+| repo | `chmoses98/NHL-edge-finder` |
+| ledger branch | `accounting-data`, an ORPHAN branch: a README plus `data/accounting/`, and none of the repository's model or research data |
+| code branch | `main` (`scripts/accounting/import_routed_wagers.py`, `import_routed_settlements.py`, `validate_routed_ledger.py`) |
+| merge paths (exact) | `data/accounting/wagers.jsonl`, `data/accounting/settlements.jsonl` |
+| committable prefix | `data/accounting/` |
+| season | none: one file each, because an NHL season spans two calendar years and nothing should have to guess one |
+| settlement economics | `router-settlement-economics.v2` from the first row (no v1 history, so no amendment path) |
+| identity | minted by the destination: `nhlw-`/`nhls-` + sha256(`source_bet_key`)[:24] |
+| CI on the ledger branch | none (orphan). The destination's own validator supplies the verdict, as for CFB and NFL |
+| auto-merge | **False** (observation period) until the path is proven against the live destination |
+
+**Classification.** Kalshi's competition string is the evidence:
+- **Resolve to NHL:** "Pro Hockey" (documented by `/milestones` and listed under Hockey in the live `filters_by_sport`), "NHL" and "National Hockey League".
+- **Stay `OTHER`:** College hockey and the foreign leagues the catalogue names beside "Pro Hockey" (KHL, SHL, Finland Liiga, Germany DEL, Czech Extraliga, Switzerland National League, plus AHL and PWHL).
+- **The Hockey heading:** it is now an *ambiguous* family, so an unknown hockey competition is UNRESOLVED rather than NHL, and the bare word "hockey" in series metadata is never NHL evidence.
+
+**The collision gate stays as strict as it was.** The NHL is a CLOSED-vocabulary league: it is recognised only by
+those exact names. A Hockey claimant of some other name therefore offers no rival reading of it. This matters because
+the live catalogue has filed "Pro Baseball" under Hockey (2026-09-15), and MLB must stay unaffected. Any claimant
+holding an open-vocabulary league (MLB, NFL, CFB) still refuses exactly as before.
+
+**Series registry.** Twenty NHL series, all `verified=True` from NHL-edge-finder's live discovery, still rank as the
+weakest evidence and never override a contradicting competition.
+
+**Credential.** Delivery uses the shared `DOWNSTREAM_REPO_TOKEN`. `downstream-credential-probe.yml` now also probes
+`chmoses98/NHL-edge-finder` and reports push permission there without writing anything.
+
+**Tennis** remains unrouted: no profile, no row shape.
 
 ## Adding a destination
 

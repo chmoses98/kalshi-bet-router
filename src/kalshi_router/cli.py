@@ -870,7 +870,11 @@ def _run_series_probe(client, out, err) -> int:
     from .sports import Sport
     from .taxonomy import parse_filters_by_sport
 
+    from .series_registry import SERIES_TICKER_REGISTRY
+
     candidates = {t: Sport.MLB for t in MLB_LEDGER_CANDIDATES}
+    # The NHL registry entries are corroborated against Kalshi's own series metadata on every probe, too.
+    candidates.update({t: e.sport for t, e in SERIES_TICKER_REGISTRY.items() if e.sport is Sport.NHL})
     try:
         report = probe_series(client, candidates)
     except KalshiRouterError as exc:
@@ -910,7 +914,36 @@ def _run_series_probe(client, out, err) -> int:
     print("", file=out)
     print(render_competitions_under_our_sports(
         competitions_under_our_sports(taxonomy)), file=out)
+    print("", file=out)
+    print(_nhl_live_sample(client, taxonomy), file=out)
     return EXIT_OK
+
+
+def _nhl_live_sample(client, taxonomy) -> str:
+    """Classify a fixed sample of PUBLIC live NHL markets through the production classifier. Counts only."""
+    from collections import Counter
+
+    from .classify import classify_market
+    from .metadata import MetadataResolver
+    from .series_probe import NHL_LIVE_SAMPLE_MARKETS
+
+    resolver = MetadataResolver(client)
+    sports: Counter = Counter()
+    levels: Counter = Counter()
+    competitions: Counter = Counter()
+    for ticker in NHL_LIVE_SAMPLE_MARKETS:
+        context = resolver.resolve(ticker)
+        verdict = classify_market(context, taxonomy=taxonomy)
+        sports[verdict.sport.value] += 1
+        levels[verdict.resolved_by.value if verdict.resolved_by else "none"] += 1
+        competitions[str(context.competition)] += 1
+    return "\n".join([
+        f"NHL live sample: {len(NHL_LIVE_SAMPLE_MARKETS)} public opening-night markets (counts only)",
+        f"  classified as: {dict(sorted(sports.items()))}",
+        f"  resolved by: {dict(sorted(levels.items()))}",
+        f"  event competition: {dict(sorted(competitions.items()))}",
+        f"NHL_LIVE_SAMPLE_ALL_NHL={'true' if sports.get('NHL', 0) == len(NHL_LIVE_SAMPLE_MARKETS) else 'false'}",
+    ])
 
 
 def main(argv: list[str] | None = None, stdout=None, stderr=None) -> int:

@@ -1,4 +1,4 @@
-"""Mapping Kalshi's own competition / sport vocabulary onto our four sports.
+"""Mapping Kalshi's own competition / sport vocabulary onto our routable sports (MLB, NFL, CFB, NHL, Tennis).
 
 Why this replaces guessed tickers
 ---------------------------------
@@ -52,13 +52,33 @@ COMPETITION_TO_SPORT: dict[str, Sport] = {
     "college football": Sport.CFB,
     "ncaa football": Sport.CFB,
     "ncaaf": Sport.CFB,
+    # NHL. "Pro Hockey" is Kalshi's own competition string: /milestones documents it, and the live
+    # filters_by_sport taxonomy (probed 2026-09-29 from NHL-edge-finder) files it under Hockey BESIDE the foreign
+    # leagues it names separately (KHL, SHL, Finland Liiga, Germany DEL, Czech Extraliga, Switzerland National
+    # League) -- so, exactly like "Pro Baseball" among NPB/KBO/LMB, it is the sibling term for the NHL rather than an
+    # umbrella over them.
+    "pro hockey": Sport.NHL,
+    "nhl": Sport.NHL,
+    "national hockey league": Sport.NHL,
+}
+
+#: The ONLY names under which the NHL may be recognised. The NHL is a CLOSED-vocabulary league here: it is never
+#: inferred from the word "hockey", a taxonomy heading or a ticker shape, only from one of these exact strings. That
+#: is what lets the collision gate below see that a Hockey claimant of some OTHER competition name (the live
+#: catalogue has filed "Pro Baseball" under Hockey) cannot be offering the NHL as a rival reading of that name.
+CLOSED_VOCABULARY_LEAGUES: dict[Sport, frozenset[str]] = {
+    Sport.NHL: frozenset({"pro hockey", "nhl", "national hockey league"}),
 }
 
 #: Exact normalized competition strings that are positively out of scope.
 COMPETITION_OUT_OF_SCOPE: frozenset[str] = frozenset({
     "pro basketball (m)", "pro basketball (w)", "pro basketball", "nba", "wnba",
     "college basketball (m)", "college basketball (w)", "college basketball",
-    "pro hockey", "nhl", "college hockey",
+    # Hockey that is NOT the NHL. Named explicitly so each stays a positive OTHER rather than an unknown
+    # competition inside the (now ambiguous) Hockey family.
+    "college hockey", "college hockey (m)", "college hockey (w)", "ncaa hockey", "khl", "shl", "ahl", "pwhl",
+    "finland liiga", "liiga", "germany del", "czech extraliga", "switzerland national league",
+    "iihf", "world juniors", "field hockey",
     "soccer", "college baseball", "pro golf", "golf", "esports",
     "mma", "boxing", "cricket", "rugby", "motorsport", "auto racing",
 })
@@ -73,7 +93,7 @@ SPORT_TO_SPORT: dict[str, Sport] = {SPORT_TENNIS: Sport.TENNIS}
 
 #: Sports Kalshi covers that are positively outside our four.
 OUT_OF_SCOPE_SPORTS: frozenset[str] = frozenset({
-    "basketball", "soccer", "hockey", "golf", "esports", "mma", "boxing",
+    "basketball", "soccer", "golf", "esports", "mma", "boxing",
     "cricket", "rugby", "motorsport", "auto racing", "racing", "olympics",
     "chess", "darts", "cycling", "table tennis", "volleyball", "lacrosse",
     "softball", "track and field", "swimming", "wrestling", "sumo", "surfing",
@@ -83,7 +103,7 @@ OUT_OF_SCOPE_SPORTS: frozenset[str] = frozenset({
 #: Sports that contain more than one of our target leagues, so the sport name is
 #: NOT sufficient and the competition must disambiguate. Seeing one of these
 #: without a recognized competition is the fail-closed case.
-AMBIGUOUS_SPORTS: frozenset[str] = frozenset({"football", "baseball"})
+AMBIGUOUS_SPORTS: frozenset[str] = frozenset({"football", "baseball", "hockey"})
 
 #: Which of OUR four sports could live under a taxonomy SPORT name.
 #:
@@ -102,6 +122,10 @@ SPORT_FAMILY_MEMBERS: dict[str, frozenset[Sport]] = {
     "football": frozenset({Sport.NFL, Sport.CFB}),
     "american football": frozenset({Sport.NFL, Sport.CFB}),
     "college football": frozenset({Sport.CFB}),
+    # Hockey holds the NHL AND leagues that are not ours (KHL, SHL, college ...), so it is ambiguous above and
+    # narrows to {NHL} here -- never resolves to it on the heading alone.
+    "hockey": frozenset({Sport.NHL}),
+    "ice hockey": frozenset({Sport.NHL}),
     SPORT_TENNIS: frozenset({Sport.TENNIS}),
 }
 
@@ -170,6 +194,15 @@ def sport_from_taxonomy_sport(sport_name: str) -> Sport | None:
     if key in OUT_OF_SCOPE_SPORTS:
         return Sport.OTHER
     return None
+
+
+def closed_vocabulary_excludes(sport: Sport, competition: str) -> bool:
+    """True when ``sport`` is recognised only by exact names and ``competition`` is not one of them.
+
+    Such a league cannot be what that competition name means, so a claimant sport that holds only such leagues is
+    no rival for the name. Every other league answers False (unknown vocabulary: assume it could be a rival)."""
+    names = CLOSED_VOCABULARY_LEAGUES.get(sport)
+    return names is not None and normalize(competition) not in names
 
 
 def is_ambiguous_sport(sport_name: str) -> bool:

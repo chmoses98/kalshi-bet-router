@@ -61,6 +61,20 @@ MLB_LEDGER_CANDIDATES: dict[str, int] = {
     "KXMLBF5SPREAD": 1,
 }
 
+#: PUBLIC opening-night (2026-09-29) NHL markets, one per family the NHL destination records. A fixed sample so the
+#: probe can show the classifier resolving REAL NHL markets from Kalshi's own live metadata (competition, series,
+#: registry) -- markets stay readable after they settle, so this keeps working. Not the owner's positions; only
+#: counts are printed, never the tickers.
+NHL_LIVE_SAMPLE_MARKETS: tuple[str, ...] = (
+    "KXNHLGAME-26SEP29CHIVGK-CHI",
+    "KXNHLSPREAD-26SEP29CHIVGK-CHI2",
+    "KXNHLTOTAL-26SEP29CHIVGK-10",
+    "KXNHLTEAMTOTAL-26SEP29CHIVGK-CHI2",
+    "KXNHLOT-26SEP29CHIVGK-1",
+    "KXNHL1P-26SEP29CHIVGK-CHI",
+)
+
+
 #: Tokens in a series' own metadata that corroborate each sport. Deliberately
 #: the league name and nothing looser: "baseball" alone would also match a
 #: college or international series, which is the mistake the ambiguity gate
@@ -69,6 +83,7 @@ _CORROBORATING_TOKENS: dict[Sport, tuple[str, ...]] = {
     Sport.MLB: ("mlb", "major league baseball"),
     Sport.NFL: ("nfl", "national football league"),
     Sport.CFB: ("ncaaf", "ncaa football", "college football", "cfb"),
+    Sport.NHL: ("nhl", "national hockey league", "pro hockey"),
     Sport.TENNIS: ("atp", "wta", "tennis"),
 }
 

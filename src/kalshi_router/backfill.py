@@ -99,6 +99,13 @@ LEDGER_VOCABULARIES: dict[str, dict[str, str]] = {
         "stake": "stake",
         "entry_price": "execution_price",
     },
+    "NHL": {
+        "source_bet_key": "source_bet_key",
+        "market_ticker": "market_ticker",
+        "side": "side",
+        "stake": "stake",
+        "entry_price": "execution_price",
+    },
 }
 
 #: The keys every reconciliation reads, whatever the destination calls them.

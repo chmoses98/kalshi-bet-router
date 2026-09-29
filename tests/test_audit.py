@@ -101,6 +101,7 @@ def test_audit_classifies_every_sport_from_competition_metadata(signer):
         Sport.MLB: 2,
         Sport.NFL: 1,
         Sport.CFB: 1,
+        Sport.NHL: 0,
         Sport.TENNIS: 1,
         Sport.OTHER: 1,
         Sport.UNRESOLVED: 1,

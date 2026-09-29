@@ -144,7 +144,7 @@ class AuditReport:
     @property
     def supported_sport_count(self) -> int:
         return sum(self.classification_counts.get(s, 0)
-                   for s in (Sport.MLB, Sport.NFL, Sport.CFB, Sport.TENNIS))
+                   for s in (Sport.MLB, Sport.NFL, Sport.CFB, Sport.NHL, Sport.TENNIS))
 
     @property
     def unresolved_count(self) -> int:

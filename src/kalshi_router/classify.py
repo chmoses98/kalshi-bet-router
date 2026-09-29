@@ -50,6 +50,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, Iterable
 
 from .competitions import (
+    closed_vocabulary_excludes,
     is_ambiguous_sport,
     possible_sports,
     normalize,
@@ -248,18 +249,22 @@ LEAGUE_TOKENS: dict[Sport, tuple[str, ...]] = {
     Sport.MLB: ("mlb", "major league baseball", "world series"),
     Sport.NFL: ("nfl", "national football league", "super bowl"),
     Sport.CFB: ("cfb", "ncaaf", "ncaa football", "college football", "college football playoff"),
+    # The NHL only by name. The bare word "hockey" is an AMBIGUOUS family below (the KHL, SHL, college hockey are
+    # hockey too), never NHL evidence on its own.
+    Sport.NHL: ("nhl", "national hockey league", "pro hockey"),
     Sport.TENNIS: ("tennis", "atp", "wta"),
 }
 
 AMBIGUOUS_FAMILY_TOKENS: tuple[str, ...] = (
-    "football", "american football", "baseball", "college sports", "ncaa",
+    "football", "american football", "baseball", "college sports", "ncaa", "hockey", "ice hockey",
 )
 
 NON_TARGET_SPORT_TOKENS: tuple[str, ...] = (
     "basketball", "nba", "wnba", "ncaab", "college basketball",
     "soccer", "football club", "premier league", "epl", "uefa", "mls", "la liga",
     "bundesliga", "serie a", "ligue 1", "world cup",
-    "hockey", "nhl",
+    # Hockey that is positively NOT the NHL. ("hockey" alone is an ambiguous family; "nhl" is a league token.)
+    "college hockey", "ncaa hockey", "khl", "shl", "ahl", "pwhl", "field hockey",
     "golf", "pga", "liv golf", "masters tournament",
     "mma", "ufc", "boxing",
     "cricket", "rugby", "esports", "league of legends", "counter-strike", "dota",
@@ -384,6 +389,13 @@ def _taxonomy_affirms_the_direct_answer(taxonomy, competition, direct) -> bool:
             return False          # unknown: we cannot call it harmless
         if not members:
             continue              # proven to hold none of our four
+        if direct not in members and all(closed_vocabulary_excludes(m, competition) for m in members):
+            # Every league this claimant could hold is recognised ONLY by exact names, and this competition is not
+            # one of them (Hockey holds only the NHL, whose names are "pro hockey" / "nhl" / "national hockey
+            # league"; the live catalogue has filed "Pro Baseball" under Hockey). Such a claimant cannot be offering
+            # a rival reading of THIS name, so it is as irrelevant as an out-of-scope one. Any claimant holding a
+            # league of open vocabulary (MLB, NFL, CFB, ...) is still a rival exactly as before.
+            continue
         if direct not in members:
             # In scope, and pointing somewhere else. That is a real rival.
             return False
