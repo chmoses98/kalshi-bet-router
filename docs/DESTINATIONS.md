@@ -244,7 +244,7 @@ model provenance. The destination refuses such fields outright.
 | settlement economics | `router-settlement-economics.v2` from the first row (no v1 history, so no amendment path) |
 | identity | minted by the destination: `nhlw-`/`nhls-` + sha256(`source_bet_key`)[:24] |
 | CI on the ledger branch | none (orphan). The destination's own validator supplies the verdict, as for CFB and NFL |
-| auto-merge | **False** (observation period) until the path is proven against the live destination |
+| auto-merge | **False** — held until the first observed NHL delivery (see "Production verification" below) |
 
 **Classification.** Kalshi's competition string is the evidence:
 - **Resolve to NHL:** "Pro Hockey" (documented by `/milestones` and listed under Hockey in the live `filters_by_sport`), "NHL" and "National Hockey League".
@@ -263,6 +263,33 @@ weakest evidence and never override a contradicting competition.
 `chmoses98/NHL-edge-finder` and reports push permission there without writing anything.
 
 **Tennis** remains unrouted: no profile, no row shape.
+
+### Production verification (2026-09-29, router main `1dc65f3`)
+
+| Check | Run | Result |
+|---|---|---|
+| Series probe | 36624797846 | all 20 NHL registry series CONFIRMED; taxonomy collisions 0; public opening-night sample `{'NHL': 6}` via `L1_event_competition` / `Pro Hockey`; `NHL_LIVE_SAMPLE_ALL_NHL=true` |
+| Delivery, dry run | 36624801843 | success; eligible 212, CFB 75 / MLB 81 / NFL 56, all DUPLICATE_NOOP, destinations failed 0; `ROUTER_COVERAGE sport=NHL eligible=0` |
+| Delivery, scheduled production | 36627519837 (`DRY_RUN=false`) | success; identical counts; reconciliation UNACCOUNTED 0 for every destination; no `::error::` |
+| Settlement, production | 36624693205 | success; NHL listed with `router-settlement-economics.v2`; 131 settled, CFB 75 / NFL 56 DUPLICATE_NOOP; no NHL rows |
+| Pre-merge baseline | 36623489485 (`4e9532a`) | the SAME numbers: eligible 212, blocked 14, CFB 75 / MLB 81 / NFL 56. Adding NHL moved no existing routing decision |
+| Credential probe | 36624794314 | **NHL-edge-finder: read true, push true, but opening a pull request answers 403** ("the token lacks Pull requests: write"); the other four destinations answer 422 (validation reached) |
+
+`HEALTH: blocked` on those runs is pre-existing and not NHL: 5 soccer orders (OTHER) and 9 NFL combo markets with no
+competition, byte-for-byte the same on the pre-merge baseline.
+
+**No NHL wager exists yet**, so no NHL row has been delivered and no NHL settlement has been observed. The settlement
+path is TESTED (`tests/test_nhl_destination.py`, including the end-to-end test against NHL-edge-finder's real
+importers: import, byte-identical re-import as DUPLICATE_NOOP, settlement import and re-import, orphan refusal,
+validator, containment and reconciliation), not OBSERVED.
+
+**Why `auto_merge` stays False.** Two things are not yet proven in production: (1) the router cannot open the pull
+request on NHL-edge-finder with today's token, so the last hop of delivery has never succeeded there; (2) no real
+NHL row has passed through the production pipeline. Until then an NHL wager fails SAFE: the branch is pushed, the
+pull-request step fails with a named `::error::` for NHL only (the loop continues to the other destinations), and every
+later run retries the same idempotent batch, so the wager is recorded the first run after the token is fixed. Flipping
+the flag is a one-line change to the NHL profile (plus its test expectation) once the first NHL delivery has been
+observed going through the gate. The gate itself is unchanged.
 
 ## Adding a destination
 
