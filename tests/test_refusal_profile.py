@@ -116,3 +116,18 @@ def test_legs_that_disagree_are_not_called_one_sport():
     assert single.all_legs_one_sport is None
     profile = RefusalProfile(markets=[mixed, missing, single])
     assert profile.combos_by_leg_sport() == {"mixed/unresolved": 2}
+
+
+def test_deliver_prints_one_coverage_line_per_destination(monkeypatch, local_env, tmp_path):
+    """PROD-9 in edge-finder-api reads these; the refused MLB combo is counted
+    as provably MLB rather than disappearing into 'sport unresolved'."""
+    install_fake_api(monkeypatch, _pages(), metadata=_combo_metadata())
+    code, out, err = run(
+        ["deliver", "--out-dir", str(tmp_path / "payloads"), "--allow-stabilization"]
+    )
+    assert code == 0, err
+    lines = [line for line in out.splitlines() if line.startswith("ROUTER_COVERAGE ")]
+    assert any(line.startswith("ROUTER_COVERAGE sport=MLB ") for line in lines), out
+    mlb = next(line for line in lines if " sport=MLB " in line)
+    assert "refused_provably=2" in mlb
+    assert "eligible=0" in mlb and "newest_game_date=none" in mlb
