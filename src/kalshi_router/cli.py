@@ -437,6 +437,8 @@ def _run_deliver(args, client, out, err) -> int:
         return EXIT_API
 
     print(result.production.render(), file=out)
+    print("", file=out)
+    print(result.refusals.render(), file=out)
     counts = write_payloads(result.production_wagers, args.out_dir)
     print("", file=out)
     print("payloads written (rows per destination; rows are NOT printed):", file=out)
@@ -1033,6 +1035,8 @@ def main(argv: list[str] | None = None, stdout=None, stderr=None) -> int:
         if args.production:
             print("", file=out)
             print(result.production.render(), file=out)
+            print("", file=out)
+            print(result.refusals.render(), file=out)
         if args.shadow_wagers:
             print("", file=out)
             print(result.wagers.render(), file=out)
