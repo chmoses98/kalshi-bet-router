@@ -209,3 +209,30 @@ class RefusalProfile:
                 descriptor += f"; leg game dates={','.join(sorted(set(market.leg_game_dates)))}"
             lines.append(f"        series {descriptor}")
         return "\n".join(lines)
+
+
+def coverage_lines(wagers, refusals: RefusalProfile, sports) -> list[str]:
+    """One machine-readable line per destination sport, for a watcher OUTSIDE
+    this repository to compare with the destination's canonical ledger.
+
+    ``newest_game_date`` is the newest game date among the sport's eligible
+    orders -- what the destination's newest router-imported row must equal
+    once everything eligible has merged. ``refused_provably`` counts refused
+    orders whose every combo leg the classifier placed in this sport: wagers
+    that ARE this sport's and that this router is not delivering. Dates and
+    counts only.
+    """
+    lines = []
+    provable = refusals.combos_by_leg_sport()
+    for sport in sorted(sports):
+        own = [w for w in wagers if w.sport == sport]
+        newest_game = max((w.game_date for w in own), default="none")
+        newest_fill = max(
+            (utc_date(w.first_execution_time) or "" for w in own), default=""
+        ) or "none"
+        lines.append(
+            f"ROUTER_COVERAGE sport={sport} eligible={len(own)} "
+            f"newest_game_date={newest_game} newest_first_fill_utc={newest_fill} "
+            f"refused_provably={provable.get(sport, 0)}"
+        )
+    return lines

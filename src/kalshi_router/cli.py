@@ -447,6 +447,17 @@ def _run_deliver(args, client, out, err) -> int:
     for sport, rows in sorted(counts.items()):
         print(f"  {sport}: {rows}", file=out)
     print(f"import batch id: {ROUTER_IMPORT_BATCH_ID}", file=out)
+    # Read by edge-finder-api's production health gate (PROD-9): the router is
+    # the only party holding authenticated fills, so it is the only one that
+    # can say "these are newer than your ledger". One line per destination.
+    from .destination import DESTINATION_REPOS
+    from .refusals import coverage_lines
+
+    for line in coverage_lines(
+        result.production_wagers, result.refusals,
+        {sport.value for sport in DESTINATION_REPOS},
+    ):
+        print(line, file=out)
 
     print("", file=out)
     print(result.transport.render(), file=out)
