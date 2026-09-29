@@ -326,3 +326,31 @@ def test_end_to_end_with_the_nhl_destination_importers(tmp_path):
     for text in (r1.stdout, r2.stdout, s1.stdout, o.stdout, v.stdout):
         for secret in ("KXNHLGAME", "14.61", "0.57", "10.39", "ord-1"):
             assert secret not in text
+
+
+# ------------------------------------------------------------------ the live-sample probe (fake client)
+class _FakeClient:
+    def __init__(self, competition="Pro Hockey"):
+        self.competition = competition
+
+    def get_market(self, ticker):
+        return {"ticker": ticker, "event_ticker": ticker.rsplit("-", 1)[0], "status": "active"}
+
+    def get_event(self, event_ticker):
+        return {"event_ticker": event_ticker, "series_ticker": event_ticker.split("-")[0], "title": "Chicago at Vegas"}
+
+    def get_event_metadata(self, event_ticker):
+        return {"competition": self.competition, "competition_scope": "Game"}
+
+    def get_series(self, series_ticker):
+        return {"ticker": series_ticker, "title": "NHL", "category": "Sports", "tags": ["Hockey"]}
+
+
+def test_series_probe_nhl_live_sample_reports_counts_only():
+    from kalshi_router.cli import _nhl_live_sample
+    from kalshi_router.series_probe import NHL_LIVE_SAMPLE_MARKETS
+
+    text = _nhl_live_sample(_FakeClient(), LIVE_LIKE)
+    assert "NHL_LIVE_SAMPLE_ALL_NHL=true" in text and f"'NHL': {len(NHL_LIVE_SAMPLE_MARKETS)}" in text
+    assert not any(t in text for t in NHL_LIVE_SAMPLE_MARKETS)
+    assert "NHL_LIVE_SAMPLE_ALL_NHL=false" in _nhl_live_sample(_FakeClient("College Hockey"), LIVE_LIKE)
