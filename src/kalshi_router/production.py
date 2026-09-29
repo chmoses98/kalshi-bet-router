@@ -905,6 +905,44 @@ def to_cfb_import_row(wager: ProductionWager, import_batch_id: str) -> dict:
     }
 
 
+#: Exactly the fields NHL-edge-finder's ``nhl_accounted_wager.v1`` importer accepts (it refuses any other field).
+NHL_ROW_FIELDS = (
+    "source_bet_key", "import_batch_id", "entry_method", "game_date", "market_ticker", "side", "executed_at",
+    "contracts", "execution_price", "stake", "fees_paid", "fees_are_estimated", "venue",
+)
+
+
+def to_nhl_import_row(wager: ProductionWager, import_batch_id: str) -> dict:
+    """One wager in NHL-edge-finder's ``nhl_accounted_wager.v1`` shape (scripts/accounting/import_routed_wagers.py).
+
+    Written for THAT schema, not borrowed from CFB's emitter: the two happen to share vocabulary today, and an NHL row
+    must not change shape because CFB's does. ACCOUNTING ONLY -- the row says the owner placed an NHL bet on Kalshi.
+    It carries no model, recommendation or projection field (the NHL ledger refuses every one of them, and the NHL
+    models are RESEARCH_ONLY). ABSENT ON PURPOSE: ``wager_id`` (the destination mints it from ``source_bet_key``)
+    and any season (the NHL ledger is not partitioned, so nothing has to guess a season that spans two years).
+
+    Every economic value is the exchange's own: the quantity-weighted fill price, the fill quantity, the fees Kalshi
+    reported on those fills, and stake = contracts x price + fees -- never reconstructed or estimated.
+    """
+    if not isinstance(import_batch_id, str) or not import_batch_id.strip():
+        raise ValueError("an import batch id is required to build an NHL row")
+    return {
+        "source_bet_key": wager.source_key,
+        "import_batch_id": import_batch_id,
+        "entry_method": "IMPORTED_RECEIPT",
+        "game_date": wager.game_date,
+        "market_ticker": wager.market_ticker,
+        "side": wager.side,
+        "executed_at": seconds_to_rfc3339(wager.first_execution_time),
+        "contracts": float(wager.contracts),
+        "execution_price": float(wager.vwap_price),
+        "stake": float(wager.stake),
+        "fees_paid": float(wager.total_fees),
+        "fees_are_estimated": False,
+        "venue": "kalshi",
+    }
+
+
 def to_mlb_import_row(wager: ProductionWager, import_batch_id: str) -> dict:
     """MLB's row, behind the same signature the other two destinations use.
 
@@ -930,4 +968,5 @@ ROW_BUILDERS = {
     "MLB": to_mlb_import_row,
     "NFL": to_nfl_import_row,
     "CFB": to_cfb_import_row,
+    "NHL": to_nhl_import_row,
 }

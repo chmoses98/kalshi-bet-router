@@ -50,6 +50,31 @@ SERIES_TICKER_REGISTRY: dict[str, SeriesEntry] = {
     "KXNCAAFGAME": SeriesEntry(Sport.CFB, verified=False),
     "KXNCAAFSPREAD": SeriesEntry(Sport.CFB, verified=False),
     "KXNCAAFCHAMP": SeriesEntry(Sport.CFB, verified=False),
+    # --- NHL ---------------------------------------------------------------
+    # VERIFIED: every one of these was returned by Kalshi's own series listing in NHL-edge-finder's live discovery
+    # (run 36567059802, 2026-09-29: 75 NHL series; data/catalog/discovery_summary.json there); KXNHLGAME, KXNHLTOTAL
+    # and KXNHLSPREAD were also read back market-by-market as settled 2025-26 history (KXNHLTEAMTOTAL has none yet). Still the weakest evidence level:
+    # Kalshi's competition ("Pro Hockey") outranks this table and a disagreement is unresolvable, never an override.
+    "KXNHLGAME": SeriesEntry(Sport.NHL, verified=True),
+    "KXNHLSPREAD": SeriesEntry(Sport.NHL, verified=True),
+    "KXNHLTOTAL": SeriesEntry(Sport.NHL, verified=True),
+    "KXNHLTEAMTOTAL": SeriesEntry(Sport.NHL, verified=True),
+    "KXNHLOT": SeriesEntry(Sport.NHL, verified=True),
+    "KXNHLOVERTIME": SeriesEntry(Sport.NHL, verified=True),
+    "KXNHL1P": SeriesEntry(Sport.NHL, verified=True),
+    "KXNHL2P": SeriesEntry(Sport.NHL, verified=True),
+    "KXNHL3P": SeriesEntry(Sport.NHL, verified=True),
+    "KXNHL1PTOTAL": SeriesEntry(Sport.NHL, verified=True),
+    "KXNHL2PTOTAL": SeriesEntry(Sport.NHL, verified=True),
+    "KXNHL3PTOTAL": SeriesEntry(Sport.NHL, verified=True),
+    "KXNHL1PSPREAD": SeriesEntry(Sport.NHL, verified=True),
+    "KXNHL2PSPREAD": SeriesEntry(Sport.NHL, verified=True),
+    "KXNHL3PSPREAD": SeriesEntry(Sport.NHL, verified=True),
+    "KXNHLFIRSTGOAL": SeriesEntry(Sport.NHL, verified=True),
+    "KXNHLGOAL": SeriesEntry(Sport.NHL, verified=True),
+    "KXNHLPTS": SeriesEntry(Sport.NHL, verified=True),
+    "KXNHLAST": SeriesEntry(Sport.NHL, verified=True),
+    "KXNHLSAVES": SeriesEntry(Sport.NHL, verified=True),
     # --- Tennis ------------------------------------------------------------
     "KXATPMATCH": SeriesEntry(Sport.TENNIS, verified=False),
     "KXWTAMATCH": SeriesEntry(Sport.TENNIS, verified=False),

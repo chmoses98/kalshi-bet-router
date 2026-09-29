@@ -793,7 +793,7 @@ def test_a_sport_that_narrows_nothing_does_not_create_a_conflict():
 
 def test_a_collision_between_two_out_of_scope_sports_costs_nothing():
     structure = measure_competition_collisions(
-        _taxonomy({"finals": {"basketball", "hockey"}})
+        _taxonomy({"finals": {"basketball", "golf"}})
     )
 
     assert structure.no_routable_claimant == 1
@@ -815,7 +815,7 @@ def test_the_buckets_partition_the_collisions():
         _taxonomy({
             "a": {"baseball", "football"},
             "b": {"tennis", "golf"},
-            "c": {"basketball", "hockey"},
+            "c": {"basketball", "golf"},
             "d": {"baseball", "kabaddi"},
         })
     )
@@ -846,7 +846,7 @@ def test_a_contradiction_is_reported_as_the_case_FOR_the_gate():
     the gate is preventing a wrong answer rather than discarding a right one.
     That has to be visible in its own right."""
     structure = measure_competition_collisions(
-        _taxonomy({"mlb": {"basketball", "hockey"}})
+        _taxonomy({"mlb": {"basketball", "golf"}})
     )
 
     assert structure.direct_rule_would_decide == 1
@@ -1003,13 +1003,13 @@ def test_a_contested_competition_is_still_listed_and_marked():
 
     taxonomy = parse_filters_by_sport(make_taxonomy({
         "Baseball": ["Pro Baseball"],
-        "Hockey": ["Pro Baseball"],
+        "Basketball": ["Pro Baseball"],
     }))
     by_sport = competitions_under_our_sports(taxonomy)
 
     assert by_sport["baseball"] == ("pro baseball (contested)",)
-    # Hockey narrows to none of ours, so it is not listed as one of our sports.
-    assert "hockey" not in by_sport
+    # Basketball narrows to none of ours, so it is not listed as one of our sports.
+    assert "basketball" not in by_sport
 
 
 def test_the_listing_covers_only_sports_that_could_hold_one_of_our_four():
@@ -1034,9 +1034,9 @@ def _contested(claims):
 
 
 def test_an_out_of_scope_claimant_does_not_make_a_competition_ambiguous():
-    """The live catalogue files "Pro Baseball" under Baseball AND Hockey.
+    """The live catalogue files "Pro Baseball" under Baseball AND another sport.
 
-    Hockey holds none of our four -- `possible_sports` returns the EMPTY SET for
+    Basketball holds none of our four -- `possible_sports` returns the EMPTY SET for
     it, which this codebase already distinguishes from None. A claimant that
     positively cannot contain any of our leagues raises no question about WHICH
     of our leagues this is, so refusing on its account refuses on nothing.
@@ -1050,7 +1050,7 @@ def test_an_out_of_scope_claimant_does_not_make_a_competition_ambiguous():
     """
     taxonomy = _contested({
         "Baseball": ["Pro Baseball", "Japan NPB", "Korea KBO", "Mexico LMB"],
-        "Hockey": ["Pro Baseball", "Pro Hockey"],
+        "Basketball": ["Pro Baseball", "Pro Basketball (M)"],
     })
     verdict = classify_market(context(competition="Pro Baseball"), taxonomy=taxonomy)
 
@@ -1094,7 +1094,7 @@ def test_an_unknown_claimant_refuses_even_alongside_an_out_of_scope_one():
     """One unknown claimant is enough, whatever else is present."""
     taxonomy = _contested({
         "Baseball": ["Pro Baseball"],
-        "Hockey": ["Pro Baseball"],
+        "Basketball": ["Pro Baseball"],
         "Kabaddi": ["Pro Baseball"],
     })
     verdict = classify_market(context(competition="Pro Baseball"), taxonomy=taxonomy)
@@ -1105,7 +1105,7 @@ def test_an_unknown_claimant_refuses_even_alongside_an_out_of_scope_one():
 def test_only_out_of_scope_claimants_resolve_to_nothing():
     """No in-scope claimant means there is nothing to resolve TO."""
     taxonomy = _contested({
-        "Hockey": ["Winter Thing"],
+        "Basketball": ["Winter Thing"],
         "Basketball": ["Winter Thing"],
     })
     verdict = classify_market(context(competition="Winter Thing"), taxonomy=taxonomy)
@@ -1128,7 +1128,7 @@ def test_a_foreign_league_is_still_refused_not_called_one_of_ours(competition):
     taxonomy = _contested({
         "Baseball": ["Pro Baseball", "Japan NPB", "Korea KBO", "Mexico LMB"],
         "Football": ["Pro Football", "CFL", "NCAA Football"],
-        "Hockey": ["Pro Baseball"],
+        "Basketball": ["Pro Baseball"],
     })
     verdict = classify_market(context(competition=competition), taxonomy=taxonomy)
 
@@ -1140,8 +1140,8 @@ def test_a_foreign_league_is_still_refused_not_called_one_of_ours(competition):
 def test_an_in_scope_claimant_that_does_not_hold_the_direct_answer_refuses():
     """"One claimant is in scope somewhere" is NOT enough.
 
-    The direct rule says NFL. The claimants are Baseball and Hockey: exactly one
-    of them (Baseball) is technically in scope, and Hockey holds none of our
+    The direct rule says NFL. The claimants are Baseball and Basketball: exactly one
+    of them (Baseball) is technically in scope, and Basketball holds none of our
     four -- so a check that only counted in-scope claimants would stand the gate
     aside and return NFL. But the catalogue says nothing whatsoever in support
     of NFL here; Baseball holds MLB. Returning NFL would be returning an answer
@@ -1153,7 +1153,7 @@ def test_an_in_scope_claimant_that_does_not_hold_the_direct_answer_refuses():
     """
     taxonomy = _contested({
         "Baseball": ["Pro Football"],
-        "Hockey": ["Pro Football"],
+        "Basketball": ["Pro Football"],
     })
     verdict = classify_market(context(competition="Pro Football"), taxonomy=taxonomy)
 
@@ -1169,7 +1169,7 @@ def test_a_contested_competition_with_no_direct_answer_refuses():
     """
     taxonomy = _contested({
         "Baseball": ["Some New Series"],
-        "Hockey": ["Some New Series"],
+        "Basketball": ["Some New Series"],
     })
     verdict = classify_market(context(competition="Some New Series"), taxonomy=taxonomy)
 
@@ -1189,7 +1189,7 @@ def test_the_gate_really_consults_the_claimant_check(monkeypatch):
 
     taxonomy = _contested({
         "Baseball": ["Pro Baseball"],
-        "Hockey": ["Pro Baseball"],
+        "Basketball": ["Pro Baseball"],
     })
     assert classify_market(
         context(competition="Pro Baseball"), taxonomy=taxonomy

@@ -98,7 +98,7 @@ def test_the_payload_is_reproducible_regardless_of_input_order():
 
 # ------------------------------------------------------------- the destinations
 
-def test_production_routes_mlb_and_cfb_and_nothing_else():
+def test_production_routes_exactly_the_verified_destinations():
     """Adding a destination is a deliberate, verified act, not a default.
 
     CFB was activated once every part of its contract had been checked end to
@@ -111,9 +111,14 @@ def test_production_routes_mlb_and_cfb_and_nothing_else():
     importer resolves the week from the real schedule and refuses an ambiguous
     date, returns per-row receipts, and ships a whole-ledger validator for a
     branch that runs no CI. Its absence had silently cost week 2's wagers.
+
+    NHL was added on 2026-09-29 for ACCOUNTING ONLY (manually placed Kalshi
+    NHL wagers into NHL-edge-finder's accounting-data ledger), with its own
+    row builder, importer, settlement importer and validator -- and held for
+    observation (`auto_merge=False`) until the path is proven live.
     TENNIS has no row shape and no profile, and a sport with no profile is
     REFUSED."""
-    assert set(DESTINATION_REPOS) == {Sport.MLB, Sport.CFB, Sport.NFL}
+    assert set(DESTINATION_REPOS) == {Sport.MLB, Sport.CFB, Sport.NFL, Sport.NHL}
     assert Sport.TENNIS not in DESTINATION_REPOS
 
 

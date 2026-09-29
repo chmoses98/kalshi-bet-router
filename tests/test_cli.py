@@ -732,7 +732,7 @@ def test_the_series_probe_lists_what_else_lives_under_our_sports(monkeypatch, lo
         [[]],
         taxonomy=make_taxonomy({
             "Baseball": ["Pro Baseball", "NPB"],
-            "Hockey": ["Pro Baseball"],
+            "Basketball": ["Pro Baseball"],
         }),
     )
 

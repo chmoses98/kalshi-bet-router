@@ -187,9 +187,7 @@ class DestinationProfile:
 #: PRODUCTION activation, which is this entry plus the branch and importer
 #: facts the scheduled workflow could not previously express.
 #:
-#: NFL is deliberately absent. Its importer needs a real NFL week resolved from
-#: a schedule capture on a third branch, and nobody has verified that path for
-#: the scheduled job. A sport with no profile is REFUSED, not defaulted.
+#: A sport with no profile is REFUSED, not defaulted (Tennis has none).
 PROFILES: dict[Sport, DestinationProfile] = {
     Sport.MLB: DestinationProfile(
         sport=Sport.MLB,
@@ -374,6 +372,70 @@ PROFILES: dict[Sport, DestinationProfile] = {
             "ledger on handicap-data, importer on main: two checkouts",
             "one JSON file per record; the week is resolved by the destination from the real schedule",
             "handicap-data has no .github/, so the destination's own validator supplies the verdict",
+        ),
+    ),
+    #: *** NHL *** (2026-09-29)
+    #: ACCOUNTING ONLY: wagers the owner places by hand on Kalshi, recorded in NHL-edge-finder's routed-wager
+    #: ledger. The NHL research models (DATA_ONLY_V1/V2) have no part in it and remain RESEARCH_ONLY.
+    #:
+    #: Same shape as CFB -- a JSONL ledger on an ORPHAN `accounting-data` branch (README + the two ledger files,
+    #: deliberately none of the repository's model/research data), importer and validator on `main`, two
+    #: checkouts -- with two differences: the ledger is NOT season-partitioned (an NHL season spans two calendar
+    #: years and nothing should have to guess one), and it speaks router-settlement-economics.v2 from its first
+    #: row (no v1 history exists, so no amendment path is needed).
+    Sport.NHL: DestinationProfile(
+        sport=Sport.NHL,
+        repo="chmoses98/NHL-edge-finder",
+        ledger_branch="accounting-data",
+        code_branch="main",
+        wager_importer=(
+            "python",
+            "{code}/scripts/accounting/import_routed_wagers.py",
+            "--payload",
+            "{payload}",
+            "--base-dir",
+            "{work}",
+            "--receipts-out",
+            "{receipts}",
+        ),
+        settlement_importer=(
+            "python",
+            "{code}/scripts/accounting/import_routed_settlements.py",
+            "--payload",
+            "{payload}",
+            "--base-dir",
+            "{work}",
+            "--receipts-out",
+            "{receipts}",
+        ),
+        committable_prefixes=("data/accounting/",),
+        mergeable_paths=frozenset({
+            "data/accounting/wagers.jsonl",
+            "data/accounting/settlements.jsonl",
+        }),
+        # accounting-data carries no .github/, so no check run ever reports on a pull request into it; the
+        # destination's own validator supplies the verdict, exactly as for CFB and NFL.
+        ledger_branch_runs_ci=False,
+        ledger_validator=(
+            "python",
+            "{code}/scripts/accounting/validate_routed_ledger.py",
+            "--base-dir",
+            "{work}",
+            "--result-out",
+            "{receipts}",
+        ),
+        row_identity_field="source_bet_key",
+        requires_season=False,
+        settlement_economics="router-settlement-economics.v2",
+        # OBSERVATION PERIOD until the full path is proven end to end against the live destination (classifier on
+        # real NHL markets, import, identical re-import DUPLICATE_NOOP, settlement, orphan refusal, validator,
+        # containment, reconciliation, a production dry run). The gate still runs and still prints its verdict.
+        auto_merge=False,
+        notes=(
+            "ACCOUNTING ONLY: manually placed Kalshi NHL wagers; no NHL model is involved and none has authority",
+            "ledger on accounting-data (orphan: README + data/accounting/ only), importer and validator on main",
+            "not season-partitioned: data/accounting/wagers.jsonl and data/accounting/settlements.jsonl",
+            "accounting-data has no .github/, so the destination's own validator supplies the verdict",
         ),
     ),
 }
