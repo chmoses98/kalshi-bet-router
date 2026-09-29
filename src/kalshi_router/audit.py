@@ -48,6 +48,7 @@ from .models import (
     group_by_order,
     normalize_fill,
 )
+from .refusals import RefusalProfile
 from .reconcile import (
     ReconciliationReport,
     exchange_position_view,
@@ -124,6 +125,8 @@ class AuditResult:
     #: SENSITIVE: the eligible wagers themselves. Written to a payload file for
     #: the destination importer and never rendered.
     production_wagers: tuple = ()
+    #: What the orders refused for their sport ARE, without naming them.
+    refusals: RefusalProfile = field(default_factory=RefusalProfile)
     #: SENSITIVE: the normalized settlements this run walked. Each carries a
     #: ticker and a payout, so they are handled exactly like the wagers above --
     #: written to a payload file for a destination importer, never rendered.
@@ -479,6 +482,7 @@ def run_audit(
     # resolve every one of them and never has to skip a candidate for budget.
     production_diagnostics = ProductionDiagnostics()
     production_wagers: list = []
+    refusal_profile = RefusalProfile()
     if backfill_window is not None and replay is not None:
         # The historical catch-up path. Separate from the production branch
         # below rather than another flag on it: the one that can reach
@@ -498,6 +502,7 @@ def run_audit(
             now,
             allow_stabilization,
             include_pre_cutover,
+            refusals=refusal_profile,
         )
 
     finality_evidence = (
@@ -515,6 +520,7 @@ def run_audit(
         finality=finality_evidence,
         production=production_diagnostics,
         production_wagers=tuple(production_wagers),
+        refusals=refusal_profile,
         settlements=tuple(settlements),
         accounting=accounting,
         coverage=coverage,
@@ -767,7 +773,7 @@ def evaluate_window(client, resolver, replay, taxonomy, now, window):
 
 def _evaluate_production(
     client, resolver, replay, taxonomy, now, allow_stabilization=False,
-    include_pre_cutover=False,
+    include_pre_cutover=False, refusals=None,
 ):
     """Apply the production filter, resolving metadata only where it matters.
 
@@ -834,7 +840,80 @@ def _evaluate_production(
     for key, count in unresolved_reasons.items():
         field = UNRESOLVED_COUNTERS.get(key, "unresolved_reason_unavailable")
         setattr(diagnostics, field, getattr(diagnostics, field) + count)
+
+    # "sport unresolved: 14" told nobody whether fourteen MLB wagers were
+    # missing from the ledger or fourteen wagers were correctly refused. The
+    # profile says what each refused market IS -- combo or single, how its
+    # legs classify, what its series is filed as -- and names none of them.
+    if refusals is not None:
+        _profile_refusals(
+            refusals, resolver, taxonomy, candidates, sports, include_pre_cutover
+        )
     return wagers, diagnostics
+
+
+def _profile_refusals(refusals, resolver, taxonomy, candidates, sports,
+                      include_pre_cutover=False):
+    """Fill ``refusals`` with one profile per market refused for its sport."""
+    from .classify import classify_market
+    from .refusals import (
+        RefusedMarketProfile,
+        combo_legs,
+        describe_series,
+        is_combo,
+        leg_market_ticker,
+        utc_date,
+    )
+    from .wager import resolve_game_date
+
+    by_ticker: dict[str, RefusedMarketProfile] = {}
+    for order in candidates:
+        verdict = sports.get(order.ticker)
+        if verdict not in ("UNRESOLVED", "OTHER"):
+            continue
+        if not include_pre_cutover and not is_after_cutover(order):
+            continue
+        profile = by_ticker.get(order.ticker)
+        if profile is None:
+            context = resolver.resolve(order.ticker)
+            try:
+                classification = classify_market(context, taxonomy=taxonomy)
+                reason = (classification.unresolved_reason.value
+                          if classification.unresolved_reason is not None
+                          else "positively another sport or category")
+            except KalshiRouterError:
+                reason = "classifier_error"
+            category, title, tags = describe_series(context.series)
+            profile = RefusedMarketProfile(
+                verdict=verdict, reason=reason, series_category=category,
+                series_title=title, series_tags=tags,
+            )
+            if is_combo(context.market):
+                profile.combo = True
+                legs = combo_legs(context.market)
+                profile.legs_stated = len(legs)
+                leg_dates = []
+                for leg in legs:
+                    ticker = leg_market_ticker(leg)
+                    if ticker is None:
+                        profile.leg_sports["no leg ticker"] = (
+                            profile.leg_sports.get("no leg ticker", 0) + 1)
+                        continue
+                    leg_context = resolver.resolve(ticker)
+                    try:
+                        leg_sport = classify_market(leg_context, taxonomy=taxonomy).sport.value
+                    except KalshiRouterError:
+                        leg_sport = "classifier_error"
+                    profile.leg_sports[leg_sport] = profile.leg_sports.get(leg_sport, 0) + 1
+                    date, _ = resolve_game_date(leg_context)
+                    if date:
+                        leg_dates.append(date)
+                profile.leg_game_dates = tuple(leg_dates)
+            by_ticker[order.ticker] = profile
+            refusals.markets.append(profile)
+        profile.orders += 1
+        day = utc_date(order.first_execution_time) or "date unknown"
+        profile.order_dates[day] = profile.order_dates.get(day, 0) + 1
 
 
 def _classification_order(tickers: list[str], replay) -> list[str]:
