@@ -101,6 +101,19 @@ def test_recent_window_is_deduplicated_and_bounded():
     assert bounded["count"] == prh.RECENT_LIMIT
 
 
+def test_raw_runner_log_form_is_parsed():
+    """The REST job log has `TIMESTAMP line` rows and rewrites workflow commands to `##[error]...`."""
+    raw = "\n".join([
+        "2026-10-02T23:10:11.1234567Z HEALTH=blocked",
+        "2026-10-02T23:10:11.2234567Z ROUTER_STATUS_JSON=" + json.dumps(STATUS),
+        "2026-10-02T23:10:16.5936254Z ##[error]MLB: could not open a pull request (HTTP 403). The wagers are on kalshi-router/MLB but are NOT recorded.",
+        "2026-10-02T23:10:16.5936254Z ##[warning]BLOCKED -- a wager was placed that this system cannot record.",
+    ])
+    p = prh.parse_log(raw)
+    assert p["health"] == "blocked" and p["status"]["payload_rows"] == {"NFL": 2, "MLB": 1}
+    assert p["errors"] == [{"sport": "MLB", "message": "could not open a pull request (HTTP 403). The wagers are on kalshi-router/MLB but are NOT recorded."}]
+
+
 def test_publisher_scrubs_anything_wager_shaped():
     leaky = LOG + "\n::error::NFL: refused KXNFLSPREAD-26OCT01PITCLE-CLE10 key kalshi:v1:0123456789abcdef stake $74.99"
     health, recent = prh.build_documents(deliver_run=RUN, deliver_parsed=prh.parse_log(leaky), settle_run=None,

@@ -77,8 +77,10 @@ def parse_log(text: str) -> dict:
                 out["deliveries"].append(json.loads(line[len("ROUTER_DELIVERY_JSON="):]))
             except json.JSONDecodeError:
                 out["errors"].append({"sport": None, "message": "unparseable ROUTER_DELIVERY_JSON line"})
-        elif line.startswith("::error::"):
-            body = line[len("::error::"):]
+        elif line.startswith("::error::") or line.startswith("##[error]"):
+            # A workflow command reaches the raw job log rewritten by the runner (`##[error]...`); the
+            # `::error::` form survives only in the step's own echo. Both mean the same thing.
+            body = line.split("]", 1)[1] if line.startswith("##[") else line[len("::error::"):]
             m = re.match(r"([A-Z]+):\s*(.*)", body)
             sport = m.group(1) if m and m.group(1) in SPORTS else None
             out["errors"].append({"sport": sport, "message": scrub(m.group(2) if m else body)})
@@ -244,6 +246,22 @@ def fetch_runs(repo: str, workflow: str, limit: int = 3) -> list[dict]:
 
 
 def fetch_log(repo: str, run_id: str) -> str:
+    """Every job's raw log for one run, concatenated. Per job through the REST API first (one plain-text
+    document per job, which `gh api` follows through the storage redirect); `gh run view --log` as the
+    fallback. An unreadable log yields an empty string, which the builder reports as an unknown state
+    rather than inventing one."""
+    texts: list[str] = []
+    try:
+        jobs = json.loads(gh("api", f"repos/{repo}/actions/runs/{run_id}/jobs", "--jq", "[.jobs[].id]"))
+        for job_id in jobs:
+            try:
+                texts.append(gh("api", f"repos/{repo}/actions/jobs/{job_id}/logs"))
+            except subprocess.CalledProcessError as exc:
+                texts.append(exc.stdout or "")
+    except (subprocess.CalledProcessError, json.JSONDecodeError):
+        pass
+    if any(t.strip() for t in texts):
+        return "\n".join(texts)
     try:
         return gh("run", "view", "--repo", repo, str(run_id), "--log")
     except subprocess.CalledProcessError as exc:
