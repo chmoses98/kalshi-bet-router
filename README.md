@@ -98,7 +98,11 @@ are never used.
 
 ## 5. Supported classifications
 
-`MLB`, `NFL`, `CFB`, `TENNIS`, `OTHER`, `UNRESOLVED`.
+`MLB`, `NFL`, `CFB`, `NHL`, `NBA`, `SOCCER`, `TENNIS`, `OTHER`, `UNRESOLVED` (NHL added 2026-09-29; NBA, SOCCER
+and a TENNIS destination 2026-10-02 — see `docs/DESTINATIONS.md`). Every one of the seven has a production
+destination profile. App-facing health is published to the `app-data` branch — see `docs/APP_HEALTH.md` — and
+the Edge Finder app contract this repository authors lives in `contract/edge_finder_contract/` with its
+integration guide in `docs/EDGE_FINDER_APP_CONTRACT.md`.
 
 `OTHER` and `UNRESOLVED` are **not** synonyms:
 

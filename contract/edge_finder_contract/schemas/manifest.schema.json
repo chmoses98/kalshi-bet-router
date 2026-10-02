@@ -1,0 +1,177 @@
+{
+  "$id": "https://edge-finder.app/schemas/edge_finder.app.v1/manifest",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "commit_sha": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "counts": {
+      "additionalProperties": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "type": "object"
+    },
+    "files": {
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "bytes": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "count": {
+            "description": "items in the file, when it is a collection",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "kind": {
+            "enum": [
+              "manifest",
+              "events",
+              "markets",
+              "model_prices",
+              "recommendations",
+              "theses",
+              "wagers",
+              "settlements",
+              "runs",
+              "health",
+              "board",
+              "event_detail",
+              "performance",
+              "router_health",
+              "recent_deliveries",
+              "sports_registry"
+            ],
+            "type": "string"
+          },
+          "path": {
+            "description": "relative to the app root",
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "bytes",
+          "count",
+          "kind",
+          "path",
+          "sha256"
+        ],
+        "type": "object"
+      },
+      "type": "object"
+    },
+    "freshness": {
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "as_of": {
+            "description": "ISO-8601 UTC, Z suffix, or null",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "enum": [
+              "FRESH",
+              "AGING",
+              "STALE",
+              "UNKNOWN"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "as_of",
+          "status"
+        ],
+        "type": "object"
+      },
+      "type": "object"
+    },
+    "generated_at": {
+      "description": "ISO-8601 UTC, Z suffix",
+      "format": "date-time",
+      "type": "string"
+    },
+    "kind": {
+      "const": "manifest"
+    },
+    "model_version": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "run_id": {
+      "description": "a contract id",
+      "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "edge_finder.app.v1"
+    },
+    "source_branch": {
+      "type": "string"
+    },
+    "source_repo": {
+      "type": "string"
+    },
+    "sport": {
+      "description": "canonical sport",
+      "enum": [
+        "MLB",
+        "CFB",
+        "NFL",
+        "NBA",
+        "NHL",
+        "SOCCER",
+        "TENNIS"
+      ],
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "SUCCESS",
+        "PARTIAL"
+      ],
+      "type": "string"
+    },
+    "warnings": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "commit_sha",
+    "counts",
+    "files",
+    "freshness",
+    "generated_at",
+    "kind",
+    "model_version",
+    "run_id",
+    "schema_version",
+    "source_branch",
+    "source_repo",
+    "sport",
+    "status",
+    "warnings"
+  ],
+  "title": "manifest",
+  "type": "object"
+}

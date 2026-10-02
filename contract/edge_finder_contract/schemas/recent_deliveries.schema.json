@@ -1,0 +1,188 @@
+{
+  "$id": "https://edge-finder.app/schemas/edge_finder.app.v1/recent_deliveries",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "count": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "generated_at": {
+      "description": "ISO-8601 UTC, Z suffix",
+      "format": "date-time",
+      "type": "string"
+    },
+    "items": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "attempt": {
+            "description": "",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "destination": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error_message": {
+            "description": "never a wager, price or ticker",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "first_failed_at": {
+            "description": "ISO-8601 UTC, Z suffix, or null",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_attempt_at": {
+            "description": "ISO-8601 UTC, Z suffix, or null",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "retry_status": {
+            "enum": [
+              "WILL_RETRY",
+              "NEEDS_ATTENTION",
+              "RESOLVED",
+              "NOT_APPLICABLE",
+              null
+            ],
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rows": {
+            "description": "",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "run_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sport": {
+            "description": "canonical sport",
+            "enum": [
+              "MLB",
+              "CFB",
+              "NFL",
+              "NBA",
+              "NHL",
+              "SOCCER",
+              "TENNIS"
+            ],
+            "type": "string"
+          },
+          "started_at": {
+            "description": "ISO-8601 UTC, Z suffix, or null",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "enum": [
+              "DELIVERED",
+              "MERGED",
+              "FAILED",
+              "REFUSED",
+              "DRY_RUN",
+              "NO_OP",
+              "SETTLED",
+              "PARTIAL"
+            ],
+            "type": "string"
+          },
+          "wager_ids": {
+            "description": "opaque source keys of refused rows, when the receipt names them",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "attempt",
+          "destination",
+          "error_message",
+          "error_type",
+          "first_failed_at",
+          "last_attempt_at",
+          "retry_status",
+          "rows",
+          "run_id",
+          "run_url",
+          "sport",
+          "started_at",
+          "status",
+          "wager_ids"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "kind": {
+      "const": "recent_deliveries"
+    },
+    "run_id": {
+      "description": "a contract id",
+      "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "edge_finder.app.v1"
+    },
+    "sport": {
+      "enum": [
+        "MLB",
+        "CFB",
+        "NFL",
+        "NBA",
+        "NHL",
+        "SOCCER",
+        "TENNIS",
+        "ALL"
+      ],
+      "type": "string"
+    }
+  },
+  "required": [
+    "count",
+    "generated_at",
+    "items",
+    "kind",
+    "run_id",
+    "schema_version",
+    "sport"
+  ],
+  "title": "recent_deliveries",
+  "type": "object"
+}

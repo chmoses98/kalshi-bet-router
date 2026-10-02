@@ -1,0 +1,316 @@
+{
+  "$id": "https://edge-finder.app/schemas/edge_finder.app.v1/board",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "bet_authority": {
+      "description": "who may act on this: a model promotion level, or MANUAL/ASSISTED when a person decides",
+      "enum": [
+        "RESEARCH_ONLY",
+        "SHADOW",
+        "LIMITED",
+        "TRUSTED",
+        "MANUAL",
+        "ASSISTED"
+      ],
+      "type": "string"
+    },
+    "count": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "generated_at": {
+      "description": "ISO-8601 UTC, Z suffix",
+      "format": "date-time",
+      "type": "string"
+    },
+    "items": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "away_participant": {
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "competition": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "data_freshness": {
+            "enum": [
+              "FRESH",
+              "AGING",
+              "STALE",
+              "UNKNOWN"
+            ],
+            "type": "string"
+          },
+          "detail_path": {
+            "description": "app-root-relative path of the event_detail file",
+            "type": "string"
+          },
+          "event_id": {
+            "description": "a contract id",
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": "string"
+          },
+          "health_flags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "home_participant": {
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "league": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "market_captured_at": {
+            "description": "ISO-8601 UTC, Z suffix, or null",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "markets_available": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "markets_priced": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "model_generated_at": {
+            "description": "ISO-8601 UTC, Z suffix, or null",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "participants": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "display_name": {
+                  "type": "string"
+                },
+                "participant_id": {
+                  "description": "a contract id",
+                  "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+                  "type": "string"
+                },
+                "participant_type": {
+                  "enum": [
+                    "TEAM",
+                    "PLAYER",
+                    "PAIR"
+                  ],
+                  "type": "string"
+                },
+                "short_name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "display_name",
+                "participant_id",
+                "participant_type",
+                "short_name"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "recommendations_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "start_time_utc": {
+            "description": "ISO-8601 UTC, Z suffix",
+            "format": "date-time",
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "top_recommendations": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "authority": {
+                  "description": "who may act on this: a model promotion level, or MANUAL/ASSISTED when a person decides",
+                  "enum": [
+                    "RESEARCH_ONLY",
+                    "SHADOW",
+                    "LIMITED",
+                    "TRUSTED",
+                    "MANUAL",
+                    "ASSISTED"
+                  ],
+                  "type": "string"
+                },
+                "current_price": {
+                  "description": "",
+                  "maximum": 1,
+                  "minimum": 0,
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "edge": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "fair_probability": {
+                  "description": "",
+                  "maximum": 1,
+                  "minimum": 0,
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "market_description": {
+                  "type": "string"
+                },
+                "market_id": {
+                  "description": "a contract id",
+                  "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+                  "type": "string"
+                },
+                "recommendation_id": {
+                  "description": "a contract id",
+                  "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+                  "type": "string"
+                },
+                "research_only": {
+                  "description": "",
+                  "type": "boolean"
+                },
+                "selection": {
+                  "description": "the Kalshi contract side",
+                  "enum": [
+                    "YES",
+                    "NO"
+                  ],
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "authority",
+                "current_price",
+                "edge",
+                "fair_probability",
+                "market_description",
+                "market_id",
+                "recommendation_id",
+                "research_only",
+                "selection",
+                "status"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "wagers_count": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "away_participant",
+          "competition",
+          "data_freshness",
+          "detail_path",
+          "event_id",
+          "health_flags",
+          "home_participant",
+          "league",
+          "market_captured_at",
+          "markets_available",
+          "markets_priced",
+          "model_generated_at",
+          "participants",
+          "recommendations_count",
+          "start_time_utc",
+          "status",
+          "top_recommendations",
+          "wagers_count"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "kind": {
+      "const": "board"
+    },
+    "overall_status": {
+      "enum": [
+        "HEALTHY",
+        "DEGRADED",
+        "STALE",
+        "UNAVAILABLE",
+        "RESEARCH_ONLY"
+      ],
+      "type": "string"
+    },
+    "run_id": {
+      "description": "a contract id",
+      "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "edge_finder.app.v1"
+    },
+    "sport": {
+      "description": "canonical sport",
+      "enum": [
+        "MLB",
+        "CFB",
+        "NFL",
+        "NBA",
+        "NHL",
+        "SOCCER",
+        "TENNIS"
+      ],
+      "type": "string"
+    }
+  },
+  "required": [
+    "bet_authority",
+    "count",
+    "generated_at",
+    "items",
+    "kind",
+    "overall_status",
+    "run_id",
+    "schema_version",
+    "sport"
+  ],
+  "title": "board",
+  "type": "object"
+}

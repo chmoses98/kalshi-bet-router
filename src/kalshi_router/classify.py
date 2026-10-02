@@ -252,17 +252,21 @@ LEAGUE_TOKENS: dict[Sport, tuple[str, ...]] = {
     # The NHL only by name. The bare word "hockey" is an AMBIGUOUS family below (the KHL, SHL, college hockey are
     # hockey too), never NHL evidence on its own.
     Sport.NHL: ("nhl", "national hockey league", "pro hockey"),
+    # The NBA only by name; "basketball" alone is an AMBIGUOUS family below (WNBA, college).
+    Sport.NBA: ("nba", "national basketball association", "pro basketball (m)"),
+    # Soccer: the exchange's own "Soccer" tag, plus competition names that belong to no other sport.
+    Sport.SOCCER: ("soccer", "mls", "uefa", "la liga", "bundesliga", "ligue 1", "epl", "english premier league",
+                   "fifa", "concacaf", "conmebol", "liga mx", "brasileirao", "eredivisie", "nwsl"),
     Sport.TENNIS: ("tennis", "atp", "wta"),
 }
 
 AMBIGUOUS_FAMILY_TOKENS: tuple[str, ...] = (
-    "football", "american football", "baseball", "college sports", "ncaa", "hockey", "ice hockey",
+    "football", "american football", "baseball", "college sports", "ncaa", "hockey", "ice hockey", "basketball",
 )
 
 NON_TARGET_SPORT_TOKENS: tuple[str, ...] = (
-    "basketball", "nba", "wnba", "ncaab", "college basketball",
-    "soccer", "football club", "premier league", "epl", "uefa", "mls", "la liga",
-    "bundesliga", "serie a", "ligue 1", "world cup",
+    # Basketball that is positively NOT the NBA. ("basketball" alone is an ambiguous family; "nba" is a league token.)
+    "wnba", "ncaab", "college basketball",
     # Hockey that is positively NOT the NHL. ("hockey" alone is an ambiguous family; "nhl" is a league token.)
     "college hockey", "ncaa hockey", "khl", "shl", "ahl", "pwhl", "field hockey",
     "golf", "pga", "liv golf", "masters tournament",

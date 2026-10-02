@@ -102,12 +102,14 @@ def test_audit_classifies_every_sport_from_competition_metadata(signer):
         Sport.NFL: 1,
         Sport.CFB: 1,
         Sport.NHL: 0,
+        Sport.NBA: 1,
+        Sport.SOCCER: 0,
         Sport.TENNIS: 1,
-        Sport.OTHER: 1,
+        Sport.OTHER: 0,
         Sport.UNRESOLVED: 1,
     }
     assert sum(report.classification_counts.values()) == report.unique_fills
-    assert report.supported_sport_count == 5
+    assert report.supported_sport_count == 6
     assert report.classification_failures == 0
     assert report.buy_fills == 6 and report.sell_fills == 1
     # Canonical outcome_side: selling NO leaves the account positioned for YES,

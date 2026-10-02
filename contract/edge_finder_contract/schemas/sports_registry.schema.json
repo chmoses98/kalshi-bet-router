@@ -1,0 +1,132 @@
+{
+  "$id": "https://edge-finder.app/schemas/edge_finder.app.v1/sports_registry",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "generated_at": {
+      "description": "ISO-8601 UTC, Z suffix",
+      "format": "date-time",
+      "type": "string"
+    },
+    "kind": {
+      "const": "sports_registry"
+    },
+    "router": {
+      "additionalProperties": false,
+      "properties": {
+        "app_root": {
+          "description": "path of the app directory in that branch",
+          "type": "string"
+        },
+        "branch": {
+          "type": "string"
+        },
+        "notes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "raw_base_url": {
+          "description": "https://raw.githubusercontent.com/<repo>/<branch>/<app_root>",
+          "type": "string"
+        },
+        "repo": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "ACTIVE",
+            "PLANNED"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "app_root",
+        "branch",
+        "notes",
+        "raw_base_url",
+        "repo",
+        "status"
+      ],
+      "type": "object"
+    },
+    "run_id": {
+      "description": "a contract id",
+      "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "edge_finder.app.v1"
+    },
+    "sport": {
+      "enum": [
+        "MLB",
+        "CFB",
+        "NFL",
+        "NBA",
+        "NHL",
+        "SOCCER",
+        "TENNIS",
+        "ALL"
+      ],
+      "type": "string"
+    },
+    "sports": {
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "app_root": {
+            "description": "path of the app directory in that branch",
+            "type": "string"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "raw_base_url": {
+            "description": "https://raw.githubusercontent.com/<repo>/<branch>/<app_root>",
+            "type": "string"
+          },
+          "repo": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "ACTIVE",
+              "PLANNED"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "app_root",
+          "branch",
+          "notes",
+          "raw_base_url",
+          "repo",
+          "status"
+        ],
+        "type": "object"
+      },
+      "type": "object"
+    }
+  },
+  "required": [
+    "generated_at",
+    "kind",
+    "router",
+    "run_id",
+    "schema_version",
+    "sport",
+    "sports"
+  ],
+  "title": "sports_registry",
+  "type": "object"
+}

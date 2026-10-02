@@ -1,0 +1,688 @@
+{
+  "$id": "https://edge-finder.app/schemas/edge_finder.app.v1/performance",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "as_of": {
+      "description": "ISO-8601 UTC, Z suffix",
+      "format": "date-time",
+      "type": "string"
+    },
+    "bankroll": {
+      "additionalProperties": false,
+      "properties": {
+        "available": {
+          "description": "",
+          "type": "boolean"
+        },
+        "basis": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "history": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "as_of": {
+                "description": "ISO-8601 UTC, Z suffix",
+                "format": "date-time",
+                "type": "string"
+              },
+              "balance": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "as_of",
+              "balance"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "available",
+        "basis",
+        "history"
+      ],
+      "type": "object"
+    },
+    "by_market_family": {
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "fees": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "gross_payout": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "lost": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "net_pnl": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "open_exposure": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "pending": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "push": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "roi": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "scalar": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "settled": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "settled_with_economics": {
+            "description": "settlements whose money fields are established",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stake": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "unknown": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "void": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "wagers": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "won": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "fees",
+          "gross_payout",
+          "lost",
+          "net_pnl",
+          "open_exposure",
+          "pending",
+          "push",
+          "roi",
+          "scalar",
+          "settled",
+          "settled_with_economics",
+          "stake",
+          "unknown",
+          "void",
+          "wagers",
+          "won"
+        ],
+        "type": "object"
+      },
+      "type": "object"
+    },
+    "by_month": {
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "fees": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "gross_payout": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "lost": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "net_pnl": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "open_exposure": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "pending": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "push": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "roi": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "scalar": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "settled": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "settled_with_economics": {
+            "description": "settlements whose money fields are established",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stake": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "unknown": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "void": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "wagers": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "won": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "fees",
+          "gross_payout",
+          "lost",
+          "net_pnl",
+          "open_exposure",
+          "pending",
+          "push",
+          "roi",
+          "scalar",
+          "settled",
+          "settled_with_economics",
+          "stake",
+          "unknown",
+          "void",
+          "wagers",
+          "won"
+        ],
+        "type": "object"
+      },
+      "type": "object"
+    },
+    "by_source": {
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "fees": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "gross_payout": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "lost": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "net_pnl": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "open_exposure": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "pending": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "push": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "roi": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "scalar": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "settled": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "settled_with_economics": {
+            "description": "settlements whose money fields are established",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stake": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "unknown": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "void": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "wagers": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "won": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "fees",
+          "gross_payout",
+          "lost",
+          "net_pnl",
+          "open_exposure",
+          "pending",
+          "push",
+          "roi",
+          "scalar",
+          "settled",
+          "settled_with_economics",
+          "stake",
+          "unknown",
+          "void",
+          "wagers",
+          "won"
+        ],
+        "type": "object"
+      },
+      "type": "object"
+    },
+    "clv": {
+      "additionalProperties": false,
+      "properties": {
+        "available": {
+          "description": "",
+          "type": "boolean"
+        },
+        "mean_clv": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "wagers_with_clv": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "available",
+        "mean_clv",
+        "wagers_with_clv"
+      ],
+      "type": "object"
+    },
+    "data_completeness": {
+      "additionalProperties": {
+        "type": [
+          "integer",
+          "number",
+          "string",
+          "boolean",
+          "null"
+        ]
+      },
+      "type": "object"
+    },
+    "generated_at": {
+      "description": "ISO-8601 UTC, Z suffix",
+      "format": "date-time",
+      "type": "string"
+    },
+    "kind": {
+      "const": "performance"
+    },
+    "notes": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "pending_wagers": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "kalshi_ticker": {
+            "type": "string"
+          },
+          "market_id": {
+            "description": "a contract id",
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": "string"
+          },
+          "placed_at": {
+            "description": "ISO-8601 UTC, Z suffix",
+            "format": "date-time",
+            "type": "string"
+          },
+          "selection": {
+            "description": "the Kalshi contract side",
+            "enum": [
+              "YES",
+              "NO"
+            ],
+            "type": "string"
+          },
+          "stake": {
+            "type": "number"
+          },
+          "wager_id": {
+            "description": "a contract id",
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kalshi_ticker",
+          "market_id",
+          "placed_at",
+          "selection",
+          "stake",
+          "wager_id"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "recent_results": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "kalshi_ticker": {
+            "type": "string"
+          },
+          "market_id": {
+            "description": "a contract id",
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": "string"
+          },
+          "net_pnl": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "result": {
+            "type": "string"
+          },
+          "selection": {
+            "description": "the Kalshi contract side",
+            "enum": [
+              "YES",
+              "NO"
+            ],
+            "type": "string"
+          },
+          "settled_at": {
+            "description": "ISO-8601 UTC, Z suffix",
+            "format": "date-time",
+            "type": "string"
+          },
+          "settlement_id": {
+            "description": "a contract id",
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": "string"
+          },
+          "wager_id": {
+            "description": "a contract id",
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kalshi_ticker",
+          "market_id",
+          "net_pnl",
+          "result",
+          "selection",
+          "settled_at",
+          "settlement_id",
+          "wager_id"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "recommended_vs_wagered": {
+      "additionalProperties": false,
+      "properties": {
+        "recommendations": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "wagers_linked_to_recommendation": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "wagers_unlinked": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "recommendations",
+        "wagers_linked_to_recommendation",
+        "wagers_unlinked"
+      ],
+      "type": "object"
+    },
+    "run_id": {
+      "description": "a contract id",
+      "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "edge_finder.app.v1"
+    },
+    "sport": {
+      "description": "canonical sport",
+      "enum": [
+        "MLB",
+        "CFB",
+        "NFL",
+        "NBA",
+        "NHL",
+        "SOCCER",
+        "TENNIS"
+      ],
+      "type": "string"
+    },
+    "totals": {
+      "additionalProperties": false,
+      "properties": {
+        "fees": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "gross_payout": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "lost": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "net_pnl": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "open_exposure": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "pending": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "push": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "roi": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "scalar": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "settled": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "settled_with_economics": {
+          "description": "settlements whose money fields are established",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "stake": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "unknown": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "void": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "wagers": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "won": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "fees",
+        "gross_payout",
+        "lost",
+        "net_pnl",
+        "open_exposure",
+        "pending",
+        "push",
+        "roi",
+        "scalar",
+        "settled",
+        "settled_with_economics",
+        "stake",
+        "unknown",
+        "void",
+        "wagers",
+        "won"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "as_of",
+    "bankroll",
+    "by_market_family",
+    "by_month",
+    "by_source",
+    "clv",
+    "data_completeness",
+    "generated_at",
+    "kind",
+    "notes",
+    "pending_wagers",
+    "recent_results",
+    "recommended_vs_wagered",
+    "run_id",
+    "schema_version",
+    "sport",
+    "totals"
+  ],
+  "title": "performance",
+  "type": "object"
+}

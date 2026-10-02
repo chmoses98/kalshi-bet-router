@@ -63,7 +63,7 @@ def test_cfb_is_activated_in_production():
 
 
 def test_a_sport_with_no_profile_is_refused_not_defaulted():
-    for sport in ("TENNIS", "CRICKET", ""):
+    for sport in ("GOLF", "CRICKET", ""):
         with pytest.raises(UnknownDestinationError):
             profile_for(sport)
         assert destination_repo_for(sport) is None
@@ -218,7 +218,7 @@ def test_the_mergeable_paths_are_exact_and_per_destination():
 def test_an_unknown_sports_mergeable_set_is_empty_so_the_gate_refuses():
     """Empty makes every changed file unexpected, which is the correct answer
     for a destination nobody has described."""
-    assert mergeable_paths_for("TENNIS") == frozenset()
+    assert mergeable_paths_for("GOLF") == frozenset()
 
 
 def test_every_destination_gets_a_router_owned_branch_name():
@@ -268,7 +268,7 @@ def test_the_profile_script_lists_exactly_what_is_routed():
 
 
 def test_the_profile_script_refuses_an_unknown_destination():
-    result = run_profile("TENNIS")
+    result = run_profile("GOLF")
     assert result.returncode == 2
     assert not result.stdout.strip()
     assert "refuses rather than defaulting" in result.stderr

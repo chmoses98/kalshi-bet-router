@@ -187,7 +187,7 @@ class DestinationProfile:
 #: PRODUCTION activation, which is this entry plus the branch and importer
 #: facts the scheduled workflow could not previously express.
 #:
-#: A sport with no profile is REFUSED, not defaulted (Tennis has none).
+#: A sport with no profile is REFUSED, not defaulted.
 PROFILES: dict[Sport, DestinationProfile] = {
     Sport.MLB: DestinationProfile(
         sport=Sport.MLB,
@@ -439,6 +439,67 @@ PROFILES: dict[Sport, DestinationProfile] = {
         ),
     ),
 }
+
+
+def _shared_ledger_profile(sport: Sport, repo: str, notes: tuple[str, ...]) -> DestinationProfile:
+    """A destination that imports through the contract's shared routed ledger.
+
+    NBA, SOCCER and TENNIS (2026-10-02, app-readiness pass) are ACCOUNTING ONLY destinations with the NHL shape:
+    an ORPHAN `accounting-data` branch holding `data/accounting/wagers.jsonl` and `settlements.jsonl` and nothing
+    else; importer and validator on `main` under `scripts/accounting/`, thin wrappers over the vendored
+    `contract/edge_finder_contract/routed_ledger.py` (zero dependencies, so the router's runner needs nothing
+    installed); not season-partitioned; settlement economics v2 from the first row. Identity is minted by the
+    destination: `<prefix>w-` / `<prefix>s-` + sha256(source_bet_key)[:24].
+
+    auto_merge is False: an OBSERVATION PERIOD, as for NHL, until a real delivery has been watched through the
+    gate on each destination. The branch is still pushed and the pull request still opened; only the final merge
+    waits for a person.
+    """
+    return DestinationProfile(
+        sport=sport,
+        repo=repo,
+        ledger_branch="accounting-data",
+        code_branch="main",
+        wager_importer=(
+            "python", "{code}/scripts/accounting/import_routed_wagers.py",
+            "--payload", "{payload}", "--base-dir", "{work}", "--receipts-out", "{receipts}",
+        ),
+        settlement_importer=(
+            "python", "{code}/scripts/accounting/import_routed_settlements.py",
+            "--payload", "{payload}", "--base-dir", "{work}", "--receipts-out", "{receipts}",
+        ),
+        committable_prefixes=("data/accounting/",),
+        mergeable_paths=frozenset({"data/accounting/wagers.jsonl", "data/accounting/settlements.jsonl"}),
+        ledger_branch_runs_ci=False,
+        ledger_validator=(
+            "python", "{code}/scripts/accounting/validate_routed_ledger.py",
+            "--base-dir", "{work}", "--result-out", "{receipts}",
+        ),
+        row_identity_field="source_bet_key",
+        requires_season=False,
+        settlement_economics="router-settlement-economics.v2",
+        auto_merge=False,
+        notes=(
+            "ACCOUNTING ONLY: manually placed Kalshi wagers; no model is involved and none has authority",
+            "ledger on accounting-data (orphan: README + data/accounting/ only), importer and validator on main",
+            "imports through the shared edge_finder_contract.routed_ledger (vendored from kalshi-bet-router/contract)",
+            "accounting-data has no .github/, so the destination's own validator supplies the verdict",
+        ) + notes,
+    )
+
+
+PROFILES[Sport.NBA] = _shared_ledger_profile(Sport.NBA, "chmoses98/nba-edge-finder", (
+    "identity minted by the destination: nbaw-/nbas- + sha256(source_bet_key)[:24]",
+))
+PROFILES[Sport.SOCCER] = _shared_ledger_profile(Sport.SOCCER, "chmoses98/soccer-edge-finder", (
+    "identity minted by the destination: socw-/socs- + sha256(source_bet_key)[:24]",
+    "soccer_edge.router (PositionV1) remains the repository's own translation layer; delivery uses the shared ledger",
+))
+PROFILES[Sport.TENNIS] = _shared_ledger_profile(Sport.TENNIS, "chmoses98/Tennis-Edge-Finder", (
+    "identity minted by the destination: tenw-/tens- + sha256(source_bet_key)[:24]",
+    "tennis settlements can be SCALAR on the exchange (walkovers); a scalar result arrives with result absent and "
+    "the money fields as the exchange states them",
+))
 
 
 class UnknownDestinationError(KeyError):

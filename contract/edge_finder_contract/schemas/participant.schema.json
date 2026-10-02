@@ -1,0 +1,56 @@
+{
+  "$id": "https://edge-finder.app/schemas/edge_finder.app.v1/participant",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "display_name": {
+      "type": "string"
+    },
+    "metadata": {
+      "additionalProperties": true,
+      "description": "conference, country, ranking, seed, jersey ... never required",
+      "type": "object"
+    },
+    "participant_id": {
+      "description": "a contract id",
+      "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+      "type": "string"
+    },
+    "participant_type": {
+      "enum": [
+        "TEAM",
+        "PLAYER",
+        "PAIR"
+      ],
+      "type": "string"
+    },
+    "short_name": {
+      "description": "abbreviation or surname",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "source_ids": {
+      "additionalProperties": {
+        "type": [
+          "string",
+          "integer",
+          "null"
+        ]
+      },
+      "description": "provider id namespace -> provider id (kalshi, espn, nflverse, mlb_game_pk ...)",
+      "type": "object"
+    }
+  },
+  "required": [
+    "display_name",
+    "metadata",
+    "participant_id",
+    "participant_type",
+    "short_name",
+    "source_ids"
+  ],
+  "title": "participant",
+  "type": "object"
+}

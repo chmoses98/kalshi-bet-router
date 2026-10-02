@@ -1,4 +1,4 @@
-"""Mapping Kalshi's own competition / sport vocabulary onto our routable sports (MLB, NFL, CFB, NHL, Tennis).
+"""Mapping Kalshi's own competition / sport vocabulary onto our routable sports (MLB, NFL, CFB, NHL, NBA, Soccer, Tennis).
 
 Why this replaces guessed tickers
 ---------------------------------
@@ -60,6 +60,12 @@ COMPETITION_TO_SPORT: dict[str, Sport] = {
     "pro hockey": Sport.NHL,
     "nhl": Sport.NHL,
     "national hockey league": Sport.NHL,
+    # NBA. "Pro Basketball (M)" is Kalshi's own competition string (/milestones documents it beside "Pro Hockey");
+    # the "(W)" sibling is the WNBA and college basketball is named separately, so -- exactly as for the NHL --
+    # the NBA is recognised ONLY by these exact names, never from the Basketball heading alone.
+    "pro basketball (m)": Sport.NBA,
+    "nba": Sport.NBA,
+    "national basketball association": Sport.NBA,
 }
 
 #: The ONLY names under which the NHL may be recognised. The NHL is a CLOSED-vocabulary league here: it is never
@@ -68,18 +74,21 @@ COMPETITION_TO_SPORT: dict[str, Sport] = {
 #: catalogue has filed "Pro Baseball" under Hockey) cannot be offering the NHL as a rival reading of that name.
 CLOSED_VOCABULARY_LEAGUES: dict[Sport, frozenset[str]] = {
     Sport.NHL: frozenset({"pro hockey", "nhl", "national hockey league"}),
+    Sport.NBA: frozenset({"pro basketball (m)", "nba", "national basketball association"}),
 }
 
 #: Exact normalized competition strings that are positively out of scope.
 COMPETITION_OUT_OF_SCOPE: frozenset[str] = frozenset({
-    "pro basketball (m)", "pro basketball (w)", "pro basketball", "nba", "wnba",
-    "college basketball (m)", "college basketball (w)", "college basketball",
+    # Basketball that is NOT the NBA. (A bare "pro basketball", without the (M), is neither claimed nor
+    # excluded: it falls to the taxonomy, where the Basketball heading is an ambiguous family.)
+    "pro basketball (w)", "wnba",
+    "college basketball (m)", "college basketball (w)", "college basketball", "ncaab",
     # Hockey that is NOT the NHL. Named explicitly so each stays a positive OTHER rather than an unknown
     # competition inside the (now ambiguous) Hockey family.
     "college hockey", "college hockey (m)", "college hockey (w)", "ncaa hockey", "khl", "shl", "ahl", "pwhl",
     "finland liiga", "liiga", "germany del", "czech extraliga", "switzerland national league",
     "iihf", "world juniors", "field hockey",
-    "soccer", "college baseball", "pro golf", "golf", "esports",
+    "college baseball", "pro golf", "golf", "esports",
     "mma", "boxing", "cricket", "rugby", "motorsport", "auto racing",
 })
 
@@ -87,13 +96,22 @@ COMPETITION_OUT_OF_SCOPE: frozenset[str] = frozenset({
 
 #: Normalized top-level sport names, as they appear in the live taxonomy.
 SPORT_TENNIS = "tennis"
+SPORT_SOCCER = "soccer"
 
-#: Sports where the sport name alone settles the classification.
-SPORT_TO_SPORT: dict[str, Sport] = {SPORT_TENNIS: Sport.TENNIS}
+#: Sports where the sport name alone settles the classification. Soccer, like tennis, is a sport of many
+#: competitions (Premier League, La Liga, MLS, Champions League ...) rather than one league, so it resolves at the
+#: taxonomy SPORT level: everything Kalshi files under its Soccer heading is SOCCER. soccer-edge-finder's own
+#: discovery (2026-09-27, 1,523 series) classifies by the literal "Soccer" tag the same way.
+SPORT_TO_SPORT: dict[str, Sport] = {
+    SPORT_TENNIS: Sport.TENNIS,
+    SPORT_SOCCER: Sport.SOCCER,
+    "football (soccer)": Sport.SOCCER,
+    "association football": Sport.SOCCER,
+}
 
 #: Sports Kalshi covers that are positively outside our four.
 OUT_OF_SCOPE_SPORTS: frozenset[str] = frozenset({
-    "basketball", "soccer", "golf", "esports", "mma", "boxing",
+    "golf", "esports", "mma", "boxing",
     "cricket", "rugby", "motorsport", "auto racing", "racing", "olympics",
     "chess", "darts", "cycling", "table tennis", "volleyball", "lacrosse",
     "softball", "track and field", "swimming", "wrestling", "sumo", "surfing",
@@ -103,7 +121,9 @@ OUT_OF_SCOPE_SPORTS: frozenset[str] = frozenset({
 #: Sports that contain more than one of our target leagues, so the sport name is
 #: NOT sufficient and the competition must disambiguate. Seeing one of these
 #: without a recognized competition is the fail-closed case.
-AMBIGUOUS_SPORTS: frozenset[str] = frozenset({"football", "baseball", "hockey"})
+# Basketball holds the NBA AND the WNBA / college basketball, so -- like Hockey -- the heading alone never
+# resolves; the competition ("Pro Basketball (M)") must.
+AMBIGUOUS_SPORTS: frozenset[str] = frozenset({"football", "baseball", "hockey", "basketball"})
 
 #: Which of OUR four sports could live under a taxonomy SPORT name.
 #:
@@ -126,7 +146,11 @@ SPORT_FAMILY_MEMBERS: dict[str, frozenset[Sport]] = {
     # narrows to {NHL} here -- never resolves to it on the heading alone.
     "hockey": frozenset({Sport.NHL}),
     "ice hockey": frozenset({Sport.NHL}),
+    "basketball": frozenset({Sport.NBA}),
     SPORT_TENNIS: frozenset({Sport.TENNIS}),
+    SPORT_SOCCER: frozenset({Sport.SOCCER}),
+    "football (soccer)": frozenset({Sport.SOCCER}),
+    "association football": frozenset({Sport.SOCCER}),
 }
 
 
@@ -149,6 +173,15 @@ def possible_sports(sport_name: str) -> frozenset[Sport] | None:
 #: Tour tokens that identify tennis when the live taxonomy is unavailable.
 #: Matched with word boundaries against the competition string.
 TENNIS_COMPETITION_TOKENS: tuple[str, ...] = ("atp", "wta", "itf")
+
+#: Competition tokens that identify soccer when the live taxonomy is unavailable. Deliberately only names that
+#: belong to no other sport on the exchange: "premier league" (the Indian Premier League is cricket), "world cup"
+#: (rugby, cricket) and "champions league" (hockey) are NOT here, and resolve only through the Soccer heading.
+SOCCER_COMPETITION_TOKENS: tuple[str, ...] = (
+    "uefa", "la liga", "bundesliga", "ligue 1", "mls", "concacaf", "conmebol", "brasileirao", "brasileirão",
+    "eredivisie", "liga mx", "copa libertadores", "copa america", "copa américa", "fifa", "epl",
+    "english premier league", "serie a", "série a", "primeira liga", "a-league", "nwsl",
+)
 
 
 def normalize(text: object) -> str:
@@ -177,6 +210,8 @@ def sport_from_competition(competition: str) -> Sport | None:
         return Sport.OTHER
     if any(_has_token(key, token) for token in TENNIS_COMPETITION_TOKENS):
         return Sport.TENNIS
+    if any(_has_token(key, token) for token in SOCCER_COMPETITION_TOKENS):
+        return Sport.SOCCER
     return None
 
 

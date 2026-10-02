@@ -50,6 +50,7 @@ TAXONOMY = parse_filters_by_sport(make_taxonomy({
     "Tennis": ["US Open Men Singles", "ATP Madrid"],
     "Basketball": ["Pro Basketball (M)"],
     "Soccer": ["Premier League"],
+    "Golf": ["PGA Tour"],
 }))
 
 
@@ -92,7 +93,7 @@ def test_tennis_tour_competition_resolves_without_taxonomy():
 
 
 def test_out_of_scope_competition_is_other():
-    result = classify_market(context(competition="Pro Basketball (M)"))
+    result = classify_market(context(competition="Pro Basketball (W)"))
     assert result.sport is Sport.OTHER
     assert result.resolved_by is EvidenceLevel.L1_EVENT_COMPETITION
 
@@ -106,8 +107,17 @@ def test_tournament_competition_resolves_through_the_taxonomy():
 
 
 def test_taxonomy_places_an_unknown_competition_out_of_scope():
-    result = classify_market(context(competition="Premier League"), taxonomy=TAXONOMY)
+    result = classify_market(context(competition="PGA Tour"), taxonomy=TAXONOMY)
     assert result.sport is Sport.OTHER
+
+
+def test_taxonomy_resolves_soccer_and_nba_at_the_right_level():
+    """Soccer resolves at the SPORT level (every competition under the Soccer heading); the NBA only by its
+    exact competition name, never from the Basketball heading alone."""
+    soccer = classify_market(context(competition="Premier League"), taxonomy=TAXONOMY)
+    assert soccer.sport is Sport.SOCCER and soccer.resolved_by is EvidenceLevel.L2_SPORT_TAXONOMY
+    nba = classify_market(context(competition="Pro Basketball (M)"), taxonomy=TAXONOMY)
+    assert nba.sport is Sport.NBA and nba.resolved_by is EvidenceLevel.L1_EVENT_COMPETITION
 
 
 def test_unrecognized_competition_in_an_ambiguous_sport_fails_closed():
@@ -334,7 +344,7 @@ def test_derive_series_ticker_prefers_metadata_over_the_ticker_prefix():
 
 def test_non_target_sport_is_confidently_other():
     result = classify_market(
-        context(series_extra={"category": "Sports", "tags": ["Basketball", "NBA"]})
+        context(series_extra={"category": "Sports", "tags": ["Golf", "PGA"]})
     )
     assert result.sport is Sport.OTHER
 
@@ -345,9 +355,9 @@ def test_non_sports_category_is_confidently_other():
 
 
 def test_a_named_rival_sport_outranks_a_generic_family_word():
-    # "NCAA" alone is ambiguous, but "Basketball" positively identifies the sport.
+    # "NCAA" alone is ambiguous, but "Golf" positively identifies the sport.
     result = classify_market(
-        context(series_extra={"category": "Sports", "tags": ["NCAA", "Basketball"]})
+        context(series_extra={"category": "Sports", "tags": ["NCAA", "Golf"]})
     )
     assert result.sport is Sport.OTHER
 
@@ -793,7 +803,7 @@ def test_a_sport_that_narrows_nothing_does_not_create_a_conflict():
 
 def test_a_collision_between_two_out_of_scope_sports_costs_nothing():
     structure = measure_competition_collisions(
-        _taxonomy({"finals": {"basketball", "golf"}})
+        _taxonomy({"finals": {"cricket", "golf"}})
     )
 
     assert structure.no_routable_claimant == 1
@@ -1003,13 +1013,13 @@ def test_a_contested_competition_is_still_listed_and_marked():
 
     taxonomy = parse_filters_by_sport(make_taxonomy({
         "Baseball": ["Pro Baseball"],
-        "Basketball": ["Pro Baseball"],
+        "Golf": ["Pro Baseball"],
     }))
     by_sport = competitions_under_our_sports(taxonomy)
 
     assert by_sport["baseball"] == ("pro baseball (contested)",)
-    # Basketball narrows to none of ours, so it is not listed as one of our sports.
-    assert "basketball" not in by_sport
+    # Golf narrows to none of ours, so it is not listed as one of our sports.
+    assert "golf" not in by_sport
 
 
 def test_the_listing_covers_only_sports_that_could_hold_one_of_our_four():
@@ -1019,7 +1029,7 @@ def test_the_listing_covers_only_sports_that_could_hold_one_of_our_four():
 
     taxonomy = parse_filters_by_sport(make_taxonomy({
         "Baseball": ["Pro Baseball"],
-        "Basketball": ["Pro Basketball (M)"],
+        "Golf": ["PGA Tour"],
     }))
     by_sport = competitions_under_our_sports(taxonomy)
 

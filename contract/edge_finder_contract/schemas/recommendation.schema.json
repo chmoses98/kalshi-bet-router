@@ -1,0 +1,253 @@
+{
+  "$id": "https://edge-finder.app/schemas/edge_finder.app.v1/recommendation",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "authority": {
+      "description": "who may act on this: a model promotion level, or MANUAL/ASSISTED when a person decides",
+      "enum": [
+        "RESEARCH_ONLY",
+        "SHADOW",
+        "LIMITED",
+        "TRUSTED",
+        "MANUAL",
+        "ASSISTED"
+      ],
+      "type": "string"
+    },
+    "bankroll_basis": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "bet_up_to_price": {
+      "description": "",
+      "maximum": 1,
+      "minimum": 0,
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "bet_up_to_probability": {
+      "description": "",
+      "maximum": 1,
+      "minimum": 0,
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "confidence": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "created_at": {
+      "description": "ISO-8601 UTC, Z suffix",
+      "format": "date-time",
+      "type": "string"
+    },
+    "current_price": {
+      "description": "executable price of the selection when generated",
+      "maximum": 1,
+      "minimum": 0,
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "current_probability": {
+      "description": "market probability when generated",
+      "maximum": 1,
+      "minimum": 0,
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "data_freshness": {
+      "enum": [
+        "FRESH",
+        "AGING",
+        "STALE",
+        "UNKNOWN"
+      ],
+      "type": "string"
+    },
+    "edge": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "event_id": {
+      "description": "a contract id",
+      "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+      "type": "string"
+    },
+    "expires_at": {
+      "description": "ISO-8601 UTC, Z suffix, or null",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "extensions": {
+      "additionalProperties": true,
+      "description": "sport-specific detail the common fields do not carry; never required by the UI",
+      "type": "object"
+    },
+    "fair_probability": {
+      "description": "P(selection) per the model",
+      "maximum": 1,
+      "minimum": 0,
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "injury_flags": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "lineup_status": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "market_description": {
+      "type": "string"
+    },
+    "market_id": {
+      "description": "a contract id",
+      "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+      "type": "string"
+    },
+    "reason_not_playable": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "recommendation_id": {
+      "description": "a contract id",
+      "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+      "type": "string"
+    },
+    "research_only": {
+      "description": "true unless a promoted model or a human decision backs it",
+      "type": "boolean"
+    },
+    "run_id": {
+      "description": "a contract id",
+      "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+      "type": "string"
+    },
+    "selection": {
+      "description": "the Kalshi contract side",
+      "enum": [
+        "YES",
+        "NO"
+      ],
+      "type": "string"
+    },
+    "source_ids": {
+      "additionalProperties": {
+        "type": [
+          "string",
+          "integer",
+          "null"
+        ]
+      },
+      "description": "provider id namespace -> provider id (kalshi, espn, nflverse, mlb_game_pk ...)",
+      "type": "object"
+    },
+    "source_repo": {
+      "type": "string"
+    },
+    "sport": {
+      "description": "canonical sport",
+      "enum": [
+        "MLB",
+        "CFB",
+        "NFL",
+        "NBA",
+        "NHL",
+        "SOCCER",
+        "TENNIS"
+      ],
+      "type": "string"
+    },
+    "stake_dollars": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "stake_units": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "status": {
+      "enum": [
+        "RECOMMENDED",
+        "WATCH",
+        "PASS",
+        "RESEARCH_CANDIDATE",
+        "EXPIRED",
+        "NOT_PLAYABLE"
+      ],
+      "type": "string"
+    },
+    "thesis_id": {
+      "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "authority",
+    "bankroll_basis",
+    "bet_up_to_price",
+    "bet_up_to_probability",
+    "confidence",
+    "created_at",
+    "current_price",
+    "current_probability",
+    "data_freshness",
+    "edge",
+    "event_id",
+    "expires_at",
+    "extensions",
+    "fair_probability",
+    "injury_flags",
+    "lineup_status",
+    "market_description",
+    "market_id",
+    "reason_not_playable",
+    "recommendation_id",
+    "research_only",
+    "run_id",
+    "selection",
+    "source_ids",
+    "source_repo",
+    "sport",
+    "stake_dollars",
+    "stake_units",
+    "status",
+    "thesis_id"
+  ],
+  "title": "recommendation",
+  "type": "object"
+}

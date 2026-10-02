@@ -1,0 +1,267 @@
+{
+  "$id": "https://edge-finder.app/schemas/edge_finder.app.v1/wager",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "average_price": {
+      "description": "quantity-weighted fill price, dollars per contract",
+      "maximum": 1,
+      "minimum": 0,
+      "type": "number"
+    },
+    "contracts": {
+      "minimum": 0,
+      "type": "number"
+    },
+    "destination_repo": {
+      "type": "string"
+    },
+    "event_id": {
+      "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "extensions": {
+      "additionalProperties": true,
+      "description": "sport-specific detail the common fields do not carry; never required by the UI",
+      "type": "object"
+    },
+    "fees": {
+      "description": "exchange fees, dollars; null when unknown",
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "kalshi_fill_ids": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "kalshi_order_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "kalshi_ticker": {
+      "type": "string"
+    },
+    "linkage": {
+      "additionalProperties": false,
+      "description": "temporal proof of the link: every linked record predates the wager",
+      "properties": {
+        "market_captured_at": {
+          "description": "ISO-8601 UTC, Z suffix, or null",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model_inputs_as_of": {
+          "description": "ISO-8601 UTC, Z suffix, or null",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recommendation_generated_at": {
+          "description": "ISO-8601 UTC, Z suffix, or null",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "wager_placed_at": {
+          "description": "ISO-8601 UTC, Z suffix, or null",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "market_captured_at",
+        "model_inputs_as_of",
+        "recommendation_generated_at",
+        "wager_placed_at"
+      ],
+      "type": "object"
+    },
+    "market_id": {
+      "description": "a contract id",
+      "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+      "type": "string"
+    },
+    "model_price_id": {
+      "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "model_run_id": {
+      "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "payout": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "placed_at": {
+      "description": "ISO-8601 UTC, Z suffix",
+      "format": "date-time",
+      "type": "string"
+    },
+    "profit_loss": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "recommendation_id": {
+      "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "router_ingested_at": {
+      "description": "ISO-8601 UTC, Z suffix, or null",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "selection": {
+      "description": "the Kalshi contract side",
+      "enum": [
+        "YES",
+        "NO"
+      ],
+      "type": "string"
+    },
+    "settlement_id": {
+      "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "settlement_status": {
+      "enum": [
+        "PENDING",
+        "SETTLED",
+        "VOID",
+        "UNKNOWN"
+      ],
+      "type": "string"
+    },
+    "side": {
+      "enum": [
+        "BUY",
+        "SELL",
+        null
+      ],
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "source": {
+      "enum": [
+        "KALSHI_ROUTER",
+        "MANUAL",
+        "LEGACY_IMPORT",
+        "OTHER"
+      ],
+      "type": "string"
+    },
+    "source_bet_key": {
+      "description": "the router's deterministic order identity",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "source_ids": {
+      "additionalProperties": {
+        "type": [
+          "string",
+          "integer",
+          "null"
+        ]
+      },
+      "description": "provider id namespace -> provider id (kalshi, espn, nflverse, mlb_game_pk ...)",
+      "type": "object"
+    },
+    "sport": {
+      "description": "canonical sport",
+      "enum": [
+        "MLB",
+        "CFB",
+        "NFL",
+        "NBA",
+        "NHL",
+        "SOCCER",
+        "TENNIS"
+      ],
+      "type": "string"
+    },
+    "stake": {
+      "description": "cash at risk including fees, dollars",
+      "minimum": 0,
+      "type": "number"
+    },
+    "wager_id": {
+      "description": "a contract id",
+      "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "average_price",
+    "contracts",
+    "destination_repo",
+    "event_id",
+    "extensions",
+    "fees",
+    "kalshi_fill_ids",
+    "kalshi_order_id",
+    "kalshi_ticker",
+    "linkage",
+    "market_id",
+    "model_price_id",
+    "model_run_id",
+    "payout",
+    "placed_at",
+    "profit_loss",
+    "recommendation_id",
+    "router_ingested_at",
+    "selection",
+    "settlement_id",
+    "settlement_status",
+    "side",
+    "source",
+    "source_bet_key",
+    "source_ids",
+    "sport",
+    "stake",
+    "wager_id"
+  ],
+  "title": "wager",
+  "type": "object"
+}

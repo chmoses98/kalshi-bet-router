@@ -67,10 +67,11 @@ def ctx(competition=None, series="KXNHLGAME", event="KXNHLGAME-26OCT01BOSTOR", m
 
 
 # ------------------------------------------------------------------------------------------------ vocabulary
-def test_nhl_is_a_sport_routable_and_reported_and_tennis_stays_unrouted():
+def test_nhl_is_a_sport_routable_and_reported():
     assert Sport.NHL.value == "NHL" and Sport.NHL in ROUTABLE_SPORTS and Sport.NHL in REPORT_ORDER
     assert "NHL" in routable_sport_names()
-    assert "TENNIS" not in routable_sport_names() and Sport.TENNIS not in PROFILES
+    # TENNIS gained a profile on 2026-10-02 (tests/test_shared_destinations.py); OTHER never has one.
+    assert "OTHER" not in routable_sport_names() and Sport.OTHER not in PROFILES
 
 
 # ------------------------------------------------------------------------------------------- classification

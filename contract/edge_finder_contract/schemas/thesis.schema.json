@@ -1,0 +1,128 @@
+{
+  "$id": "https://edge-finder.app/schemas/edge_finder.app.v1/thesis",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "confidence_label": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "context_notes": {
+      "additionalProperties": false,
+      "properties": {
+        "injuries": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lineups": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "other": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "usage": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "weather": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "injuries",
+        "lineups",
+        "other",
+        "usage",
+        "weather"
+      ],
+      "type": "object"
+    },
+    "event_id": {
+      "description": "a contract id",
+      "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+      "type": "string"
+    },
+    "evidence": {
+      "additionalProperties": true,
+      "description": "structured model evidence when no prose exists",
+      "type": "object"
+    },
+    "generated_at": {
+      "description": "ISO-8601 UTC, Z suffix",
+      "format": "date-time",
+      "type": "string"
+    },
+    "key_dependencies": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "opposing_factors": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "primary_game_script": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "run_id": {
+      "description": "a contract id",
+      "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+      "type": "string"
+    },
+    "summary": {
+      "description": "null when the repository produces no prose; never LLM-fabricated",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "supporting_factors": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "thesis_id": {
+      "description": "a contract id",
+      "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "confidence_label",
+    "context_notes",
+    "event_id",
+    "evidence",
+    "generated_at",
+    "key_dependencies",
+    "opposing_factors",
+    "primary_game_script",
+    "run_id",
+    "summary",
+    "supporting_factors",
+    "thesis_id"
+  ],
+  "title": "thesis",
+  "type": "object"
+}

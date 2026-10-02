@@ -1,0 +1,130 @@
+{
+  "$id": "https://edge-finder.app/schemas/edge_finder.app.v1/settlement",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "extensions": {
+      "additionalProperties": true,
+      "description": "sport-specific detail the common fields do not carry; never required by the UI",
+      "type": "object"
+    },
+    "fees": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "gross_payout": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "market_id": {
+      "description": "a contract id",
+      "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+      "type": "string"
+    },
+    "net_pnl": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "refusals": {
+      "description": "why money fields are absent",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "result": {
+      "enum": [
+        "WON",
+        "LOST",
+        "PUSH",
+        "VOID",
+        "SCALAR",
+        "UNKNOWN"
+      ],
+      "type": "string"
+    },
+    "settled_at": {
+      "description": "ISO-8601 UTC, Z suffix",
+      "format": "date-time",
+      "type": "string"
+    },
+    "settlement_id": {
+      "description": "a contract id",
+      "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+      "type": "string"
+    },
+    "settlement_value": {
+      "description": "dollars per YES contract paid by the exchange, when known",
+      "maximum": 1,
+      "minimum": 0,
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "source": {
+      "type": "string"
+    },
+    "source_ids": {
+      "additionalProperties": {
+        "type": [
+          "string",
+          "integer",
+          "null"
+        ]
+      },
+      "description": "provider id namespace -> provider id (kalshi, espn, nflverse, mlb_game_pk ...)",
+      "type": "object"
+    },
+    "verification_status": {
+      "enum": [
+        "EXCHANGE_CONFIRMED",
+        "MODEL_DERIVED",
+        "UNVERIFIED",
+        "REFUSED"
+      ],
+      "type": "string"
+    },
+    "wager_id": {
+      "description": "a contract id",
+      "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+      "type": "string"
+    },
+    "winning_side": {
+      "enum": [
+        "YES",
+        "NO",
+        null
+      ],
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "extensions",
+    "fees",
+    "gross_payout",
+    "market_id",
+    "net_pnl",
+    "refusals",
+    "result",
+    "settled_at",
+    "settlement_id",
+    "settlement_value",
+    "source",
+    "source_ids",
+    "verification_status",
+    "wager_id",
+    "winning_side"
+  ],
+  "title": "settlement",
+  "type": "object"
+}

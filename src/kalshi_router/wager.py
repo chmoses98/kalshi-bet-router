@@ -284,6 +284,8 @@ class WagerDiagnostics:
     routable_classified_nfl: int = 0
     routable_classified_cfb: int = 0
     routable_classified_nhl: int = 0
+    routable_classified_nba: int = 0
+    routable_classified_soccer: int = 0
     routable_classified_tennis: int = 0
     routable_classified_other: int = 0
     routable_classified_unresolved: int = 0
@@ -368,6 +370,8 @@ class WagerDiagnostics:
             f"    NFL: {self.routable_classified_nfl}",
             f"    CFB: {self.routable_classified_cfb}",
             f"    NHL: {self.routable_classified_nhl}",
+            f"    NBA: {self.routable_classified_nba}",
+            f"    SOCCER: {self.routable_classified_soccer}",
             f"    TENNIS: {self.routable_classified_tennis}",
             f"    OTHER (not a sport this router carries): "
             f"{self.routable_classified_other}",
@@ -567,6 +571,8 @@ def build_shadow_wagers(
         Sport.NFL: "routable_classified_nfl",
         Sport.CFB: "routable_classified_cfb",
         Sport.NHL: "routable_classified_nhl",
+        Sport.NBA: "routable_classified_nba",
+        Sport.SOCCER: "routable_classified_soccer",
         Sport.TENNIS: "routable_classified_tennis",
         Sport.OTHER: "routable_classified_other",
         Sport.UNRESOLVED: "routable_classified_unresolved",

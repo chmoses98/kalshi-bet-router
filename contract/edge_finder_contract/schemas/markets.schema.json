@@ -1,0 +1,314 @@
+{
+  "$id": "https://edge-finder.app/schemas/edge_finder.app.v1/markets",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "count": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "generated_at": {
+      "description": "ISO-8601 UTC, Z suffix",
+      "format": "date-time",
+      "type": "string"
+    },
+    "items": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "captured_at": {
+            "description": "when the quote was observed; null only for a stub of a market no longer on the board",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "close_time_utc": {
+            "description": "ISO-8601 UTC, Z suffix, or null",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "event_id": {
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "extensions": {
+            "additionalProperties": true,
+            "description": "sport-specific detail the common fields do not carry; never required by the UI",
+            "type": "object"
+          },
+          "kalshi_event_ticker": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kalshi_series_ticker": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kalshi_ticker": {
+            "type": "string"
+          },
+          "last_price": {
+            "description": "",
+            "maximum": 1,
+            "minimum": 0,
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "line": {
+            "description": "spread / total / handicap line",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "market_family": {
+            "description": "the source repository's family label, normalised to lower snake_case",
+            "type": "string"
+          },
+          "market_id": {
+            "description": "a contract id",
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": "string"
+          },
+          "market_probability": {
+            "description": "mid of the YES book in [0,1]; null when the book is empty",
+            "maximum": 1,
+            "minimum": 0,
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "market_status": {
+            "enum": [
+              "OPEN",
+              "CLOSED",
+              "SETTLED",
+              "UNOPENED",
+              "UNKNOWN"
+            ],
+            "type": "string"
+          },
+          "market_type": {
+            "description": "finer type where the family is broad",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "no_ask": {
+            "description": "",
+            "maximum": 1,
+            "minimum": 0,
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "no_bid": {
+            "description": "",
+            "maximum": 1,
+            "minimum": 0,
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "no_description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "open_interest": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "participant_id": {
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "period": {
+            "description": "FULL_GAME, FIRST_HALF, F5, SET_1 ... as the source labels it",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "player_id": {
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "raw_market_reference": {
+            "description": "where the raw record lives in the source repository",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "side": {
+            "description": "what YES refers to, when the family has sides",
+            "enum": [
+              "HOME",
+              "AWAY",
+              "DRAW",
+              "OVER",
+              "UNDER",
+              "PARTICIPANT",
+              "TIE",
+              "OTHER",
+              null
+            ],
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "description": "which capture produced the quote",
+            "type": "string"
+          },
+          "sport": {
+            "description": "canonical sport",
+            "enum": [
+              "MLB",
+              "CFB",
+              "NFL",
+              "NBA",
+              "NHL",
+              "SOCCER",
+              "TENNIS"
+            ],
+            "type": "string"
+          },
+          "threshold": {
+            "description": "prop threshold (YES iff stat >= / > threshold as yes_description states)",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "volume": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "yes_ask": {
+            "description": "",
+            "maximum": 1,
+            "minimum": 0,
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "yes_bid": {
+            "description": "",
+            "maximum": 1,
+            "minimum": 0,
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "yes_description": {
+            "description": "what YES means, in words",
+            "type": "string"
+          }
+        },
+        "required": [
+          "captured_at",
+          "close_time_utc",
+          "event_id",
+          "extensions",
+          "kalshi_event_ticker",
+          "kalshi_series_ticker",
+          "kalshi_ticker",
+          "last_price",
+          "line",
+          "market_family",
+          "market_id",
+          "market_probability",
+          "market_status",
+          "market_type",
+          "no_ask",
+          "no_bid",
+          "no_description",
+          "open_interest",
+          "participant_id",
+          "period",
+          "player_id",
+          "raw_market_reference",
+          "side",
+          "source",
+          "sport",
+          "threshold",
+          "volume",
+          "yes_ask",
+          "yes_bid",
+          "yes_description"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "kind": {
+      "const": "markets"
+    },
+    "run_id": {
+      "description": "a contract id",
+      "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "edge_finder.app.v1"
+    },
+    "sport": {
+      "description": "canonical sport",
+      "enum": [
+        "MLB",
+        "CFB",
+        "NFL",
+        "NBA",
+        "NHL",
+        "SOCCER",
+        "TENNIS"
+      ],
+      "type": "string"
+    }
+  },
+  "required": [
+    "count",
+    "generated_at",
+    "items",
+    "kind",
+    "run_id",
+    "schema_version",
+    "sport"
+  ],
+  "title": "markets",
+  "type": "object"
+}
