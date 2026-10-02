@@ -40,9 +40,14 @@ def load(root: Path, name: str) -> dict | None:
 def pick_events(board: dict | None, events: list[dict], n: int) -> list[str]:
     """Prefer events with recommendations and wagers, then markets, then the soonest."""
     if board:
-        rows = sorted(board["items"], key=lambda r: (-r["recommendations_count"], -r["wagers_count"], -r["markets_priced"],
+        # Live events first (model prices, recommendations, markets), then make sure at least one event
+        # that carries wagers/settlements is in the set so the accounting screens have real rows too.
+        rows = sorted(board["items"], key=lambda r: (-r["recommendations_count"], -r["markets_priced"],
                                                      -r["markets_available"], r["start_time_utc"]))
         chosen = [r["event_id"] for r in rows[:n]]
+        wagered = sorted((r for r in board["items"] if r["wagers_count"]), key=lambda r: -r["wagers_count"])
+        if wagered and n > 1 and not any(r["wagers_count"] for r in rows[:n]):
+            chosen = chosen[: n - 1] + [wagered[0]["event_id"]]
         if chosen:
             return chosen
     return [e["event_id"] for e in sorted(events, key=lambda e: e["start_time_utc"])[:n]]
