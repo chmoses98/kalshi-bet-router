@@ -84,6 +84,8 @@ _CORROBORATING_TOKENS: dict[Sport, tuple[str, ...]] = {
     Sport.NFL: ("nfl", "national football league"),
     Sport.CFB: ("ncaaf", "ncaa football", "college football", "cfb"),
     Sport.NHL: ("nhl", "national hockey league", "pro hockey"),
+    Sport.NBA: ("nba", "national basketball association", "pro basketball (m)"),
+    Sport.SOCCER: ("soccer", "mls", "uefa", "la liga", "bundesliga", "ligue 1", "epl", "fifa", "concacaf"),
     Sport.TENNIS: ("atp", "wta", "tennis"),
 }
 

@@ -1,0 +1,212 @@
+{
+  "$id": "https://edge-finder.app/schemas/edge_finder.app.v1/model_prices",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "count": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "generated_at": {
+      "description": "ISO-8601 UTC, Z suffix",
+      "format": "date-time",
+      "type": "string"
+    },
+    "items": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "data_quality_status": {
+            "enum": [
+              "OK",
+              "DEGRADED",
+              "CANNOT_TRUST_INPUTS",
+              "UNSUPPORTED",
+              "UNKNOWN"
+            ],
+            "type": "string"
+          },
+          "edge": {
+            "description": "fair_probability - market_probability on the YES side, when both exist",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "event_id": {
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "extensions": {
+            "additionalProperties": true,
+            "description": "sport-specific detail the common fields do not carry; never required by the UI",
+            "type": "object"
+          },
+          "fair_probability": {
+            "description": "P(YES) in [0,1]",
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "freshness_status": {
+            "enum": [
+              "FRESH",
+              "AGING",
+              "STALE",
+              "UNKNOWN"
+            ],
+            "type": "string"
+          },
+          "generated_at": {
+            "description": "ISO-8601 UTC, Z suffix",
+            "format": "date-time",
+            "type": "string"
+          },
+          "inputs_as_of": {
+            "description": "the newest input the model saw",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lower_bound": {
+            "description": "",
+            "maximum": 1,
+            "minimum": 0,
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "market_id": {
+            "description": "a contract id",
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": "string"
+          },
+          "market_probability": {
+            "description": "the market probability the model was compared against",
+            "maximum": 1,
+            "minimum": 0,
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "model_price_id": {
+            "description": "a contract id",
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": "string"
+          },
+          "model_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "projection_unit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "projection_value": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "run_id": {
+            "description": "a contract id",
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": "string"
+          },
+          "support_status": {
+            "description": "the source repository's support / gate label, verbatim",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "uncertainty": {
+            "description": "standard error or interval half-width when the model computes one; never invented",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "upper_bound": {
+            "description": "",
+            "maximum": 1,
+            "minimum": 0,
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "data_quality_status",
+          "edge",
+          "event_id",
+          "extensions",
+          "fair_probability",
+          "freshness_status",
+          "generated_at",
+          "inputs_as_of",
+          "lower_bound",
+          "market_id",
+          "market_probability",
+          "model_price_id",
+          "model_version",
+          "projection_unit",
+          "projection_value",
+          "run_id",
+          "support_status",
+          "uncertainty",
+          "upper_bound"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "kind": {
+      "const": "model_prices"
+    },
+    "run_id": {
+      "description": "a contract id",
+      "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "edge_finder.app.v1"
+    },
+    "sport": {
+      "description": "canonical sport",
+      "enum": [
+        "MLB",
+        "CFB",
+        "NFL",
+        "NBA",
+        "NHL",
+        "SOCCER",
+        "TENNIS"
+      ],
+      "type": "string"
+    }
+  },
+  "required": [
+    "count",
+    "generated_at",
+    "items",
+    "kind",
+    "run_id",
+    "schema_version",
+    "sport"
+  ],
+  "title": "model_prices",
+  "type": "object"
+}

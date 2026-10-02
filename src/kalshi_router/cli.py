@@ -466,6 +466,15 @@ def _run_deliver(args, client, out, err) -> int:
     # without a human reading the report. One token, on its own line, never a
     # count and never a market.
     print(f"HEALTH={result.production.health.value}", file=out)
+    # The same facts as ONE JSON line, for the app-facing router health publisher
+    # (scripts/publish_router_health.py reads it back out of the public run log).
+    # Counts and a health token only: nothing here is a market, a price or a key.
+    print("ROUTER_STATUS_JSON=" + json.dumps({
+        "health": result.production.health.value,
+        "production": result.production.as_dict(),
+        "payload_rows": {sport: int(rows) for sport, rows in sorted(counts.items())},
+        "import_batch_id": ROUTER_IMPORT_BATCH_ID,
+    }, sort_keys=True), file=out)
     return EXIT_OK
 
 

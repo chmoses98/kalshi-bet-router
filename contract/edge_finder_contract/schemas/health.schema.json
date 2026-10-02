@@ -1,0 +1,272 @@
+{
+  "$id": "https://edge-finder.app/schemas/edge_finder.app.v1/health",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "bet_authority": {
+      "description": "who may act on this: a model promotion level, or MANUAL/ASSISTED when a person decides",
+      "enum": [
+        "RESEARCH_ONLY",
+        "SHADOW",
+        "LIMITED",
+        "TRUSTED",
+        "MANUAL",
+        "ASSISTED"
+      ],
+      "type": "string"
+    },
+    "commit_sha": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "components": {
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "age_seconds": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "as_of": {
+            "description": "ISO-8601 UTC, Z suffix, or null",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "enum": [
+              "OK",
+              "DEGRADED",
+              "STALE",
+              "UNAVAILABLE",
+              "NOT_APPLICABLE",
+              "UNKNOWN"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "age_seconds",
+          "as_of",
+          "detail",
+          "status"
+        ],
+        "type": "object"
+      },
+      "type": "object"
+    },
+    "data_age_seconds": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "errors": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "freshness_status": {
+      "enum": [
+        "FRESH",
+        "AGING",
+        "STALE",
+        "UNKNOWN"
+      ],
+      "type": "string"
+    },
+    "generated_at": {
+      "description": "ISO-8601 UTC, Z suffix",
+      "format": "date-time",
+      "type": "string"
+    },
+    "kind": {
+      "const": "health"
+    },
+    "last_export_attempt": {
+      "description": "ISO-8601 UTC, Z suffix",
+      "format": "date-time",
+      "type": "string"
+    },
+    "last_market_capture": {
+      "description": "ISO-8601 UTC, Z suffix, or null",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "last_model_generated": {
+      "description": "ISO-8601 UTC, Z suffix, or null",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "last_successful_run": {
+      "description": "ISO-8601 UTC, Z suffix, or null",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "market_data_status": {
+      "enum": [
+        "OK",
+        "DEGRADED",
+        "STALE",
+        "UNAVAILABLE",
+        "NOT_APPLICABLE",
+        "UNKNOWN"
+      ],
+      "type": "string"
+    },
+    "model_status": {
+      "enum": [
+        "OK",
+        "DEGRADED",
+        "STALE",
+        "UNAVAILABLE",
+        "NOT_APPLICABLE",
+        "UNKNOWN"
+      ],
+      "type": "string"
+    },
+    "next_scheduled_run": {
+      "description": "ISO-8601 UTC, Z suffix, or null",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "overall_status": {
+      "enum": [
+        "HEALTHY",
+        "DEGRADED",
+        "STALE",
+        "UNAVAILABLE",
+        "RESEARCH_ONLY"
+      ],
+      "type": "string"
+    },
+    "payload_run_id": {
+      "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "router_status": {
+      "enum": [
+        "OK",
+        "DEGRADED",
+        "STALE",
+        "UNAVAILABLE",
+        "NOT_APPLICABLE",
+        "UNKNOWN"
+      ],
+      "type": "string"
+    },
+    "run_id": {
+      "description": "a contract id",
+      "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "edge_finder.app.v1"
+    },
+    "settlement_status": {
+      "enum": [
+        "OK",
+        "DEGRADED",
+        "STALE",
+        "UNAVAILABLE",
+        "NOT_APPLICABLE",
+        "UNKNOWN"
+      ],
+      "type": "string"
+    },
+    "sport": {
+      "description": "canonical sport",
+      "enum": [
+        "MLB",
+        "CFB",
+        "NFL",
+        "NBA",
+        "NHL",
+        "SOCCER",
+        "TENNIS"
+      ],
+      "type": "string"
+    },
+    "thresholds": {
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "fresh_after_seconds": {
+            "type": "integer"
+          },
+          "stale_after_seconds": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "fresh_after_seconds",
+          "stale_after_seconds"
+        ],
+        "type": "object"
+      },
+      "type": "object"
+    },
+    "warnings": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "bet_authority",
+    "commit_sha",
+    "components",
+    "data_age_seconds",
+    "errors",
+    "freshness_status",
+    "generated_at",
+    "kind",
+    "last_export_attempt",
+    "last_market_capture",
+    "last_model_generated",
+    "last_successful_run",
+    "market_data_status",
+    "model_status",
+    "next_scheduled_run",
+    "overall_status",
+    "payload_run_id",
+    "router_status",
+    "run_id",
+    "schema_version",
+    "settlement_status",
+    "sport",
+    "thresholds",
+    "warnings"
+  ],
+  "title": "health",
+  "type": "object"
+}

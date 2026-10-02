@@ -26,14 +26,19 @@ class Sport(str, Enum):
     #: Added 2026-09-29 for ACCOUNTING ONLY: wagers the owner places manually are recorded in
     #: NHL-edge-finder's `accounting-data` ledger. Nothing here gives any NHL model a say in a bet.
     NHL = "NHL"
+    #: Added 2026-10-02 (app-readiness pass): NBA and SOCCER join the routable vocabulary. Like NHL they are
+    #: ACCOUNTING ONLY destinations -- the owner's manual Kalshi wagers are recorded in each repository's
+    #: accounting ledger; no model in either repository gains any say in a bet.
+    NBA = "NBA"
+    SOCCER = "SOCCER"
     TENNIS = "TENNIS"
     OTHER = "OTHER"
     UNRESOLVED = "UNRESOLVED"
 
 
 #: The sports a classification may resolve TO (a league we could route). Whether one is actually delivered is
-#: decided by `destinations.PROFILES` -- Tennis is here and still has no profile, so it is never delivered.
-ROUTABLE_SPORTS = (Sport.MLB, Sport.NFL, Sport.CFB, Sport.NHL, Sport.TENNIS)
+#: decided by `destinations.PROFILES`.
+ROUTABLE_SPORTS = (Sport.MLB, Sport.NFL, Sport.CFB, Sport.NHL, Sport.NBA, Sport.SOCCER, Sport.TENNIS)
 
 #: Stable ordering for aggregate reports.
 REPORT_ORDER = (
@@ -41,6 +46,8 @@ REPORT_ORDER = (
     Sport.NFL,
     Sport.CFB,
     Sport.NHL,
+    Sport.NBA,
+    Sport.SOCCER,
     Sport.TENNIS,
     Sport.OTHER,
     Sport.UNRESOLVED,

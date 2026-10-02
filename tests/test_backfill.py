@@ -411,10 +411,10 @@ class TestLedgerVocabulary:
         produces a batch of confident writes that are all wrong."""
         from kalshi_router.backfill import UnreadableLedger
 
-        wager = FakeWager(sport="TENNIS")
+        wager = FakeWager(sport="GOLF")
 
         with pytest.raises(UnreadableLedger, match="no ledger vocabulary"):
-            reconcile_one(wager, [ledger_row()], frozenset({"TENNIS"}))
+            reconcile_one(wager, [ledger_row()], frozenset({"GOLF"}))
 
     def test_every_vocabulary_names_every_field_reconciliation_reads(self):
         """A vocabulary missing one key would raise KeyError at reconcile time,

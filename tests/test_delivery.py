@@ -116,17 +116,19 @@ def test_production_routes_exactly_the_verified_destinations():
     NHL wagers into NHL-edge-finder's accounting-data ledger), with its own
     row builder, importer, settlement importer and validator -- and held for
     observation (`auto_merge=False`) until the path is proven live.
-    TENNIS has no row shape and no profile, and a sport with no profile is
-    REFUSED."""
-    assert set(DESTINATION_REPOS) == {Sport.MLB, Sport.CFB, Sport.NFL, Sport.NHL}
-    assert Sport.TENNIS not in DESTINATION_REPOS
+    NBA, SOCCER and TENNIS were added on 2026-10-02 (app-readiness pass), also
+    ACCOUNTING ONLY, each importing through the shared contract ledger and each
+    held for observation. A sport with no profile is still REFUSED."""
+    assert set(DESTINATION_REPOS) == {Sport.MLB, Sport.CFB, Sport.NFL, Sport.NHL, Sport.NBA, Sport.SOCCER,
+                                      Sport.TENNIS}
+    assert Sport.OTHER not in DESTINATION_REPOS and Sport.UNRESOLVED not in DESTINATION_REPOS
 
 
 def test_a_sport_without_a_destination_cannot_be_planned():
     # It should have been refused upstream; this asserts the invariant rather
     # than trusting it.
     with pytest.raises(ValueError, match="no destination importer"):
-        plan_delivery([shadow_wager(sport=Sport.TENNIS)])
+        plan_delivery([shadow_wager(sport=Sport.OTHER)])
 
 
 def test_a_plan_reports_counts_and_a_public_repo_name_only():
@@ -202,7 +204,7 @@ def test_a_sport_without_a_destination_cannot_be_written(tmp_path):
     from kalshi_router.sports import Sport
 
     with pytest.raises(ValueError, match="no destination importer"):
-        write_payloads([production_wager(sport=Sport.TENNIS.value)], str(tmp_path))
+        write_payloads([production_wager(sport="GOLF")], str(tmp_path))
 
 
 # ------------------------------------------- the HISTORICAL payload write path
@@ -333,4 +335,4 @@ class TestBackfillPayloads:
         inverse: nothing production routes lacks a row shape, and a sport the
         backfill cannot speak (TENNIS) is not routed."""
         assert set(s.value for s in DESTINATION_REPOS) <= set(ROW_BUILDERS)
-        assert "TENNIS" not in ROW_BUILDERS and Sport.TENNIS not in DESTINATION_REPOS
+        assert "OTHER" not in ROW_BUILDERS and "UNRESOLVED" not in ROW_BUILDERS

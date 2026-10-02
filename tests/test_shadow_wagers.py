@@ -216,17 +216,17 @@ def test_an_unresolved_sport_is_refused_rather_than_guessed():
     assert refusal is WagerRefusal.SPORT_UNRESOLVED
 
 
-def test_a_sport_with_no_importer_is_refused():
+def test_a_sport_with_no_importer_is_refused(monkeypatch):
     """A sport with no destination profile is refused, never defaulted.
 
-    Tennis has no profile: it is known to settle on a scalar this contract
-    cannot express. (NFL was the other example until its activation on
-    2026-09-24.)
+    Every routable sport has a profile since 2026-10-02, so the gap is simulated
+    by narrowing the derived set: `SPORTS_WITH_AN_IMPORTER` is derived from the
+    profiles rather than restated here, so this refusal and what production
+    actually routes cannot drift apart in the direction where the shadow path
+    refuses a sport the scheduled job is already delivering."""
+    import kalshi_router.wager as wager_module
 
-    `SPORTS_WITH_AN_IMPORTER` is derived from the profiles rather than restated
-    here, so this refusal and what production actually routes cannot drift
-    apart in the direction where the shadow path refuses a sport the scheduled
-    job is already delivering."""
+    monkeypatch.setattr(wager_module, "SPORTS_WITH_AN_IMPORTER", frozenset({Sport.MLB}))
     for sport in (Sport.TENNIS,):
         _, refusal = build_shadow_wager(settled_episode(), classified(sport), context())
         assert refusal is WagerRefusal.NO_DESTINATION_IMPORTER

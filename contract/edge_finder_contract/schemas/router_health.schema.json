@@ -1,0 +1,365 @@
+{
+  "$id": "https://edge-finder.app/schemas/edge_finder.app.v1/router_health",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "bets_discovered": {
+      "description": "",
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "blocked": {
+      "description": "",
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "by_sport": {
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "auto_merge": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "classification": {
+            "enum": [
+              "SUPPORTED",
+              "UNSUPPORTED"
+            ],
+            "type": "string"
+          },
+          "delivered": {
+            "description": "",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "destination_repo": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "eligible": {
+            "description": "eligible wagers in the last delivery run",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "failed": {
+            "description": "",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "last_error_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ledger_branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "routable": {
+            "description": "the router has a classification AND a destination profile for this sport",
+            "type": "boolean"
+          },
+          "status": {
+            "enum": [
+              "DELIVERED",
+              "NO_OP",
+              "FAILED",
+              "REFUSED",
+              "NOT_ROUTABLE",
+              "DRY_RUN",
+              "UNKNOWN"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "auto_merge",
+          "classification",
+          "delivered",
+          "destination_repo",
+          "eligible",
+          "failed",
+          "last_error_type",
+          "ledger_branch",
+          "routable",
+          "status"
+        ],
+        "type": "object"
+      },
+      "type": "object"
+    },
+    "commit_sha": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "deferred": {
+      "description": "",
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "delivered": {
+      "description": "",
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "errors": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "failed": {
+      "description": "",
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "generated_at": {
+      "description": "ISO-8601 UTC, Z suffix",
+      "format": "date-time",
+      "type": "string"
+    },
+    "kind": {
+      "const": "router_health"
+    },
+    "last_delivery_run": {
+      "additionalProperties": false,
+      "properties": {
+        "concluded_at": {
+          "description": "ISO-8601 UTC, Z suffix, or null",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "conclusion": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "health_state": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "started_at": {
+          "description": "ISO-8601 UTC, Z suffix, or null",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "concluded_at",
+        "conclusion",
+        "health_state",
+        "run_id",
+        "started_at",
+        "url"
+      ],
+      "type": "object"
+    },
+    "last_poll_at": {
+      "description": "ISO-8601 UTC, Z suffix, or null",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "last_settlement_run": {
+      "additionalProperties": false,
+      "properties": {
+        "concluded_at": {
+          "description": "ISO-8601 UTC, Z suffix, or null",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "conclusion": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "health_state": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "started_at": {
+          "description": "ISO-8601 UTC, Z suffix, or null",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "concluded_at",
+        "conclusion",
+        "health_state",
+        "run_id",
+        "started_at",
+        "url"
+      ],
+      "type": "object"
+    },
+    "overall_status": {
+      "enum": [
+        "HEALTHY",
+        "DEGRADED",
+        "STALE",
+        "UNAVAILABLE",
+        "RESEARCH_ONLY"
+      ],
+      "type": "string"
+    },
+    "poll_age_seconds": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "router_health_state": {
+      "enum": [
+        "healthy_no_op",
+        "delivered",
+        "not_routable",
+        "deferred",
+        "blocked",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "run_id": {
+      "description": "a contract id",
+      "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "edge_finder.app.v1"
+    },
+    "sport": {
+      "enum": [
+        "MLB",
+        "CFB",
+        "NFL",
+        "NBA",
+        "NHL",
+        "SOCCER",
+        "TENNIS",
+        "ALL"
+      ],
+      "type": "string"
+    },
+    "thresholds": {
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "fresh_after_seconds": {
+            "type": "integer"
+          },
+          "stale_after_seconds": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "fresh_after_seconds",
+          "stale_after_seconds"
+        ],
+        "type": "object"
+      },
+      "type": "object"
+    },
+    "warnings": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "bets_discovered",
+    "blocked",
+    "by_sport",
+    "commit_sha",
+    "deferred",
+    "delivered",
+    "errors",
+    "failed",
+    "generated_at",
+    "kind",
+    "last_delivery_run",
+    "last_poll_at",
+    "last_settlement_run",
+    "overall_status",
+    "poll_age_seconds",
+    "router_health_state",
+    "run_id",
+    "schema_version",
+    "sport",
+    "thresholds",
+    "warnings"
+  ],
+  "title": "router_health",
+  "type": "object"
+}

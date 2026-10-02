@@ -1,0 +1,204 @@
+{
+  "$id": "https://edge-finder.app/schemas/edge_finder.app.v1/runs",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "count": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "generated_at": {
+      "description": "ISO-8601 UTC, Z suffix",
+      "format": "date-time",
+      "type": "string"
+    },
+    "items": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "commit_sha": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "completed_at": {
+            "description": "ISO-8601 UTC, Z suffix",
+            "format": "date-time",
+            "type": "string"
+          },
+          "data_sources": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "errors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "events_processed": {
+            "type": "integer"
+          },
+          "events_requested": {
+            "description": "",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "input_freshness": {
+            "additionalProperties": {
+              "format": "date-time",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": "object"
+          },
+          "markets_discovered": {
+            "type": "integer"
+          },
+          "markets_priced": {
+            "type": "integer"
+          },
+          "model_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "recommendations_created": {
+            "type": "integer"
+          },
+          "repo": {
+            "type": "string"
+          },
+          "run_id": {
+            "description": "a contract id",
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": "string"
+          },
+          "scope": {
+            "description": "what this run covered, e.g. slate 2026-10-02",
+            "type": "string"
+          },
+          "source_ids": {
+            "additionalProperties": {
+              "type": [
+                "string",
+                "integer",
+                "null"
+              ]
+            },
+            "description": "provider id namespace -> provider id (kalshi, espn, nflverse, mlb_game_pk ...)",
+            "type": "object"
+          },
+          "sport": {
+            "description": "canonical sport",
+            "enum": [
+              "MLB",
+              "CFB",
+              "NFL",
+              "NBA",
+              "NHL",
+              "SOCCER",
+              "TENNIS"
+            ],
+            "type": "string"
+          },
+          "started_at": {
+            "description": "ISO-8601 UTC, Z suffix, or null",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "enum": [
+              "SUCCESS",
+              "PARTIAL",
+              "FAILED"
+            ],
+            "type": "string"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "workflow_run_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "commit_sha",
+          "completed_at",
+          "data_sources",
+          "errors",
+          "events_processed",
+          "events_requested",
+          "input_freshness",
+          "markets_discovered",
+          "markets_priced",
+          "model_version",
+          "recommendations_created",
+          "repo",
+          "run_id",
+          "scope",
+          "source_ids",
+          "sport",
+          "started_at",
+          "status",
+          "warnings",
+          "workflow_run_id"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "kind": {
+      "const": "runs"
+    },
+    "run_id": {
+      "description": "a contract id",
+      "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "edge_finder.app.v1"
+    },
+    "sport": {
+      "description": "canonical sport",
+      "enum": [
+        "MLB",
+        "CFB",
+        "NFL",
+        "NBA",
+        "NHL",
+        "SOCCER",
+        "TENNIS"
+      ],
+      "type": "string"
+    }
+  },
+  "required": [
+    "count",
+    "generated_at",
+    "items",
+    "kind",
+    "run_id",
+    "schema_version",
+    "sport"
+  ],
+  "title": "runs",
+  "type": "object"
+}

@@ -145,9 +145,20 @@ jobs:
             [ -z "${current_sport}" ] && return 0
             if [ "${failures}" -gt "${failures_at_start}" ]; then
               echo "${current_sport}: FAIL -- ${sport_note:-see the error annotations in the run log}" >> "${GITHUB_STEP_SUMMARY}"
+              verdict="FAIL"
             else
               echo "${current_sport}: PASS -- ${sport_note:-delivered clean}" >> "${GITHUB_STEP_SUMMARY}"
+              verdict="PASS"
             fi
+            # The same verdict as one JSON line in the LOG, where the app-facing
+            # health publisher can read it (a step summary cannot be fetched).
+            # A sport name, a verdict and a note that already appears above:
+            # nothing that is not already printed by this run.
+            python - "${current_sport}" "${verdict}" "${DRY_RUN}" "${sport_note:-}" <<'PYEOF'
+          import json, sys
+          print("ROUTER_DELIVERY_JSON=" + json.dumps({"sport": sys.argv[1], "verdict": sys.argv[2],
+                "dry_run": sys.argv[3] == "true", "note": sys.argv[4][:200]}, sort_keys=True))
+          PYEOF
             current_sport=""
           }
 

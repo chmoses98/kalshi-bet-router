@@ -298,3 +298,49 @@ Add a `DestinationProfile`. That is the whole change — `DESTINATION_REPOS`,
 from `PROFILES`. What you will have to supply, because the router cannot invent
 it: the importer's argv, the paths delivery may commit, and either CI on the
 ledger branch or a validator script the destination owns.
+
+## NBA, SOCCER and TENNIS activation (2026-10-02, app-readiness pass) — ACCOUNTING ONLY
+
+Three destinations were added in one change, and they share one importer. Each repository vendors the Edge
+Finder contract (`contract/edge_finder_contract/`, authored in this repository) and its
+`routed_ledger.py` module is the destination's wager/settlement ledger: the NHL ledger's exact contract
+(`payload {"importBatchId", "rows"}`, identity minted from `source_bet_key`, `NEW / DUPLICATE_NOOP / CONFLICT /
+REFUSED` receipts, append-only JSONL, provenance fields refused, counts-only stdout), parameterised by sport.
+`scripts/accounting/import_routed_wagers.py`, `import_routed_settlements.py` and `validate_routed_ledger.py`
+in each repository are thin wrappers over it. One module to prove, three sports that prove it
+(`tests/test_shared_destinations.py`, which also runs each destination's own scripts end to end when a sibling
+checkout exists).
+
+| | NBA | SOCCER | TENNIS |
+|---|---|---|---|
+| repo | `chmoses98/nba-edge-finder` | `chmoses98/soccer-edge-finder` | `chmoses98/Tennis-Edge-Finder` |
+| ledger branch | `accounting-data` (orphan) | `accounting-data` (orphan) | `accounting-data` (orphan) |
+| ledger files | `data/accounting/wagers.jsonl`, `settlements.jsonl` | same | same |
+| identity | `nbaw-`/`nbas-` + sha256(key)[:24] | `socw-`/`socs-` | `tenw-`/`tens-` |
+| economics | v2 from the first row | v2 | v2 |
+| auto_merge | **False** (observation) | **False** | **False** |
+
+**Classification.**
+* NBA is a CLOSED-vocabulary league like the NHL: "Pro Basketball (M)", "NBA", "National Basketball
+  Association" and nothing else. The Basketball heading is now an *ambiguous* family (WNBA, college,
+  EuroLeague sit beside it) that narrows to {NBA} and never resolves on its own; "Pro Basketball (W)", "WNBA"
+  and college basketball are positively OTHER.
+* SOCCER resolves at the taxonomy SPORT level, exactly as tennis does: everything under Kalshi's Soccer
+  heading is SOCCER. Without the taxonomy, only competition names that belong to no other sport decide
+  (`SOCCER_COMPETITION_TOKENS`: UEFA, La Liga, MLS, Liga MX, Brasileirão ...). "Premier League" alone is
+  UNRESOLVED — the Indian Premier League is cricket. The Football family is untouched: it still means
+  NFL/CFB and still fails closed without a league.
+* TENNIS was already classified; it only lacked a destination.
+* The L5 registry gained the 60 NBA series nba-edge-finder's live discovery classes MODELABLE/BUILDABLE and
+  the 253 soccer series soccer-edge-finder's discovery owns by the exchange's own tag and that carried
+  markets. Still last-resort evidence; never an override.
+
+**Credential.** Delivery uses the shared `DOWNSTREAM_REPO_TOKEN`, which must be re-scoped to include the three
+repositories (and must carry *Pull requests: write* everywhere — the 2026-09-29 probe found it lacks that on
+NHL-edge-finder, which is why 17 NHL wagers sit unmerged on `kalshi-router/NHL`). `downstream-credential-probe.yml`
+now probes all seven destinations. Until the token is fixed a wager for these sports fails SAFE: the branch is
+pushed, the pull-request step fails for that sport only, and every later run retries the same idempotent batch.
+
+**Soccer's own importer.** `soccer_edge.router` (PositionV1, year-sharded `archive/positions/`) remains in that
+repository as its translation layer, but delivery goes through the shared ledger so the router has one
+destination shape to reconcile, one validator contract, and one merge-path rule for all three.

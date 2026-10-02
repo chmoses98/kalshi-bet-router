@@ -1,0 +1,235 @@
+{
+  "$id": "https://edge-finder.app/schemas/edge_finder.app.v1/event",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "away_participant": {
+      "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "broadcast": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "competition": {
+      "description": "competition / tournament / week label where distinct from league",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "effective_start_time_utc": {
+      "description": "the best current estimate of the actual start, when it differs",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "event_id": {
+      "description": "a contract id",
+      "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+      "type": "string"
+    },
+    "extensions": {
+      "additionalProperties": true,
+      "description": "sport-specific detail the common fields do not carry; never required by the UI",
+      "type": "object"
+    },
+    "home_participant": {
+      "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "last_updated_at": {
+      "description": "when this record was built",
+      "format": "date-time",
+      "type": "string"
+    },
+    "league": {
+      "description": "display league / tour, e.g. NFL, Premier League, ATP",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "participants": {
+      "description": "every participant; the durable abstraction (tennis has no home/away)",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "description": "conference, country, ranking, seed, jersey ... never required",
+            "type": "object"
+          },
+          "participant_id": {
+            "description": "a contract id",
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": "string"
+          },
+          "participant_type": {
+            "enum": [
+              "TEAM",
+              "PLAYER",
+              "PAIR"
+            ],
+            "type": "string"
+          },
+          "short_name": {
+            "description": "abbreviation or surname",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source_ids": {
+            "additionalProperties": {
+              "type": [
+                "string",
+                "integer",
+                "null"
+              ]
+            },
+            "description": "provider id namespace -> provider id (kalshi, espn, nflverse, mlb_game_pk ...)",
+            "type": "object"
+          }
+        },
+        "required": [
+          "display_name",
+          "metadata",
+          "participant_id",
+          "participant_type",
+          "short_name",
+          "source_ids"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "schedule_updated_at": {
+      "description": "when the schedule source was last read",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "season": {
+      "description": "season label as the source states it, e.g. 2026, 2026-27",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "source_ids": {
+      "additionalProperties": {
+        "type": [
+          "string",
+          "integer",
+          "null"
+        ]
+      },
+      "description": "provider id namespace -> provider id (kalshi, espn, nflverse, mlb_game_pk ...)",
+      "type": "object"
+    },
+    "sport": {
+      "description": "canonical sport",
+      "enum": [
+        "MLB",
+        "CFB",
+        "NFL",
+        "NBA",
+        "NHL",
+        "SOCCER",
+        "TENNIS"
+      ],
+      "type": "string"
+    },
+    "start_time_confidence": {
+      "description": "PLACEHOLDER = a Kalshi nominal time, not a schedule",
+      "enum": [
+        "SCHEDULED",
+        "VERIFIED",
+        "ESTIMATED",
+        "PLACEHOLDER",
+        "UNKNOWN",
+        null
+      ],
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "start_time_local": {
+      "description": "ISO-8601 with the venue's offset when the source knows it",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "start_time_source": {
+      "description": "which provider supplied the start time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "start_time_utc": {
+      "description": "scheduled start, UTC",
+      "format": "date-time",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "SCHEDULED",
+        "LIVE",
+        "FINAL",
+        "POSTPONED",
+        "CANCELLED",
+        "UNKNOWN"
+      ],
+      "type": "string"
+    },
+    "venue": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "away_participant",
+    "broadcast",
+    "competition",
+    "effective_start_time_utc",
+    "event_id",
+    "extensions",
+    "home_participant",
+    "last_updated_at",
+    "league",
+    "participants",
+    "schedule_updated_at",
+    "season",
+    "source_ids",
+    "sport",
+    "start_time_confidence",
+    "start_time_local",
+    "start_time_source",
+    "start_time_utc",
+    "status",
+    "venue"
+  ],
+  "title": "event",
+  "type": "object"
+}

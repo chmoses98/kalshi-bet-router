@@ -1,0 +1,1556 @@
+{
+  "$id": "https://edge-finder.app/schemas/edge_finder.app.v1/event_detail",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "context": {
+      "additionalProperties": true,
+      "description": "injuries / lineups / weather / usage, sport-specific",
+      "type": "object"
+    },
+    "data_freshness": {
+      "enum": [
+        "FRESH",
+        "AGING",
+        "STALE",
+        "UNKNOWN"
+      ],
+      "type": "string"
+    },
+    "event": {
+      "additionalProperties": false,
+      "properties": {
+        "away_participant": {
+          "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "broadcast": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "competition": {
+          "description": "competition / tournament / week label where distinct from league",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "effective_start_time_utc": {
+          "description": "the best current estimate of the actual start, when it differs",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "event_id": {
+          "description": "a contract id",
+          "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+          "type": "string"
+        },
+        "extensions": {
+          "additionalProperties": true,
+          "description": "sport-specific detail the common fields do not carry; never required by the UI",
+          "type": "object"
+        },
+        "home_participant": {
+          "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_updated_at": {
+          "description": "when this record was built",
+          "format": "date-time",
+          "type": "string"
+        },
+        "league": {
+          "description": "display league / tour, e.g. NFL, Premier League, ATP",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "participants": {
+          "description": "every participant; the durable abstraction (tennis has no home/away)",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "display_name": {
+                "type": "string"
+              },
+              "metadata": {
+                "additionalProperties": true,
+                "description": "conference, country, ranking, seed, jersey ... never required",
+                "type": "object"
+              },
+              "participant_id": {
+                "description": "a contract id",
+                "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+                "type": "string"
+              },
+              "participant_type": {
+                "enum": [
+                  "TEAM",
+                  "PLAYER",
+                  "PAIR"
+                ],
+                "type": "string"
+              },
+              "short_name": {
+                "description": "abbreviation or surname",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "source_ids": {
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "integer",
+                    "null"
+                  ]
+                },
+                "description": "provider id namespace -> provider id (kalshi, espn, nflverse, mlb_game_pk ...)",
+                "type": "object"
+              }
+            },
+            "required": [
+              "display_name",
+              "metadata",
+              "participant_id",
+              "participant_type",
+              "short_name",
+              "source_ids"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "schedule_updated_at": {
+          "description": "when the schedule source was last read",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "season": {
+          "description": "season label as the source states it, e.g. 2026, 2026-27",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source_ids": {
+          "additionalProperties": {
+            "type": [
+              "string",
+              "integer",
+              "null"
+            ]
+          },
+          "description": "provider id namespace -> provider id (kalshi, espn, nflverse, mlb_game_pk ...)",
+          "type": "object"
+        },
+        "sport": {
+          "description": "canonical sport",
+          "enum": [
+            "MLB",
+            "CFB",
+            "NFL",
+            "NBA",
+            "NHL",
+            "SOCCER",
+            "TENNIS"
+          ],
+          "type": "string"
+        },
+        "start_time_confidence": {
+          "description": "PLACEHOLDER = a Kalshi nominal time, not a schedule",
+          "enum": [
+            "SCHEDULED",
+            "VERIFIED",
+            "ESTIMATED",
+            "PLACEHOLDER",
+            "UNKNOWN",
+            null
+          ],
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "start_time_local": {
+          "description": "ISO-8601 with the venue's offset when the source knows it",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "start_time_source": {
+          "description": "which provider supplied the start time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "start_time_utc": {
+          "description": "scheduled start, UTC",
+          "format": "date-time",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "SCHEDULED",
+            "LIVE",
+            "FINAL",
+            "POSTPONED",
+            "CANCELLED",
+            "UNKNOWN"
+          ],
+          "type": "string"
+        },
+        "venue": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "away_participant",
+        "broadcast",
+        "competition",
+        "effective_start_time_utc",
+        "event_id",
+        "extensions",
+        "home_participant",
+        "last_updated_at",
+        "league",
+        "participants",
+        "schedule_updated_at",
+        "season",
+        "source_ids",
+        "sport",
+        "start_time_confidence",
+        "start_time_local",
+        "start_time_source",
+        "start_time_utc",
+        "status",
+        "venue"
+      ],
+      "type": "object"
+    },
+    "generated_at": {
+      "description": "ISO-8601 UTC, Z suffix",
+      "format": "date-time",
+      "type": "string"
+    },
+    "kind": {
+      "const": "event_detail"
+    },
+    "markets": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "captured_at": {
+            "description": "when the quote was observed; null only for a stub of a market no longer on the board",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "close_time_utc": {
+            "description": "ISO-8601 UTC, Z suffix, or null",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "event_id": {
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "extensions": {
+            "additionalProperties": true,
+            "description": "sport-specific detail the common fields do not carry; never required by the UI",
+            "type": "object"
+          },
+          "kalshi_event_ticker": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kalshi_series_ticker": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kalshi_ticker": {
+            "type": "string"
+          },
+          "last_price": {
+            "description": "",
+            "maximum": 1,
+            "minimum": 0,
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "line": {
+            "description": "spread / total / handicap line",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "market_family": {
+            "description": "the source repository's family label, normalised to lower snake_case",
+            "type": "string"
+          },
+          "market_id": {
+            "description": "a contract id",
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": "string"
+          },
+          "market_probability": {
+            "description": "mid of the YES book in [0,1]; null when the book is empty",
+            "maximum": 1,
+            "minimum": 0,
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "market_status": {
+            "enum": [
+              "OPEN",
+              "CLOSED",
+              "SETTLED",
+              "UNOPENED",
+              "UNKNOWN"
+            ],
+            "type": "string"
+          },
+          "market_type": {
+            "description": "finer type where the family is broad",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "no_ask": {
+            "description": "",
+            "maximum": 1,
+            "minimum": 0,
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "no_bid": {
+            "description": "",
+            "maximum": 1,
+            "minimum": 0,
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "no_description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "open_interest": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "participant_id": {
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "period": {
+            "description": "FULL_GAME, FIRST_HALF, F5, SET_1 ... as the source labels it",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "player_id": {
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "raw_market_reference": {
+            "description": "where the raw record lives in the source repository",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "side": {
+            "description": "what YES refers to, when the family has sides",
+            "enum": [
+              "HOME",
+              "AWAY",
+              "DRAW",
+              "OVER",
+              "UNDER",
+              "PARTICIPANT",
+              "TIE",
+              "OTHER",
+              null
+            ],
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "description": "which capture produced the quote",
+            "type": "string"
+          },
+          "sport": {
+            "description": "canonical sport",
+            "enum": [
+              "MLB",
+              "CFB",
+              "NFL",
+              "NBA",
+              "NHL",
+              "SOCCER",
+              "TENNIS"
+            ],
+            "type": "string"
+          },
+          "threshold": {
+            "description": "prop threshold (YES iff stat >= / > threshold as yes_description states)",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "volume": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "yes_ask": {
+            "description": "",
+            "maximum": 1,
+            "minimum": 0,
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "yes_bid": {
+            "description": "",
+            "maximum": 1,
+            "minimum": 0,
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "yes_description": {
+            "description": "what YES means, in words",
+            "type": "string"
+          }
+        },
+        "required": [
+          "captured_at",
+          "close_time_utc",
+          "event_id",
+          "extensions",
+          "kalshi_event_ticker",
+          "kalshi_series_ticker",
+          "kalshi_ticker",
+          "last_price",
+          "line",
+          "market_family",
+          "market_id",
+          "market_probability",
+          "market_status",
+          "market_type",
+          "no_ask",
+          "no_bid",
+          "no_description",
+          "open_interest",
+          "participant_id",
+          "period",
+          "player_id",
+          "raw_market_reference",
+          "side",
+          "source",
+          "sport",
+          "threshold",
+          "volume",
+          "yes_ask",
+          "yes_bid",
+          "yes_description"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "model_prices": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "data_quality_status": {
+            "enum": [
+              "OK",
+              "DEGRADED",
+              "CANNOT_TRUST_INPUTS",
+              "UNSUPPORTED",
+              "UNKNOWN"
+            ],
+            "type": "string"
+          },
+          "edge": {
+            "description": "fair_probability - market_probability on the YES side, when both exist",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "event_id": {
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "extensions": {
+            "additionalProperties": true,
+            "description": "sport-specific detail the common fields do not carry; never required by the UI",
+            "type": "object"
+          },
+          "fair_probability": {
+            "description": "P(YES) in [0,1]",
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "freshness_status": {
+            "enum": [
+              "FRESH",
+              "AGING",
+              "STALE",
+              "UNKNOWN"
+            ],
+            "type": "string"
+          },
+          "generated_at": {
+            "description": "ISO-8601 UTC, Z suffix",
+            "format": "date-time",
+            "type": "string"
+          },
+          "inputs_as_of": {
+            "description": "the newest input the model saw",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lower_bound": {
+            "description": "",
+            "maximum": 1,
+            "minimum": 0,
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "market_id": {
+            "description": "a contract id",
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": "string"
+          },
+          "market_probability": {
+            "description": "the market probability the model was compared against",
+            "maximum": 1,
+            "minimum": 0,
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "model_price_id": {
+            "description": "a contract id",
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": "string"
+          },
+          "model_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "projection_unit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "projection_value": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "run_id": {
+            "description": "a contract id",
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": "string"
+          },
+          "support_status": {
+            "description": "the source repository's support / gate label, verbatim",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "uncertainty": {
+            "description": "standard error or interval half-width when the model computes one; never invented",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "upper_bound": {
+            "description": "",
+            "maximum": 1,
+            "minimum": 0,
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "data_quality_status",
+          "edge",
+          "event_id",
+          "extensions",
+          "fair_probability",
+          "freshness_status",
+          "generated_at",
+          "inputs_as_of",
+          "lower_bound",
+          "market_id",
+          "market_probability",
+          "model_price_id",
+          "model_version",
+          "projection_unit",
+          "projection_value",
+          "run_id",
+          "support_status",
+          "uncertainty",
+          "upper_bound"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "price_history": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "captured_at": {
+            "description": "ISO-8601 UTC, Z suffix",
+            "format": "date-time",
+            "type": "string"
+          },
+          "last_price": {
+            "description": "",
+            "maximum": 1,
+            "minimum": 0,
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "market_id": {
+            "description": "a contract id",
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": "string"
+          },
+          "yes_ask": {
+            "description": "",
+            "maximum": 1,
+            "minimum": 0,
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "yes_bid": {
+            "description": "",
+            "maximum": 1,
+            "minimum": 0,
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "captured_at",
+          "last_price",
+          "market_id",
+          "yes_ask",
+          "yes_bid"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "recommendations": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "authority": {
+            "description": "who may act on this: a model promotion level, or MANUAL/ASSISTED when a person decides",
+            "enum": [
+              "RESEARCH_ONLY",
+              "SHADOW",
+              "LIMITED",
+              "TRUSTED",
+              "MANUAL",
+              "ASSISTED"
+            ],
+            "type": "string"
+          },
+          "bankroll_basis": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "bet_up_to_price": {
+            "description": "",
+            "maximum": 1,
+            "minimum": 0,
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "bet_up_to_probability": {
+            "description": "",
+            "maximum": 1,
+            "minimum": 0,
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "confidence": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "description": "ISO-8601 UTC, Z suffix",
+            "format": "date-time",
+            "type": "string"
+          },
+          "current_price": {
+            "description": "executable price of the selection when generated",
+            "maximum": 1,
+            "minimum": 0,
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "current_probability": {
+            "description": "market probability when generated",
+            "maximum": 1,
+            "minimum": 0,
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "data_freshness": {
+            "enum": [
+              "FRESH",
+              "AGING",
+              "STALE",
+              "UNKNOWN"
+            ],
+            "type": "string"
+          },
+          "edge": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "event_id": {
+            "description": "a contract id",
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": "string"
+          },
+          "expires_at": {
+            "description": "ISO-8601 UTC, Z suffix, or null",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "extensions": {
+            "additionalProperties": true,
+            "description": "sport-specific detail the common fields do not carry; never required by the UI",
+            "type": "object"
+          },
+          "fair_probability": {
+            "description": "P(selection) per the model",
+            "maximum": 1,
+            "minimum": 0,
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "injury_flags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "lineup_status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "market_description": {
+            "type": "string"
+          },
+          "market_id": {
+            "description": "a contract id",
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": "string"
+          },
+          "reason_not_playable": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "recommendation_id": {
+            "description": "a contract id",
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": "string"
+          },
+          "research_only": {
+            "description": "true unless a promoted model or a human decision backs it",
+            "type": "boolean"
+          },
+          "run_id": {
+            "description": "a contract id",
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": "string"
+          },
+          "selection": {
+            "description": "the Kalshi contract side",
+            "enum": [
+              "YES",
+              "NO"
+            ],
+            "type": "string"
+          },
+          "source_ids": {
+            "additionalProperties": {
+              "type": [
+                "string",
+                "integer",
+                "null"
+              ]
+            },
+            "description": "provider id namespace -> provider id (kalshi, espn, nflverse, mlb_game_pk ...)",
+            "type": "object"
+          },
+          "source_repo": {
+            "type": "string"
+          },
+          "sport": {
+            "description": "canonical sport",
+            "enum": [
+              "MLB",
+              "CFB",
+              "NFL",
+              "NBA",
+              "NHL",
+              "SOCCER",
+              "TENNIS"
+            ],
+            "type": "string"
+          },
+          "stake_dollars": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "stake_units": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "status": {
+            "enum": [
+              "RECOMMENDED",
+              "WATCH",
+              "PASS",
+              "RESEARCH_CANDIDATE",
+              "EXPIRED",
+              "NOT_PLAYABLE"
+            ],
+            "type": "string"
+          },
+          "thesis_id": {
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "authority",
+          "bankroll_basis",
+          "bet_up_to_price",
+          "bet_up_to_probability",
+          "confidence",
+          "created_at",
+          "current_price",
+          "current_probability",
+          "data_freshness",
+          "edge",
+          "event_id",
+          "expires_at",
+          "extensions",
+          "fair_probability",
+          "injury_flags",
+          "lineup_status",
+          "market_description",
+          "market_id",
+          "reason_not_playable",
+          "recommendation_id",
+          "research_only",
+          "run_id",
+          "selection",
+          "source_ids",
+          "source_repo",
+          "sport",
+          "stake_dollars",
+          "stake_units",
+          "status",
+          "thesis_id"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "run_id": {
+      "description": "a contract id",
+      "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "edge_finder.app.v1"
+    },
+    "settlements": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "extensions": {
+            "additionalProperties": true,
+            "description": "sport-specific detail the common fields do not carry; never required by the UI",
+            "type": "object"
+          },
+          "fees": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "gross_payout": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "market_id": {
+            "description": "a contract id",
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": "string"
+          },
+          "net_pnl": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "refusals": {
+            "description": "why money fields are absent",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "result": {
+            "enum": [
+              "WON",
+              "LOST",
+              "PUSH",
+              "VOID",
+              "SCALAR",
+              "UNKNOWN"
+            ],
+            "type": "string"
+          },
+          "settled_at": {
+            "description": "ISO-8601 UTC, Z suffix",
+            "format": "date-time",
+            "type": "string"
+          },
+          "settlement_id": {
+            "description": "a contract id",
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": "string"
+          },
+          "settlement_value": {
+            "description": "dollars per YES contract paid by the exchange, when known",
+            "maximum": 1,
+            "minimum": 0,
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "source": {
+            "type": "string"
+          },
+          "source_ids": {
+            "additionalProperties": {
+              "type": [
+                "string",
+                "integer",
+                "null"
+              ]
+            },
+            "description": "provider id namespace -> provider id (kalshi, espn, nflverse, mlb_game_pk ...)",
+            "type": "object"
+          },
+          "verification_status": {
+            "enum": [
+              "EXCHANGE_CONFIRMED",
+              "MODEL_DERIVED",
+              "UNVERIFIED",
+              "REFUSED"
+            ],
+            "type": "string"
+          },
+          "wager_id": {
+            "description": "a contract id",
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": "string"
+          },
+          "winning_side": {
+            "enum": [
+              "YES",
+              "NO",
+              null
+            ],
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "extensions",
+          "fees",
+          "gross_payout",
+          "market_id",
+          "net_pnl",
+          "refusals",
+          "result",
+          "settled_at",
+          "settlement_id",
+          "settlement_value",
+          "source",
+          "source_ids",
+          "verification_status",
+          "wager_id",
+          "winning_side"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "sport": {
+      "description": "canonical sport",
+      "enum": [
+        "MLB",
+        "CFB",
+        "NFL",
+        "NBA",
+        "NHL",
+        "SOCCER",
+        "TENNIS"
+      ],
+      "type": "string"
+    },
+    "theses": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "confidence_label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "context_notes": {
+            "additionalProperties": false,
+            "properties": {
+              "injuries": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "lineups": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "other": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "usage": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "weather": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "injuries",
+              "lineups",
+              "other",
+              "usage",
+              "weather"
+            ],
+            "type": "object"
+          },
+          "event_id": {
+            "description": "a contract id",
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": "string"
+          },
+          "evidence": {
+            "additionalProperties": true,
+            "description": "structured model evidence when no prose exists",
+            "type": "object"
+          },
+          "generated_at": {
+            "description": "ISO-8601 UTC, Z suffix",
+            "format": "date-time",
+            "type": "string"
+          },
+          "key_dependencies": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "opposing_factors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "primary_game_script": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "run_id": {
+            "description": "a contract id",
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": "string"
+          },
+          "summary": {
+            "description": "null when the repository produces no prose; never LLM-fabricated",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "supporting_factors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "thesis_id": {
+            "description": "a contract id",
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "confidence_label",
+          "context_notes",
+          "event_id",
+          "evidence",
+          "generated_at",
+          "key_dependencies",
+          "opposing_factors",
+          "primary_game_script",
+          "run_id",
+          "summary",
+          "supporting_factors",
+          "thesis_id"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "wagers": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "average_price": {
+            "description": "quantity-weighted fill price, dollars per contract",
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "contracts": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "destination_repo": {
+            "type": "string"
+          },
+          "event_id": {
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "extensions": {
+            "additionalProperties": true,
+            "description": "sport-specific detail the common fields do not carry; never required by the UI",
+            "type": "object"
+          },
+          "fees": {
+            "description": "exchange fees, dollars; null when unknown",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "kalshi_fill_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "kalshi_order_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kalshi_ticker": {
+            "type": "string"
+          },
+          "linkage": {
+            "additionalProperties": false,
+            "description": "temporal proof of the link: every linked record predates the wager",
+            "properties": {
+              "market_captured_at": {
+                "description": "ISO-8601 UTC, Z suffix, or null",
+                "format": "date-time",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "model_inputs_as_of": {
+                "description": "ISO-8601 UTC, Z suffix, or null",
+                "format": "date-time",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "recommendation_generated_at": {
+                "description": "ISO-8601 UTC, Z suffix, or null",
+                "format": "date-time",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "wager_placed_at": {
+                "description": "ISO-8601 UTC, Z suffix, or null",
+                "format": "date-time",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "market_captured_at",
+              "model_inputs_as_of",
+              "recommendation_generated_at",
+              "wager_placed_at"
+            ],
+            "type": "object"
+          },
+          "market_id": {
+            "description": "a contract id",
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": "string"
+          },
+          "model_price_id": {
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model_run_id": {
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "payout": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "placed_at": {
+            "description": "ISO-8601 UTC, Z suffix",
+            "format": "date-time",
+            "type": "string"
+          },
+          "profit_loss": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "recommendation_id": {
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "router_ingested_at": {
+            "description": "ISO-8601 UTC, Z suffix, or null",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "selection": {
+            "description": "the Kalshi contract side",
+            "enum": [
+              "YES",
+              "NO"
+            ],
+            "type": "string"
+          },
+          "settlement_id": {
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "settlement_status": {
+            "enum": [
+              "PENDING",
+              "SETTLED",
+              "VOID",
+              "UNKNOWN"
+            ],
+            "type": "string"
+          },
+          "side": {
+            "enum": [
+              "BUY",
+              "SELL",
+              null
+            ],
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "enum": [
+              "KALSHI_ROUTER",
+              "MANUAL",
+              "LEGACY_IMPORT",
+              "OTHER"
+            ],
+            "type": "string"
+          },
+          "source_bet_key": {
+            "description": "the router's deterministic order identity",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source_ids": {
+            "additionalProperties": {
+              "type": [
+                "string",
+                "integer",
+                "null"
+              ]
+            },
+            "description": "provider id namespace -> provider id (kalshi, espn, nflverse, mlb_game_pk ...)",
+            "type": "object"
+          },
+          "sport": {
+            "description": "canonical sport",
+            "enum": [
+              "MLB",
+              "CFB",
+              "NFL",
+              "NBA",
+              "NHL",
+              "SOCCER",
+              "TENNIS"
+            ],
+            "type": "string"
+          },
+          "stake": {
+            "description": "cash at risk including fees, dollars",
+            "minimum": 0,
+            "type": "number"
+          },
+          "wager_id": {
+            "description": "a contract id",
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "average_price",
+          "contracts",
+          "destination_repo",
+          "event_id",
+          "extensions",
+          "fees",
+          "kalshi_fill_ids",
+          "kalshi_order_id",
+          "kalshi_ticker",
+          "linkage",
+          "market_id",
+          "model_price_id",
+          "model_run_id",
+          "payout",
+          "placed_at",
+          "profit_loss",
+          "recommendation_id",
+          "router_ingested_at",
+          "selection",
+          "settlement_id",
+          "settlement_status",
+          "side",
+          "source",
+          "source_bet_key",
+          "source_ids",
+          "sport",
+          "stake",
+          "wager_id"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "context",
+    "data_freshness",
+    "event",
+    "generated_at",
+    "kind",
+    "markets",
+    "model_prices",
+    "price_history",
+    "recommendations",
+    "run_id",
+    "schema_version",
+    "settlements",
+    "sport",
+    "theses",
+    "wagers"
+  ],
+  "title": "event_detail",
+  "type": "object"
+}

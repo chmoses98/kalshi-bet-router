@@ -90,7 +90,7 @@ def test_only_destinations_with_a_settlement_importer_are_emitted_for():
     }
     # MLB settles its own bets and must never receive a second authority. NHL's accounting ledger has no other
     # settlement source, so the router's settlement is the only one it receives.
-    assert eligible == {"CFB", "NFL", "NHL"}
+    assert eligible == {"CFB", "NFL", "NHL", "NBA", "SOCCER", "TENNIS"}
 
 
 def test_the_workflow_refuses_a_destination_that_settles_its_own():

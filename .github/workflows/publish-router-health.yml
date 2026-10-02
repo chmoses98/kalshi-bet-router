@@ -1,0 +1,78 @@
+# App-facing router health, published to the orphan `app-data` branch as
+# app/latest/router_health.json and app/latest/recent_deliveries.json
+# (contract edge_finder.app.v1, kinds router_health / recent_deliveries).
+#
+# SECURITY NOTES (this repository is public):
+#   * This workflow holds NO Kalshi credential and NO downstream token. It reads
+#     this repository's own PUBLIC workflow run logs through the GitHub API
+#     (actions: read) and restates the counts they already print. By
+#     construction it can publish nothing that is not already public.
+#   * contents: write is scoped to this repository, and the job writes only to
+#     the `app-data` branch: a single commit, force-replaced, holding app/latest.
+#     main is never touched.
+#   * The published files are counts, verdicts and public run urls. A test
+#     (tests/test_router_health_publisher.py) proves the publisher scrubs
+#     tickers, source keys and amounts even if a log ever carried one.
+name: Publish router health (app-data)
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: publish-router-health
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Fetch the previous publication (rolling delivery window)
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/app/latest"
+          if git fetch --depth=1 origin app-data 2>/dev/null; then
+            git show origin/app-data:app/latest/recent_deliveries.json > "${RUNNER_TEMP}/app/latest/recent_deliveries.json" 2>/dev/null || true
+          fi
+      - name: Build router_health.json and recent_deliveries.json from public run logs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python scripts/publish_router_health.py --out-dir "${RUNNER_TEMP}/app/latest" --repo "${GITHUB_REPOSITORY}" --commit-sha "${GITHUB_SHA}"
+          python -m pip install --disable-pip-version-check --quiet . >/dev/null
+          PYTHONPATH=contract python -m edge_finder_contract validate "${RUNNER_TEMP}/app/latest/router_health.json" "${RUNNER_TEMP}/app/latest/recent_deliveries.json"
+      - name: Publish to the app-data branch (one commit, replaced each run)
+        run: |
+          set -euo pipefail
+          work="${RUNNER_TEMP}/app-data"
+          rm -rf "${work}"
+          mkdir -p "${work}"
+          cd "${work}"
+          git init -q
+          git config user.name "router-health-bot"
+          git config user.email "router-health-bot@users.noreply.github.com"
+          git checkout -q --orphan app-data
+          mkdir -p app/latest
+          cp "${RUNNER_TEMP}/app/latest/router_health.json" "${RUNNER_TEMP}/app/latest/recent_deliveries.json" app/latest/
+          cp "${GITHUB_WORKSPACE}/contract/edge_finder_contract/registry.json" app/latest/sports_registry.json
+          printf '# app-data\n\nMachine-readable router health for the Edge Finder app (contract edge_finder.app.v1).\nCounts only; never a wager. Replaced on every run of publish-router-health.yml.\n' > README.md
+          git add -A
+          git commit -q -m "router health $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push -q --force origin app-data
+        env:
+          GITHUB_TOKEN: ${{ github.token }}

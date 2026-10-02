@@ -964,9 +964,52 @@ def to_mlb_import_row(wager: ProductionWager, import_batch_id: str) -> dict:
 #: Which emitter speaks each destination's language. A sport absent from this
 #: map has no payload shape and must be refused rather than sent in some other
 #: sport's vocabulary.
+#: Exactly the fields the contract's shared routed ledger (``edge_finder_contract.routed_ledger``) accepts for
+#: NBA, SOCCER and TENNIS. The same vocabulary as NHL's, by construction: those three destinations import through
+#: the ONE shared ledger module vendored from kalshi-bet-router/contract, so there is one importer to prove, not
+#: three.
+SHARED_LEDGER_ROW_FIELDS = NHL_ROW_FIELDS
+SHARED_LEDGER_SPORTS = ("NBA", "SOCCER", "TENNIS")
+
+
+def _to_shared_ledger_row(sport: str):
+    def build(wager: ProductionWager, import_batch_id: str) -> dict:
+        """One wager in the shared routed-ledger shape (``<sport>_accounted_wager.v1``). ACCOUNTING ONLY: it says
+        the owner placed a bet on Kalshi; it carries no model, recommendation or projection field, and the
+        destination refuses any that appears. ``wager_id`` is minted by the destination from ``source_bet_key``."""
+        if not isinstance(import_batch_id, str) or not import_batch_id.strip():
+            raise ValueError(f"an import batch id is required to build a {sport} row")
+        if wager.sport != sport:
+            raise ValueError(f"a {wager.sport} wager cannot be written in {sport}'s row")
+        return {
+            "source_bet_key": wager.source_key,
+            "import_batch_id": import_batch_id,
+            "entry_method": "IMPORTED_RECEIPT",
+            "game_date": wager.game_date,
+            "market_ticker": wager.market_ticker,
+            "side": wager.side,
+            "executed_at": seconds_to_rfc3339(wager.first_execution_time),
+            "contracts": float(wager.contracts),
+            "execution_price": float(wager.vwap_price),
+            "stake": float(wager.stake),
+            "fees_paid": float(wager.total_fees),
+            "fees_are_estimated": False,
+            "venue": "kalshi",
+        }
+    build.__name__ = f"to_{sport.lower()}_import_row"
+    return build
+
+
+to_nba_import_row = _to_shared_ledger_row("NBA")
+to_soccer_import_row = _to_shared_ledger_row("SOCCER")
+to_tennis_import_row = _to_shared_ledger_row("TENNIS")
+
 ROW_BUILDERS = {
     "MLB": to_mlb_import_row,
     "NFL": to_nfl_import_row,
     "CFB": to_cfb_import_row,
     "NHL": to_nhl_import_row,
+    "NBA": to_nba_import_row,
+    "SOCCER": to_soccer_import_row,
+    "TENNIS": to_tennis_import_row,
 }
