@@ -35,7 +35,7 @@ What lives here
 from __future__ import annotations
 
 SCHEMA_VERSION = "edge_finder.app.v1"
-CONTRACT_VERSION = "1.1.0"
+CONTRACT_VERSION = "1.1.1"
 
 #: The canonical sport vocabulary. Nothing else may reach the UI.
 SPORTS = ("MLB", "CFB", "NFL", "NBA", "NHL", "SOCCER", "TENNIS")

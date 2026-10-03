@@ -440,3 +440,55 @@ def test_tree_bytes_reports_payload_per_directory(app):
     sizes = R.tree_bytes(root)
     assert set(sizes) >= {"index.json", "capabilities.json", "metrics.json", "search_index.json", "events", "rankings", "series", "market_history"}
     assert sizes["index.json"] < 20_000
+
+
+def test_packet_text_groups_ladders_keeps_every_market_and_measures_the_clipboard(app):
+    """Contract 1.1.1: the budget is the length of the text the user copies, ladders that differ only by
+    their line render as one line with every rung, and no market is ever dropped from the text."""
+    sport, root, run_id, index = app
+    ev = index["events"][0]["event_id"]
+    pk = P.build(app_root=root, scope_kind="GAME", event_id=ev)
+    text = P.render_text(pk)
+    assert pk["budget"]["chars"] == len(text)
+    for m in pk["markets"]:
+        assert m["kalshi_ticker"].split("-")[-1] in text
+        assert set(m) >= {"period", "side", "line", "threshold"}
+    ladder = [
+        {"market_id": f"mkt_kalshi_KXT-26OCT05AAABBB-{n}", "kalshi_ticker": f"KXT-26OCT05AAABBB-{n}", "event_id": ev,
+         "market_family": "total", "yes_description": f"YES iff total points (FULL) >= {n}.0", "yes_bid": 0.4, "yes_ask": 0.42,
+         "mid": 0.41, "last_price": None, "captured_at": CAPTURED, "freshness": "FRESH", "market_status": "OPEN",
+         "participant_id": None, "player_id": None, "period": "FULL", "side": "OVER", "line": None, "threshold": float(n)}
+        for n in (40, 44, 48)
+    ]
+    lines = P._render_markets({**pk, "markets": ladder, "model_evidence": []})
+    rows = [ln for ln in lines if ln.startswith("- ")]
+    assert rows == ["- [total FULL] YES iff total points (FULL) >= X | KXT-26OCT05AAABBB-*: 40 40/42; 44 40/42; 48 40/42"]
+
+
+def test_v1_publish_leaves_the_explorer_tree_alone(app, tmp_path):
+    """Contract 1.1.1: a v1 republish must not prune explorer/ (research.publish_explorer owns it), so a
+    research export that fails after a successful v1 publish still leaves the last-known-good explorer."""
+    sport, root, run_id, index = app
+    copy = tmp_path / "copy"
+    shutil.copytree(root, copy)
+    before = R.digest_tree(copy)
+    _, documents = documents_for(sport)
+    publish.publish(root=copy, sport=sport, run_id=run_id, generated_at=NOW, documents=documents,
+                    source_repo="chmoses98/edge-finder-api", source_branch="main")
+    assert R.digest_tree(copy) == before
+    assert R.verify_explorer(copy) == []
+
+
+def test_refresh_due_skips_rebuilds_until_events_change_or_the_tree_ages(app, tmp_path):
+    sport, root, run_id, index = app
+    assert R.refresh_due(tmp_path, now=NOW, min_interval_seconds=3600)[0] is True  # nothing published yet
+    copy = tmp_path / "copy"
+    shutil.copytree(root, copy)
+    due, why = R.refresh_due(copy, now=NOW, min_interval_seconds=3600)
+    assert due is False and "unchanged" in why
+    assert R.refresh_due(copy, now="2026-10-03T12:00:00Z", min_interval_seconds=3600)[0] is True
+    events = json.loads((copy / "events.json").read_text())
+    events["items"] = []
+    (copy / "events.json").write_text(json.dumps(events))
+    due, why = R.refresh_due(copy, now=NOW, min_interval_seconds=3600)
+    assert due is True and "events changed" in why

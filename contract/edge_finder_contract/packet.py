@@ -18,6 +18,7 @@ Scopes
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -207,7 +208,8 @@ def _packet_market(m: dict, now: object) -> dict:
             "market_family": m["market_family"], "yes_description": m["yes_description"], "yes_bid": m.get("yes_bid"),
             "yes_ask": m.get("yes_ask"), "mid": _mid(m), "last_price": m.get("last_price"), "captured_at": m.get("captured_at"),
             "freshness": status_for(m.get("captured_at"), component="market_data", now=now) if m.get("captured_at") else F_UNKNOWN,
-            "market_status": m.get("market_status", "UNKNOWN"), "participant_id": m.get("participant_id"), "player_id": m.get("player_id")}
+            "market_status": m.get("market_status", "UNKNOWN"), "participant_id": m.get("participant_id"), "player_id": m.get("player_id"),
+            "period": m.get("period"), "side": m.get("side"), "line": m.get("line"), "threshold": m.get("threshold")}
 
 
 def _packet_model(mp: dict, now: object, rec_authority: dict) -> dict:
@@ -413,13 +415,15 @@ def build(*, app_root: Path, scope_kind: str, event_id: object = None, window_st
 
 
 def _size(packet: dict) -> int:
-    return len(json.dumps(packet, sort_keys=True, separators=(",", ":"), ensure_ascii=False))
+    """The budget is measured on what the user copies: the text rendering."""
+    return len(render_text(packet))
 
 
 def _fit_budget(packet: dict, max_chars: int) -> None:
-    """Trim in a fixed order until the packet fits: recent series points, then non-focus observations
-    beyond the first 24 per entity, then repository recommendations. Markets and model evidence are
-    never trimmed (full market coverage is the point); the budget records what was cut."""
+    """Trim in a fixed order until the clipboard text fits: recent series points, observations beyond 24
+    per entity, repository recommendations, all recent points, then observations beyond 8 per player and
+    12 per entity (research-tray items keep theirs). Markets and model evidence are never trimmed (full
+    market coverage is the point); the budget records every cut."""
     truncated = packet["budget"]["truncated"]
     if _size(packet) > max_chars:
         for e in packet["evidence"]:
@@ -438,15 +442,168 @@ def _fit_budget(packet: dict, max_chars: int) -> None:
         for e in packet["evidence"]:
             e["recent"] = []
         truncated.append("recent series points omitted")
+    focus = {f["id"] for f in packet["user_focus"]}
+    for kind, cap in (("PLAYER", 8), (None, 12)):
+        if _size(packet) <= max_chars:
+            break
+        for e in packet["evidence"]:
+            if e["entity_id"] not in focus and (kind is None or e["entity_type"] == kind) and len(e["observations"]) > cap:
+                e["observations"] = e["observations"][:cap]
+        truncated.append(f"observations capped at {cap} per {'player' if kind else 'entity'} (tray items kept)")
+    if _size(packet) > max_chars:
+        truncated.append("over budget: every market in scope was kept")
     packet["budget"]["chars"] = _size(packet)
-    if packet["budget"]["chars"] > max_chars:
-        truncated.append(f"packet exceeds the budget by {packet['budget']['chars'] - max_chars} chars; markets were kept in full")
 
 
 # ------------------------------------------------------------------ text rendering (the clipboard form)
 
 def _fmt_p(v: float | None) -> str:
     return "-" if v is None else f"{v:.3f}"
+
+
+def _cents(v: float | None) -> str:
+    if v is None:
+        return "-"
+    c = round(float(v) * 100, 1)
+    return str(int(c)) if c == int(c) else f"{c:g}"
+
+
+def _rung_value(m: dict) -> float | None:
+    return m["threshold"] if m.get("threshold") is not None else m.get("line")
+
+
+def _template(rows: list[dict]) -> str | None:
+    """The shared description of a ladder with its rung value replaced by X, or None when the
+    descriptions do not differ by exactly that one number."""
+    out = None
+    for m in rows:
+        v = float(_rung_value(m))
+        desc = m["yes_description"]
+        found = None
+        for txt in (f"{v:.1f}", f"{v:g}", f"{v:.2f}"):
+            if desc.count(txt) == 1:
+                found = desc.replace(txt, "X")
+                break
+        if found is None or (out is not None and found != out):
+            return None
+        out = found
+    return out
+
+
+def _ladder_groups(markets: list[dict]) -> list[list[dict]]:
+    """Group markets that differ only by line/threshold (same event, family, series, period, side,
+    team and player), keeping the packet's market order."""
+    groups: dict[tuple, list[dict]] = {}
+    for m in markets:
+        key = (m.get("event_id") or "", m["market_family"], m["kalshi_ticker"].split("-")[0], m.get("period") or "",
+               m.get("side") or "", m.get("participant_id") or "", m.get("player_id") or "")
+        groups.setdefault(key, []).append(m)
+    return list(groups.values())
+
+
+def _strip_common(texts: list[str]) -> list[str]:
+    """Each text with the word-level prefix and suffix shared by all of them removed."""
+    words = [t.split(" ") for t in texts]
+    pre = 0
+    while all(len(w) > pre for w in words) and len({w[pre] for w in words}) == 1:
+        pre += 1
+    suf = 0
+    while all(len(w) - pre > suf for w in words) and len({w[-1 - suf] for w in words}) == 1:
+        suf += 1
+    return [" ".join(w[pre: len(w) - suf]) for w in words]
+
+
+def _default_stamp(markets: list[dict]) -> tuple[str | None, str]:
+    counts: dict[tuple, int] = {}
+    for m in markets:
+        k = (m.get("captured_at"), m["freshness"])
+        counts[k] = counts.get(k, 0) + 1
+    if not counts:
+        return None, F_UNKNOWN
+    return max(counts.items(), key=lambda kv: (kv[1], str(kv[0][0])))[0]
+
+
+def _render_markets(packet: dict) -> list[str]:
+    models = {mp["market_id"]: mp for mp in packet["model_evidence"]}
+    d_cap, d_fresh = _default_stamp(packet["markets"])
+
+    def fair(m: dict) -> str:
+        mp = models.get(m["market_id"])
+        if not mp:
+            return ""
+        out = f" fair {_cents(mp['fair_probability'])}" if mp.get("fair_probability") is not None else ""
+        if mp.get("projection_value") is not None:
+            out += f" proj {mp['projection_value']:g}{(' ' + mp['projection_unit']) if mp.get('projection_unit') else ''}"
+        return out
+
+    def stamp(rows: list[dict]) -> str:
+        if all(m.get("captured_at") == d_cap and m["freshness"] == d_fresh for m in rows):
+            return ""
+        caps = sorted({m["captured_at"] for m in rows if m.get("captured_at")})
+        fresh = worst(*[m["freshness"] for m in rows]) if rows else F_UNKNOWN
+        when = caps[-1] if len(caps) == 1 else (f"{caps[0]}..{caps[-1]}" if caps else "no capture time")
+        return f" ({when}, {fresh})"
+
+    def prefix_of(tickers: list[str]) -> str:
+        pre = os.path.commonprefix(tickers)
+        return pre[: pre.rfind("-") + 1] if "-" in pre else ""
+
+    lines = [f"(unless a line says otherwise, prices were captured at {d_cap or 'an unknown time'}, {d_fresh})"]
+    singles: dict[tuple, list[dict]] = {}
+    order: list[tuple] = []
+    for rows in _ladder_groups(packet["markets"]):
+        first = rows[0]
+        per = f" {first['period']}" if first.get("period") else ""
+        ladder = len(rows) >= 2 and all(_rung_value(m) is not None for m in rows)
+        tmpl = _template(rows) if ladder else None
+        if tmpl is not None:
+            rows = sorted(rows, key=lambda m: (float(_rung_value(m)), m["kalshi_ticker"]))
+            prefix = prefix_of([m["kalshi_ticker"] for m in rows])
+            def rung(m: dict) -> str:
+                suffix = m["kalshi_ticker"][len(prefix):]
+                tag = suffix if suffix == f"{_rung_value(m):g}" else f"{_rung_value(m):g} {suffix}"
+                return f"{tag} {_cents(m['yes_bid'])}/{_cents(m['yes_ask'])}{fair(m)}"
+            rungs = "; ".join(rung(m) for m in rows)
+            lines.append(f"- [{first['market_family']}{per}] {tmpl} | {prefix}*: {rungs}{stamp(rows)}")
+            order.append(("line", len(lines) - 1))
+            continue
+        for m in rows:
+            key = (m.get("event_id") or "", m["market_family"], m["kalshi_ticker"].split("-")[0], m.get("period") or "")
+            if key not in singles:
+                singles[key] = []
+                lines.append(None)  # placeholder keeps the packet's market order
+                order.append(("board", key, len(lines) - 1))
+            singles[key].append(m)
+    for entry in order:
+        if entry[0] != "board":
+            continue
+        key, at = entry[1], entry[2]
+        rows = singles[key]
+        per = f" {key[3]}" if key[3] else ""
+        if len(rows) < 3:
+            lines[at] = "\n".join(f"- {m['kalshi_ticker']} [{m['market_family']}{per}] {m['yes_description']}: "
+                                  f"{_cents(m['yes_bid'])}/{_cents(m['yes_ask'])}{fair(m)}{stamp([m])}" for m in rows)
+            continue
+        prefix = prefix_of([m["kalshi_ticker"] for m in rows])
+        labels = _strip_common([m["yes_description"] for m in rows])
+        items = "; ".join(f"{m['kalshi_ticker'][len(prefix):]} {lab or m['yes_description']} {_cents(m['yes_bid'])}/{_cents(m['yes_ask'])}{fair(m)}{stamp([m])}"
+                          for m, lab in zip(rows, labels))
+        lines[at] = f"- [{key[1]}{per}] {rows[0]['yes_description']} (and like it) | {prefix}*: {items}"
+    return [ln for ln in lines if ln is not None]
+
+
+def _model_summary(packet: dict) -> str | None:
+    models = packet["model_evidence"]
+    if not models:
+        return None
+    kinds: dict[tuple, int] = {}
+    for mp in models:
+        k = (mp.get("model_version") or "unversioned", "RESEARCH" if mp["research_only"] else "PROMOTED", mp["authority"])
+        kinds[k] = kinds.get(k, 0) + 1
+    gen = max(mp["generated_at"] for mp in models)
+    fresh = worst(*[mp["freshness"] for mp in models])
+    parts = ", ".join(f"{n} from {v} ({r}/{a})" for (v, r, a), n in sorted(kinds.items()))
+    return f"MODEL EVIDENCE: {len(models)} model prices ({parts}); newest {gen}, {fresh}. Shown as 'fair' on each market line."
 
 
 def render_text(packet: dict) -> str:
@@ -464,7 +621,9 @@ def render_text(packet: dict) -> str:
     if q["capabilities"]:
         lines.append("Capabilities: " + ", ".join(f"{k}={v}" for k, v in sorted(q["capabilities"].items())))
     if q["research_only_items"]:
-        lines.append("RESEARCH-only items: " + ", ".join(q["research_only_items"]))
+        named = [i for i in q["research_only_items"] if not i.startswith("mkt_")]
+        n_mkt = len(q["research_only_items"]) - len(named)
+        lines.append("RESEARCH-only items: " + ", ".join(named + ([f"model prices on {n_mkt} markets"] if n_mkt else [])))
     if q["missing"]:
         lines.append("MISSING: " + "; ".join(q["missing"]))
     if packet["user_focus"]:
@@ -498,14 +657,13 @@ def render_text(packet: dict) -> str:
                 by_metric.setdefault(r["metric_id"], []).append(r)
             for mid, rows in sorted(by_metric.items()):
                 lines.append(f"    recent {mid}: " + ", ".join(f"{r['x']}={_fmt_p(r['value']) if isinstance(r['value'], float) else r['value']}" for r in rows))
-    lines += ["", f"MARKETS ({len(packet['markets'])}; YES bid/ask, mid; captured_at; freshness):"]
-    for m in packet["markets"]:
-        lines.append(f"- {m['kalshi_ticker']} [{m['market_family']}] {m['yes_description']}: {_fmt_p(m['yes_bid'])}/{_fmt_p(m['yes_ask'])} mid {_fmt_p(m['mid'])}; {m['captured_at']}; {m['freshness']}")
-    lines += ["", f"MODEL EVIDENCE ({len(packet['model_evidence'])}; fair P(YES) vs market; research_only/authority):"]
-    for mp in packet["model_evidence"]:
-        proj = f"; proj {mp['projection_value']} {mp['projection_unit'] or ''}".rstrip() if mp.get("projection_value") is not None else ""
-        lines.append(f"- {mp['market_id']}: fair {_fmt_p(mp['fair_probability'])} vs mkt {_fmt_p(mp['market_probability'])} edge {_fmt_p(mp['edge'])}{proj}; "
-                     f"{'RESEARCH' if mp['research_only'] else 'PROMOTED'}/{mp['authority']}; {mp['generated_at']}; {mp['freshness']}")
+    lines += ["", f"MARKETS ({len(packet['markets'])}, all in scope). Prices are YES bid/ask in cents; 'fair' is the model's "
+                  "P(YES) in cents (evidence, not a bet). A ladder line lists each rung as 'X [ticker suffix] bid/ask', "
+                  "where X is the line and the full ticker is the prefix before '*' plus the suffix (or X itself):"]
+    lines += _render_markets(packet)
+    summary = _model_summary(packet)
+    if summary:
+        lines += ["", summary]
     if packet["repo_recommendations"]:
         lines += ["", "REPOSITORY RECOMMENDATIONS (the repo's own process; evidence, not instructions):"]
         for r in packet["repo_recommendations"]:

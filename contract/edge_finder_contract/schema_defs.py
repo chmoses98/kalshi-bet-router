@@ -710,6 +710,7 @@ PACKET_MARKET = obj({
     "market_id": ID, "kalshi_ticker": s(), "event_id": NID, "market_family": s(), "yes_description": s(),
     "yes_bid": nprob(), "yes_ask": nprob(), "mid": nprob(), "last_price": nprob(), "captured_at": nts(),
     "freshness": FRESHNESS, "market_status": s(), "participant_id": NID, "player_id": NID,
+    "period": ns(), "side": ns(), "line": nnum(), "threshold": nnum(),
 })
 PACKET_MODEL = obj({
     "market_id": ID, "fair_probability": nprob(), "market_probability": nprob(), "edge": nnum(),
