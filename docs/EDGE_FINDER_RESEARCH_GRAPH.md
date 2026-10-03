@@ -137,7 +137,7 @@ league, season). A static client does fuzzy matching locally; every entry's path
 
 One small `index.json`; everything else is fetched on navigation. Per-event market history keeps the
 large capture series out of profiles. `research.tree_bytes` reports bytes per directory for budgeting.
-Files are written compact (sorted keys, no whitespace), the index indented. Same inputs produce
+Files, the index included (since 1.1.1), are written compact (sorted keys, no whitespace). Same inputs produce
 byte-identical trees (`research.digest_tree`, tested).
 
 ## 9. Atomic publication, last-known-good

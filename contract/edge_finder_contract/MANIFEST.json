@@ -22,7 +22,7 @@
     "protocols/edge_finder.handicap.tennis.v1.json": "b4915f163b1e22534733ef33d0dab0f0670f2c245a1916637bb418067727f0fb",
     "publish.py": "5cc96036a8fb34845bdde98804f9076bb8fc8815ba4023495ba159b7870bb5ac",
     "registry.json": "b73899792e582a46dba8c63d3e10149710fac182f6ce6cd5b6cbdba1edf1094c",
-    "research.py": "8ddd482561e722672c57791d14cf4add580553a71e5cb570931a08d486d23fdd",
+    "research.py": "892790188b7107c16933b234c317734f5a6316c90c763f9859f4a98a12fc593e",
     "routed_ledger.py": "b728d20c67a94dd9f5b8dca03852303de59653dec10d0b381c49841e34629bde",
     "schema_defs.py": "ab3273675ce5ec50d988252f35d529b18a635e4731fcaad1c73cf0b9d661192f",
     "schemas/board.schema.json": "2e072b7f48249ed7b5f4348f7df9a44d53f9201c2a4a9d13620f4ea9b065f435",

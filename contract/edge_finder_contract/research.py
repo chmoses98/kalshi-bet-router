@@ -727,7 +727,7 @@ def publish_explorer(*, app_root: Path, sport: str, run_id: str, generated_at: o
     problems = check_graph(docs, index["files"]) + check_capabilities(docs[CAPABILITIES_NAME], _files_with_types(index, docs))
     if problems:
         raise ExplorerError(problems)
-    texts[INDEX_NAME] = dumps(index, compact=False)
+    texts[INDEX_NAME] = dumps(index, compact=True)
 
     target = app_root / EXPLORER_DIR
     app_root.mkdir(parents=True, exist_ok=True)
