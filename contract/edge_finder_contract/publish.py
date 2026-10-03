@@ -14,7 +14,9 @@ Mechanics
     5. each file is moved into ``latest`` with ``os.replace`` -- manifest LAST, so a reader
        that sees the new manifest sees new files;
     6. files from the previous publication that the new one does not name are removed
-       (event detail files of events that left the board), AFTER the manifest.
+       (event detail files of events that left the board), AFTER the manifest. The ``explorer/``
+       tree is never touched here: :func:`research.publish_explorer` owns it, publishes it after this
+       step, and keeps its own last-known-good tree (its index names the v1 run it was built against).
 
 Step 5 is per-file, so a reader racing a publish can see a new events.json with an old manifest
 for a few milliseconds; the manifest's sha256 per file lets it detect that and re-read. In a git
@@ -39,6 +41,7 @@ COLLECTION_KINDS = ("events", "markets", "model_prices", "recommendations", "the
                     "settlements", "runs")
 MANIFEST_NAME = "manifest.json"
 HEALTH_NAME = "health.json"
+EXPLORER_DIR = "explorer"  # owned by research.publish_explorer; never pruned here
 
 
 def dumps(document: dict, *, compact: bool = True) -> str:
@@ -131,7 +134,8 @@ def publish(*, root: Path, sport: str, run_id: str, generated_at: object, docume
             target = staging / f"{name}.json"
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(text, encoding="utf-8")
-        previous = {str(p.relative_to(root)) for p in root.rglob("*.json")} if root.exists() else set()
+        previous = ({str(p.relative_to(root)) for p in root.rglob("*.json") if p.relative_to(root).parts[0] != EXPLORER_DIR}
+                    if root.exists() else set())
         ordered = [n for n in texts if n not in ("manifest", "health")] + [n for n in ("health", "manifest") if n in texts]
         for name in ordered:
             src = staging / f"{name}.json"
@@ -141,7 +145,8 @@ def publish(*, root: Path, sport: str, run_id: str, generated_at: object, docume
         written = {f"{n}.json" for n in texts}
         for stale in sorted(previous - written):
             (root / stale).unlink(missing_ok=True)
-        for sub in sorted((p for p in root.rglob("*") if p.is_dir()), reverse=True):
+        for sub in sorted((p for p in root.rglob("*") if p.is_dir() and p.relative_to(root).parts[0] != EXPLORER_DIR),
+                          reverse=True):
             if not any(sub.iterdir()):
                 sub.rmdir()
     finally:

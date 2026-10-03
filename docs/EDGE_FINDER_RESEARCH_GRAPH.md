@@ -149,6 +149,17 @@ inside the app root and swaps files in with `index.json` last. Any problem raise
 leaves the previous tree untouched (tested). `research.verify_explorer` re-checks a published tree;
 `python -m edge_finder_contract verify-explorer <app_root>` does the same from the shell.
 
+Since 1.1.1, `publish.publish` (the v1 publisher) never prunes `explorer/`: the explorer is owned by
+`research.publish_explorer` alone. A research export that fails after a successful v1 publish therefore
+leaves the last-known-good explorer in place; its index names the v1 run it was built against
+(`base_manifest_run_id`).
+
+Every explorer file carries the run id, so a rebuild rewrites the whole tree (27–36 MB for NHL, NBA and
+soccer). Workers that republish the v1 payload every few minutes should gate the explorer with
+`research.refresh_due(app_root, now=..., min_interval_seconds=...)`: it is due when nothing is published,
+when the v1 event set changed (new games need research documents), or when the tree is older than the
+interval. Skipping a rebuild keeps the previous tree.
+
 ## 10. The handicap packet (`packet.py`)
 
 The app hosts no model. COPY FOR CHATGPT produces one deterministic package built from the published root:
@@ -169,6 +180,15 @@ full current market coverage for the scope; keep price timestamps; mark RESEARCH
 (no profile, no event research, unresolved tray item, no markets) rather than inventing it; trim in a fixed
 order (recent points, then observations beyond 24 per entity, then repo recommendations) and record what
 was trimmed — markets and model evidence are never trimmed. `render_text` is the clipboard form.
+
+Since 1.1.1 the budget is measured on that clipboard text, not on the JSON, and the text is compact:
+markets that differ only by their line (spread, total, team-total and player-prop ladders) render as one
+line listing every rung with its ticker suffix, bid/ask in cents and the model's fair price; singleton
+markets of one series render as one board line; the capture time is stated once and repeated only where it
+differs. Every market in scope still appears (tested). On the real NFL week-4 publication this took the
+largest single-game packet from 229k to 63k characters (median 23k) with all 756 markets kept. When
+evidence still overflows, observations are capped at 8 per player and then 12 per entity; research-tray
+items keep theirs. Packet markets gained `period`, `side`, `line` and `threshold` (additive).
 
 Determinism: the same request against the same publication yields the same packet (tested); `packet_id`
 depends on the protocol, the scope and `data_as_of`, not on the budget.

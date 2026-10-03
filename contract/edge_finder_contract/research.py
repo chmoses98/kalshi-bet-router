@@ -802,6 +802,27 @@ def verify_explorer(app_root: Path) -> list[str]:
     return problems
 
 
+
+def refresh_due(app_root: Path, *, now: object, min_interval_seconds: float) -> tuple[bool, str]:
+    """Whether a sport should rebuild its explorer now, and why. Every explorer file carries the run
+    id, so a rebuild rewrites the whole tree; workers that publish the v1 payload every few minutes
+    should rebuild the explorer only when it is missing, when the v1 events changed (new games need
+    research documents), or when the published tree is older than ``min_interval_seconds``.
+    ``publish.publish`` never prunes ``explorer/``, so skipping a rebuild keeps the last tree."""
+    index = read_index(app_root)
+    if index is None:
+        return True, "no explorer published yet"
+    events_path = Path(app_root) / "events.json"
+    if events_path.exists():
+        current = {e["event_id"] for e in json.loads(events_path.read_text(encoding="utf-8")).get("items", [])}
+        published = {e["event_id"] for e in index.get("events", [])}
+        if current != published:
+            return True, f"v1 events changed ({len(current - published)} new, {len(published - current)} gone)"
+    age = (parse_ts(to_iso(now)) - parse_ts(index["generated_at"])).total_seconds()
+    if age >= min_interval_seconds:
+        return True, f"explorer is {int(age)} s old (refresh every {int(min_interval_seconds)} s)"
+    return False, f"explorer is {int(age)} s old and the v1 events are unchanged"
+
 _SECRET_PATTERNS = [re.compile(p) for p in (
     r"ghp_[A-Za-z0-9]{20,}", r"github_pat_[A-Za-z0-9_]{20,}", r"-----BEGIN [A-Z ]*PRIVATE KEY-----",
     r"(?i)\b(api[_-]?key|secret|token|password)\b\s*[:=]\s*[\"']?[A-Za-z0-9+/=_-]{16,}",

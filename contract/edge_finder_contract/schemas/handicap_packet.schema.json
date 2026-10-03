@@ -430,6 +430,12 @@
               "null"
             ]
           },
+          "line": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
           "market_family": {
             "type": "string"
           },
@@ -457,10 +463,28 @@
               "null"
             ]
           },
+          "period": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "player_id": {
             "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
             "type": [
               "string",
+              "null"
+            ]
+          },
+          "side": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "threshold": {
+            "type": [
+              "number",
               "null"
             ]
           },
@@ -492,12 +516,16 @@
           "freshness",
           "kalshi_ticker",
           "last_price",
+          "line",
           "market_family",
           "market_id",
           "market_status",
           "mid",
           "participant_id",
+          "period",
           "player_id",
+          "side",
+          "threshold",
           "yes_ask",
           "yes_bid",
           "yes_description"
