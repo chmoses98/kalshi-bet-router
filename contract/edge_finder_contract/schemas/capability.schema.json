@@ -1,0 +1,144 @@
+{
+  "$id": "https://edge-finder.app/schemas/edge_finder.app.v1/capability",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "capability": {
+      "enum": [
+        "team_profiles",
+        "player_profiles",
+        "event_research",
+        "team_metrics",
+        "player_metrics",
+        "team_game_logs",
+        "player_game_logs",
+        "historical_results",
+        "opponents",
+        "opponent_adjustment",
+        "schedule_strength",
+        "recent_form_windows",
+        "usage",
+        "lineups",
+        "injuries",
+        "matchup_metrics",
+        "projection_distributions",
+        "raw_projections",
+        "market_prices",
+        "market_price_history",
+        "advanced_stats",
+        "situational_splits",
+        "player_props",
+        "team_props",
+        "game_markets",
+        "play_by_play",
+        "weather",
+        "venue_effects",
+        "calibration",
+        "historical_accuracy",
+        "clv",
+        "wager_history",
+        "rankings",
+        "time_series",
+        "comparisons",
+        "search"
+      ],
+      "type": "string"
+    },
+    "coverage": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "entity_types": {
+      "items": {
+        "enum": [
+          "TEAM",
+          "PLAYER",
+          "EVENT",
+          "MARKET",
+          "MATCHUP"
+        ],
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "evidence": {
+      "description": "app-root-relative paths that prove the capability; required for VERIFIED/PARTIAL",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "metrics": {
+      "items": {
+        "description": "met_<sport>.<slug>",
+        "pattern": "^met_[a-z]+\\.[a-z0-9_]+$",
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "reasons": {
+      "description": "why this status, from the audit",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "since": {
+      "format": "date",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "splits": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "status": {
+      "description": "VERIFIED = production-generated on a cadence, tested, history present; PARTIAL = real but limited; RESEARCH = non-production or experimental; UNAVAILABLE = nothing supports it; UNKNOWN = not established",
+      "enum": [
+        "VERIFIED",
+        "PARTIAL",
+        "RESEARCH",
+        "UNAVAILABLE",
+        "UNKNOWN"
+      ],
+      "type": "string"
+    },
+    "summary": {
+      "type": "string"
+    },
+    "windows": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "capability",
+    "coverage",
+    "entity_types",
+    "evidence",
+    "limitations",
+    "metrics",
+    "reasons",
+    "since",
+    "splits",
+    "status",
+    "summary",
+    "windows"
+  ],
+  "title": "capability",
+  "type": "object"
+}

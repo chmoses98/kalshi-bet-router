@@ -48,7 +48,19 @@
               "performance",
               "router_health",
               "recent_deliveries",
-              "sports_registry"
+              "sports_registry",
+              "explorer_index",
+              "capability_manifest",
+              "metric_registry",
+              "entity_profile",
+              "event_research",
+              "ranking",
+              "time_series",
+              "market_history",
+              "search_index",
+              "handicap_packet",
+              "handicap_protocol",
+              "research_tray"
             ],
             "type": "string"
           },

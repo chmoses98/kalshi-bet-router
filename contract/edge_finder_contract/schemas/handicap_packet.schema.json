@@ -1,0 +1,983 @@
+{
+  "$id": "https://edge-finder.app/schemas/edge_finder.app.v1/handicap_packet",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "budget": {
+      "additionalProperties": false,
+      "properties": {
+        "chars": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_chars": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "truncated": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "chars",
+        "max_chars",
+        "truncated"
+      ],
+      "type": "object"
+    },
+    "data_as_of": {
+      "description": "ISO-8601 UTC, Z suffix, or null",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "events": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "away_participant": {
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "context_notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "event_id": {
+            "description": "a contract id",
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": "string"
+          },
+          "home_participant": {
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "start_time_utc": {
+            "description": "ISO-8601 UTC, Z suffix",
+            "format": "date-time",
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "theses": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "opposing_factors": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "research_only": {
+                  "description": "",
+                  "type": "boolean"
+                },
+                "summary": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "supporting_factors": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "opposing_factors",
+                "research_only",
+                "summary",
+                "supporting_factors"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "venue": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "away_participant",
+          "context_notes",
+          "event_id",
+          "home_participant",
+          "label",
+          "start_time_utc",
+          "status",
+          "theses",
+          "venue"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "evidence": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "availability": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "as_of": {
+                  "description": "ISO-8601 UTC, Z suffix, or null",
+                  "format": "date-time",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "detail": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "event_id": {
+                  "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "source": {
+                  "type": "string"
+                },
+                "status": {
+                  "description": "ACTIVE, OUT, QUESTIONABLE, IR, PROBABLE, DAY_TO_DAY, UNKNOWN ...",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "as_of",
+                "detail",
+                "event_id",
+                "source",
+                "status"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "entity_id": {
+            "description": "a contract id",
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": "string"
+          },
+          "entity_type": {
+            "enum": [
+              "TEAM",
+              "PLAYER",
+              "EVENT",
+              "MARKET",
+              "MATCHUP"
+            ],
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "observations": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "adjusted_value": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "as_of": {
+                  "description": "ISO-8601 UTC, Z suffix",
+                  "format": "date-time",
+                  "type": "string"
+                },
+                "display_value": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "league_average": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "metric_id": {
+                  "description": "met_<sport>.<slug>",
+                  "pattern": "^met_[a-z]+\\.[a-z0-9_]+$",
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "quality_status": {
+                  "description": "VERIFIED = production-generated on a cadence, tested, history present; PARTIAL = real but limited; RESEARCH = non-production or experimental; UNAVAILABLE = nothing supports it; UNKNOWN = not established",
+                  "enum": [
+                    "VERIFIED",
+                    "PARTIAL",
+                    "RESEARCH",
+                    "UNAVAILABLE",
+                    "UNKNOWN"
+                  ],
+                  "type": "string"
+                },
+                "rank": {
+                  "description": "",
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "source": {
+                  "type": "string"
+                },
+                "split": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "unit": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "universe_size": {
+                  "description": "",
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "value": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "window": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "adjusted_value",
+                "as_of",
+                "display_value",
+                "league_average",
+                "metric_id",
+                "name",
+                "quality_status",
+                "rank",
+                "source",
+                "split",
+                "unit",
+                "universe_size",
+                "value",
+                "window"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "recent": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "event_id": {
+                  "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "metric_id": {
+                  "description": "met_<sport>.<slug>",
+                  "pattern": "^met_[a-z]+\\.[a-z0-9_]+$",
+                  "type": "string"
+                },
+                "opponent": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "t": {
+                  "description": "ISO-8601 UTC, Z suffix",
+                  "format": "date-time",
+                  "type": "string"
+                },
+                "value": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "x": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "event_id",
+                "metric_id",
+                "opponent",
+                "t",
+                "value",
+                "x"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "team": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "availability",
+          "entity_id",
+          "entity_type",
+          "label",
+          "observations",
+          "recent",
+          "role",
+          "team"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "generated_at": {
+      "description": "ISO-8601 UTC, Z suffix",
+      "format": "date-time",
+      "type": "string"
+    },
+    "kind": {
+      "const": "handicap_packet"
+    },
+    "markets": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "captured_at": {
+            "description": "ISO-8601 UTC, Z suffix, or null",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "event_id": {
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "freshness": {
+            "enum": [
+              "FRESH",
+              "AGING",
+              "STALE",
+              "UNKNOWN"
+            ],
+            "type": "string"
+          },
+          "kalshi_ticker": {
+            "type": "string"
+          },
+          "last_price": {
+            "description": "",
+            "maximum": 1,
+            "minimum": 0,
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "market_family": {
+            "type": "string"
+          },
+          "market_id": {
+            "description": "a contract id",
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": "string"
+          },
+          "market_status": {
+            "type": "string"
+          },
+          "mid": {
+            "description": "",
+            "maximum": 1,
+            "minimum": 0,
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "participant_id": {
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "player_id": {
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "yes_ask": {
+            "description": "",
+            "maximum": 1,
+            "minimum": 0,
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "yes_bid": {
+            "description": "",
+            "maximum": 1,
+            "minimum": 0,
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "yes_description": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "captured_at",
+          "event_id",
+          "freshness",
+          "kalshi_ticker",
+          "last_price",
+          "market_family",
+          "market_id",
+          "market_status",
+          "mid",
+          "participant_id",
+          "player_id",
+          "yes_ask",
+          "yes_bid",
+          "yes_description"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "model_evidence": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "authority": {
+            "description": "who may act on this: a model promotion level, or MANUAL/ASSISTED when a person decides",
+            "enum": [
+              "RESEARCH_ONLY",
+              "SHADOW",
+              "LIMITED",
+              "TRUSTED",
+              "MANUAL",
+              "ASSISTED"
+            ],
+            "type": "string"
+          },
+          "data_quality_status": {
+            "type": "string"
+          },
+          "edge": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "fair_probability": {
+            "description": "",
+            "maximum": 1,
+            "minimum": 0,
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "freshness": {
+            "enum": [
+              "FRESH",
+              "AGING",
+              "STALE",
+              "UNKNOWN"
+            ],
+            "type": "string"
+          },
+          "generated_at": {
+            "description": "ISO-8601 UTC, Z suffix",
+            "format": "date-time",
+            "type": "string"
+          },
+          "market_id": {
+            "description": "a contract id",
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": "string"
+          },
+          "market_probability": {
+            "description": "",
+            "maximum": 1,
+            "minimum": 0,
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "model_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "projection_unit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "projection_value": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "research_only": {
+            "description": "",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "authority",
+          "data_quality_status",
+          "edge",
+          "fair_probability",
+          "freshness",
+          "generated_at",
+          "market_id",
+          "market_probability",
+          "model_version",
+          "projection_unit",
+          "projection_value",
+          "research_only"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "packet_id": {
+      "description": "a contract id",
+      "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+      "type": "string"
+    },
+    "packet_version": {
+      "type": "string"
+    },
+    "protocol": {
+      "additionalProperties": false,
+      "properties": {
+        "evidence_weights": {
+          "additionalProperties": false,
+          "properties": {
+            "PARTIAL": {
+              "type": "string"
+            },
+            "RESEARCH": {
+              "type": "string"
+            },
+            "UNKNOWN": {
+              "type": "string"
+            },
+            "VERIFIED": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "PARTIAL",
+            "RESEARCH",
+            "UNKNOWN",
+            "VERIFIED"
+          ],
+          "type": "object"
+        },
+        "extends": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "forbidden": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "outputs_required": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "principles": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "protocol_id": {
+          "type": "string"
+        },
+        "steps": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "instruction": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "instruction"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "evidence_weights",
+        "extends",
+        "forbidden",
+        "outputs_required",
+        "principles",
+        "protocol_id",
+        "steps",
+        "version"
+      ],
+      "type": "object"
+    },
+    "quality": {
+      "additionalProperties": false,
+      "properties": {
+        "capabilities": {
+          "additionalProperties": {
+            "description": "VERIFIED = production-generated on a cadence, tested, history present; PARTIAL = real but limited; RESEARCH = non-production or experimental; UNAVAILABLE = nothing supports it; UNKNOWN = not established",
+            "enum": [
+              "VERIFIED",
+              "PARTIAL",
+              "RESEARCH",
+              "UNAVAILABLE",
+              "UNKNOWN"
+            ],
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "market_freshness": {
+          "enum": [
+            "FRESH",
+            "AGING",
+            "STALE",
+            "UNKNOWN"
+          ],
+          "type": "string"
+        },
+        "missing": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "model_freshness": {
+          "enum": [
+            "FRESH",
+            "AGING",
+            "STALE",
+            "UNKNOWN"
+          ],
+          "type": "string"
+        },
+        "research_only_items": {
+          "description": "metric / model ids whose status is RESEARCH",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "sources": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "capabilities",
+        "market_freshness",
+        "missing",
+        "model_freshness",
+        "research_only_items",
+        "sources"
+      ],
+      "type": "object"
+    },
+    "repo_recommendations": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "authority": {
+            "description": "who may act on this: a model promotion level, or MANUAL/ASSISTED when a person decides",
+            "enum": [
+              "RESEARCH_ONLY",
+              "SHADOW",
+              "LIMITED",
+              "TRUSTED",
+              "MANUAL",
+              "ASSISTED"
+            ],
+            "type": "string"
+          },
+          "bet_up_to_price": {
+            "description": "",
+            "maximum": 1,
+            "minimum": 0,
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "created_at": {
+            "description": "ISO-8601 UTC, Z suffix",
+            "format": "date-time",
+            "type": "string"
+          },
+          "fair_probability": {
+            "description": "",
+            "maximum": 1,
+            "minimum": 0,
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "market_id": {
+            "description": "a contract id",
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": "string"
+          },
+          "research_only": {
+            "description": "",
+            "type": "boolean"
+          },
+          "selection": {
+            "description": "the Kalshi contract side",
+            "enum": [
+              "YES",
+              "NO"
+            ],
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "authority",
+          "bet_up_to_price",
+          "created_at",
+          "fair_probability",
+          "market_id",
+          "research_only",
+          "selection",
+          "status"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "edge_finder.app.v1"
+    },
+    "scope": {
+      "additionalProperties": false,
+      "properties": {
+        "event_ids": {
+          "items": {
+            "description": "a contract id",
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "kind": {
+          "enum": [
+            "GAME",
+            "SLATE",
+            "CUSTOM"
+          ],
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "window_end": {
+          "description": "ISO-8601 UTC, Z suffix, or null",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "window_start": {
+          "description": "ISO-8601 UTC, Z suffix, or null",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event_ids",
+        "kind",
+        "label",
+        "window_end",
+        "window_start"
+      ],
+      "type": "object"
+    },
+    "sports": {
+      "items": {
+        "description": "canonical sport",
+        "enum": [
+          "MLB",
+          "CFB",
+          "NFL",
+          "NBA",
+          "NHL",
+          "SOCCER",
+          "TENNIS"
+        ],
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "user_focus": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "item_id": {
+            "type": "string"
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ref_kind": {
+            "type": "string"
+          },
+          "resolved": {
+            "description": "",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "item_id",
+          "label",
+          "note",
+          "ref_kind",
+          "resolved"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "warning": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "budget",
+    "data_as_of",
+    "events",
+    "evidence",
+    "generated_at",
+    "kind",
+    "markets",
+    "model_evidence",
+    "packet_id",
+    "packet_version",
+    "protocol",
+    "quality",
+    "repo_recommendations",
+    "schema_version",
+    "scope",
+    "sports",
+    "user_focus",
+    "warning"
+  ],
+  "title": "handicap_packet",
+  "type": "object"
+}

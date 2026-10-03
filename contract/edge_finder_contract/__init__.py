@@ -25,12 +25,17 @@ What lives here
     linkage.py      temporal wager <-> model/recommendation linkage (never retroactive)
     routed_ledger.py the shared destination accounting ledger (routed wagers + settlements)
     registry.json   where each sport publishes its app output (repo, branch, path)
+    research.py     the research graph (contract 1.1.0, additive): metric registry, observations with
+                    comparison context, rankings, time series, entity profiles, event research, market
+                    history, capability manifest, search index, and the atomic explorer/ publication
+    packet.py       the deterministic AI-ready handicap packet and the research-tray resolver
+    protocols/      the versioned Edge Finder handicap protocol (core + per-sport extensions)
 """
 
 from __future__ import annotations
 
 SCHEMA_VERSION = "edge_finder.app.v1"
-CONTRACT_VERSION = "1.0.0"
+CONTRACT_VERSION = "1.1.0"
 
 #: The canonical sport vocabulary. Nothing else may reach the UI.
 SPORTS = ("MLB", "CFB", "NFL", "NBA", "NHL", "SOCCER", "TENNIS")
@@ -40,6 +45,25 @@ KINDS = (
     "manifest", "events", "markets", "model_prices", "recommendations", "theses", "wagers",
     "settlements", "runs", "health", "board", "event_detail", "performance",
     "router_health", "recent_deliveries", "sports_registry",
+    # research graph (contract 1.1.0, additive): see research.py / packet.py
+    "explorer_index", "capability_manifest", "metric_registry", "entity_profile", "event_research",
+    "ranking", "time_series", "market_history", "search_index",
+    "handicap_packet", "handicap_protocol", "research_tray",
 )
 
-__all__ = ["SCHEMA_VERSION", "CONTRACT_VERSION", "SPORTS", "KINDS"]
+#: The research-graph capability vocabulary. A sport answers each with VERIFIED / PARTIAL / RESEARCH /
+#: UNAVAILABLE in its capability manifest; the UI never offers a capability the manifest does not grant.
+CAPABILITIES = (
+    "team_profiles", "player_profiles", "event_research", "team_metrics", "player_metrics",
+    "team_game_logs", "player_game_logs", "historical_results", "opponents", "opponent_adjustment",
+    "schedule_strength", "recent_form_windows", "usage", "lineups", "injuries", "matchup_metrics",
+    "projection_distributions", "raw_projections", "market_prices", "market_price_history",
+    "advanced_stats", "situational_splits", "player_props", "team_props", "game_markets",
+    "play_by_play", "weather", "venue_effects", "calibration", "historical_accuracy", "clv",
+    "wager_history", "rankings", "time_series", "comparisons", "search",
+)
+
+#: Research quality statuses, in confidence order.
+QUALITY_STATUSES = ("VERIFIED", "PARTIAL", "RESEARCH", "UNAVAILABLE", "UNKNOWN")
+
+__all__ = ["SCHEMA_VERSION", "CONTRACT_VERSION", "SPORTS", "KINDS", "CAPABILITIES", "QUALITY_STATUSES"]
