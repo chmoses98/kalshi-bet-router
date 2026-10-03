@@ -125,3 +125,42 @@ def run_id(sport: str, repo: str, native_run_id: object = None, *, generated_at:
     if native_run_id in (None, "") and generated_at in (None, ""):
         raise ValueError("a run id needs the source run id or the generation timestamp")
     return make_id("run", "run", normalize_sport(sport), repo, native_run_id, generated_at)
+
+
+# ------------------------------------------------------------------ research graph (contract 1.1.0)
+
+_METRIC_SLUG_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+
+
+def metric_id(sport: str, slug: str) -> str:
+    """``met_<sport>.<slug>``: readable and stable, like a market id is its ticker. The slug is the
+    metric's methodology name in lower snake_case (``pass_epa_per_play``), never a display name."""
+    slug = (slug or "").strip().lower()
+    if not _METRIC_SLUG_RE.match(slug):
+        raise ValueError(f"not a metric slug: {slug!r} (lower snake_case, starting with a letter)")
+    return f"met_{normalize_sport(sport).lower()}.{slug}"
+
+
+def observation_id(sport: str, metric_id_value: str, entity_id_value: str, window_label: str,
+                   split_label: object = None, as_of: object = None) -> str:
+    return make_id("obs", "observation", normalize_sport(sport), metric_id_value, entity_id_value,
+                   window_label, split_label, as_of)
+
+
+def ranking_id(sport: str, metric_id_value: str, universe_label: str, window_label: str,
+               split_label: object = None) -> str:
+    return make_id("rnk", "ranking", normalize_sport(sport), metric_id_value, universe_label, window_label, split_label)
+
+
+def series_id(sport: str, metric_id_value: str, entity_id_value: str, x_axis: str, split_label: object = None) -> str:
+    return make_id("ser", "series", normalize_sport(sport), metric_id_value, entity_id_value, x_axis, split_label)
+
+
+def packet_id(protocol_id: str, scope_kind: str, *scope_parts: object, data_as_of: object = None) -> str:
+    """Deterministic over the protocol, the scope and the data as-of: the same request against the
+    same publication yields the same packet id (and, by construction, the same packet)."""
+    return make_id("pkt", "packet", protocol_id, scope_kind, *sorted(str(p) for p in scope_parts), data_as_of)
+
+
+def tray_item_id(ref_kind: str, id_value: str, extra: object = None) -> str:
+    return make_id("try", "tray", ref_kind, id_value, extra)

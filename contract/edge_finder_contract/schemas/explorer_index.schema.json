@@ -1,0 +1,412 @@
+{
+  "$id": "https://edge-finder.app/schemas/edge_finder.app.v1/explorer_index",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "as_of": {
+      "description": "ISO-8601 UTC, Z suffix, or null",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "base_manifest_run_id": {
+      "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "capabilities_path": {
+      "type": "string"
+    },
+    "commit_sha": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "counts": {
+      "additionalProperties": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "type": "object"
+    },
+    "events": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "away_participant": {
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "event_id": {
+            "description": "a contract id",
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": "string"
+          },
+          "home_participant": {
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "participants": {
+            "items": {
+              "description": "a contract id",
+              "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "path": {
+            "type": "string"
+          },
+          "start_time_utc": {
+            "description": "ISO-8601 UTC, Z suffix",
+            "format": "date-time",
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "away_participant",
+          "event_id",
+          "home_participant",
+          "participants",
+          "path",
+          "start_time_utc",
+          "status"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "files": {
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "bytes": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "enum": [
+              "manifest",
+              "events",
+              "markets",
+              "model_prices",
+              "recommendations",
+              "theses",
+              "wagers",
+              "settlements",
+              "runs",
+              "health",
+              "board",
+              "event_detail",
+              "performance",
+              "router_health",
+              "recent_deliveries",
+              "sports_registry",
+              "explorer_index",
+              "capability_manifest",
+              "metric_registry",
+              "entity_profile",
+              "event_research",
+              "ranking",
+              "time_series",
+              "market_history",
+              "search_index",
+              "handicap_packet",
+              "handicap_protocol",
+              "research_tray"
+            ],
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "bytes",
+          "entity_id",
+          "kind",
+          "sha256"
+        ],
+        "type": "object"
+      },
+      "description": "explorer-relative path -> entry",
+      "type": "object"
+    },
+    "generated_at": {
+      "description": "ISO-8601 UTC, Z suffix",
+      "format": "date-time",
+      "type": "string"
+    },
+    "kind": {
+      "const": "explorer_index"
+    },
+    "metrics_path": {
+      "type": "string"
+    },
+    "players_by_team": {
+      "additionalProperties": {
+        "items": {
+          "description": "a contract id",
+          "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "type": "object"
+    },
+    "quality": {
+      "additionalProperties": false,
+      "description": "where a research object came from and how far to trust it",
+      "properties": {
+        "coverage": {
+          "description": "human-readable span, e.g. 2026 weeks 1-4",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "data_as_of": {
+          "description": "the newest underlying observation",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "generated_at": {
+          "description": "ISO-8601 UTC, Z suffix",
+          "format": "date-time",
+          "type": "string"
+        },
+        "limitations": {
+          "description": "known caveats, verbatim from the audit; never empty for PARTIAL/RESEARCH",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "methodology_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "missingness": {
+          "description": "fraction of expected observations that are absent, 0..1",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "production": {
+          "description": "produced by a scheduled production path, not a notebook or one-off",
+          "type": "boolean"
+        },
+        "sample_size": {
+          "description": "",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "source": {
+          "description": "the producing dataset or provider, e.g. nflverse pbp, kalshi captures, internal simulation",
+          "type": "string"
+        },
+        "source_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "description": "VERIFIED = production-generated on a cadence, tested, history present; PARTIAL = real but limited; RESEARCH = non-production or experimental; UNAVAILABLE = nothing supports it; UNKNOWN = not established",
+          "enum": [
+            "VERIFIED",
+            "PARTIAL",
+            "RESEARCH",
+            "UNAVAILABLE",
+            "UNKNOWN"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "coverage",
+        "data_as_of",
+        "generated_at",
+        "limitations",
+        "methodology_version",
+        "missingness",
+        "production",
+        "sample_size",
+        "source",
+        "source_version",
+        "status"
+      ],
+      "type": "object"
+    },
+    "run_id": {
+      "description": "a contract id",
+      "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "edge_finder.app.v1"
+    },
+    "search_index_path": {
+      "type": "string"
+    },
+    "sport": {
+      "description": "canonical sport",
+      "enum": [
+        "MLB",
+        "CFB",
+        "NFL",
+        "NBA",
+        "NHL",
+        "SOCCER",
+        "TENNIS"
+      ],
+      "type": "string"
+    },
+    "teams": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "participant_id": {
+            "description": "a contract id",
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": "string"
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "short_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "display_name",
+          "participant_id",
+          "path",
+          "short_name"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "warnings": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "windows": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "end": {
+            "description": "ISO-8601 UTC, Z suffix, or null",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "enum": [
+              "SEASON",
+              "LAST_N",
+              "DATE_RANGE",
+              "GAME",
+              "RUN",
+              "CUSTOM"
+            ],
+            "type": "string"
+          },
+          "label": {
+            "description": "SEASON, L3, L5, 2026-W04, run 2026-10-02T14:40Z ...",
+            "type": "string"
+          },
+          "n": {
+            "description": "LAST_N size",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "start": {
+            "description": "ISO-8601 UTC, Z suffix, or null",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "end",
+          "kind",
+          "label",
+          "n",
+          "start"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "as_of",
+    "base_manifest_run_id",
+    "capabilities_path",
+    "commit_sha",
+    "counts",
+    "events",
+    "files",
+    "generated_at",
+    "kind",
+    "metrics_path",
+    "players_by_team",
+    "quality",
+    "run_id",
+    "schema_version",
+    "search_index_path",
+    "sport",
+    "teams",
+    "warnings",
+    "windows"
+  ],
+  "title": "explorer_index",
+  "type": "object"
+}

@@ -1,0 +1,109 @@
+{
+  "$id": "https://edge-finder.app/schemas/edge_finder.app.v1/search_entry",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "aliases": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "context": {
+      "additionalProperties": false,
+      "properties": {
+        "league": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "position": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "season": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "team": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "league",
+        "position",
+        "season",
+        "team"
+      ],
+      "type": "object"
+    },
+    "id": {
+      "type": "string"
+    },
+    "kind": {
+      "enum": [
+        "TEAM",
+        "PLAYER",
+        "EVENT",
+        "METRIC",
+        "RANKING",
+        "SERIES"
+      ],
+      "type": "string"
+    },
+    "label": {
+      "type": "string"
+    },
+    "path": {
+      "type": "string"
+    },
+    "secondary": {
+      "description": "position, team, competition ...",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "sport": {
+      "description": "canonical sport",
+      "enum": [
+        "MLB",
+        "CFB",
+        "NFL",
+        "NBA",
+        "NHL",
+        "SOCCER",
+        "TENNIS"
+      ],
+      "type": "string"
+    },
+    "tokens": {
+      "description": "lowercase, deduplicated, sorted",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "aliases",
+    "context",
+    "id",
+    "kind",
+    "label",
+    "path",
+    "secondary",
+    "sport",
+    "tokens"
+  ],
+  "title": "search_entry",
+  "type": "object"
+}

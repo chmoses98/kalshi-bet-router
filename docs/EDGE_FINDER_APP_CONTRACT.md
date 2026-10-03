@@ -164,3 +164,9 @@ yet. Every exporter's tests assert no secret-shaped string reaches an output fil
   (BET/PASS/WATCH, authority ASSISTED) and the slate's discrepancy flags as RESEARCH_CANDIDATE rows.
 * No repository records a commit sha on its model outputs; exporters stamp the exporting workflow's sha.
 * CLV is only available where a repo already computes it (MLB bets, tennis research ledger).
+
+## 12. The research graph (contract 1.1.0)
+
+`app/latest/explorer/` adds the navigable research layer (metric registry, rankings with full comparison
+universes, time series, entity profiles, event research, market history, capability manifest, search index)
+and `packet.py` the AI-ready handicap packet. Everything is additive; see `docs/EDGE_FINDER_RESEARCH_GRAPH.md`.

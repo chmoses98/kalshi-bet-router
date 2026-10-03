@@ -1,0 +1,328 @@
+{
+  "$id": "https://edge-finder.app/schemas/edge_finder.app.v1/market_history",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "as_of": {
+      "description": "ISO-8601 UTC, Z suffix",
+      "format": "date-time",
+      "type": "string"
+    },
+    "event_id": {
+      "description": "a contract id",
+      "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+      "type": "string"
+    },
+    "generated_at": {
+      "description": "ISO-8601 UTC, Z suffix",
+      "format": "date-time",
+      "type": "string"
+    },
+    "kind": {
+      "const": "market_history"
+    },
+    "links": {
+      "items": {
+        "additionalProperties": false,
+        "description": "a navigable edge; every path must exist in explorer/index.json",
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "path": {
+            "description": "app-root-relative path of the target document; null only when the target is embedded",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rel": {
+            "enum": [
+              "TEAM",
+              "PLAYER",
+              "EVENT",
+              "OPPONENT",
+              "METRIC",
+              "RANKING",
+              "SERIES",
+              "MARKET",
+              "MARKET_HISTORY",
+              "EVENT_RESEARCH",
+              "CAPABILITIES",
+              "SEARCH",
+              "INDEX"
+            ],
+            "type": "string"
+          },
+          "target_id": {
+            "description": "the contract id of the target, when it has one",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "target_kind": {
+            "enum": [
+              "manifest",
+              "events",
+              "markets",
+              "model_prices",
+              "recommendations",
+              "theses",
+              "wagers",
+              "settlements",
+              "runs",
+              "health",
+              "board",
+              "event_detail",
+              "performance",
+              "router_health",
+              "recent_deliveries",
+              "sports_registry",
+              "explorer_index",
+              "capability_manifest",
+              "metric_registry",
+              "entity_profile",
+              "event_research",
+              "ranking",
+              "time_series",
+              "market_history",
+              "search_index",
+              "handicap_packet",
+              "handicap_protocol",
+              "research_tray"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "path",
+          "rel",
+          "target_id",
+          "target_kind"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "quality": {
+      "additionalProperties": false,
+      "description": "where a research object came from and how far to trust it",
+      "properties": {
+        "coverage": {
+          "description": "human-readable span, e.g. 2026 weeks 1-4",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "data_as_of": {
+          "description": "the newest underlying observation",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "generated_at": {
+          "description": "ISO-8601 UTC, Z suffix",
+          "format": "date-time",
+          "type": "string"
+        },
+        "limitations": {
+          "description": "known caveats, verbatim from the audit; never empty for PARTIAL/RESEARCH",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "methodology_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "missingness": {
+          "description": "fraction of expected observations that are absent, 0..1",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "production": {
+          "description": "produced by a scheduled production path, not a notebook or one-off",
+          "type": "boolean"
+        },
+        "sample_size": {
+          "description": "",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "source": {
+          "description": "the producing dataset or provider, e.g. nflverse pbp, kalshi captures, internal simulation",
+          "type": "string"
+        },
+        "source_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "description": "VERIFIED = production-generated on a cadence, tested, history present; PARTIAL = real but limited; RESEARCH = non-production or experimental; UNAVAILABLE = nothing supports it; UNKNOWN = not established",
+          "enum": [
+            "VERIFIED",
+            "PARTIAL",
+            "RESEARCH",
+            "UNAVAILABLE",
+            "UNKNOWN"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "coverage",
+        "data_as_of",
+        "generated_at",
+        "limitations",
+        "methodology_version",
+        "missingness",
+        "production",
+        "sample_size",
+        "source",
+        "source_version",
+        "status"
+      ],
+      "type": "object"
+    },
+    "run_id": {
+      "description": "a contract id",
+      "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "edge_finder.app.v1"
+    },
+    "series": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "kalshi_ticker": {
+            "type": "string"
+          },
+          "market_id": {
+            "description": "a contract id",
+            "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+            "type": "string"
+          },
+          "points": {
+            "description": "sorted by captured_at",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "captured_at": {
+                  "description": "ISO-8601 UTC, Z suffix",
+                  "format": "date-time",
+                  "type": "string"
+                },
+                "last_price": {
+                  "description": "",
+                  "maximum": 1,
+                  "minimum": 0,
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "open_interest": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "source": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "volume": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "yes_ask": {
+                  "description": "",
+                  "maximum": 1,
+                  "minimum": 0,
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "yes_bid": {
+                  "description": "",
+                  "maximum": 1,
+                  "minimum": 0,
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "captured_at",
+                "last_price",
+                "open_interest",
+                "source",
+                "volume",
+                "yes_ask",
+                "yes_bid"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "kalshi_ticker",
+          "market_id",
+          "points"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "sport": {
+      "description": "canonical sport",
+      "enum": [
+        "MLB",
+        "CFB",
+        "NFL",
+        "NBA",
+        "NHL",
+        "SOCCER",
+        "TENNIS"
+      ],
+      "type": "string"
+    }
+  },
+  "required": [
+    "as_of",
+    "event_id",
+    "generated_at",
+    "kind",
+    "links",
+    "quality",
+    "run_id",
+    "schema_version",
+    "series",
+    "sport"
+  ],
+  "title": "market_history",
+  "type": "object"
+}

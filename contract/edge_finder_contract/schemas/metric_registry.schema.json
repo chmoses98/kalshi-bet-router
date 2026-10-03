@@ -1,0 +1,383 @@
+{
+  "$id": "https://edge-finder.app/schemas/edge_finder.app.v1/metric_registry",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "count": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "generated_at": {
+      "description": "ISO-8601 UTC, Z suffix",
+      "format": "date-time",
+      "type": "string"
+    },
+    "items": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "category": {
+            "type": "string"
+          },
+          "comparison_universe": {
+            "description": "e.g. NFL teams, 2026 season",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": "string"
+          },
+          "entity_type": {
+            "enum": [
+              "TEAM",
+              "PLAYER",
+              "EVENT",
+              "MARKET",
+              "MATCHUP"
+            ],
+            "type": "string"
+          },
+          "extensions": {
+            "additionalProperties": true,
+            "description": "sport-specific detail the common fields do not carry; never required by the UI",
+            "type": "object"
+          },
+          "freshness": {
+            "enum": [
+              "FRESH",
+              "AGING",
+              "STALE",
+              "UNKNOWN"
+            ],
+            "type": "string"
+          },
+          "higher_is_better": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "historical_start": {
+            "format": "date",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "known_limitations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "methodology_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "metric_id": {
+            "description": "met_<sport>.<slug>",
+            "pattern": "^met_[a-z]+\\.[a-z0-9_]+$",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "quality": {
+            "additionalProperties": false,
+            "description": "where a research object came from and how far to trust it",
+            "properties": {
+              "coverage": {
+                "description": "human-readable span, e.g. 2026 weeks 1-4",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "data_as_of": {
+                "description": "the newest underlying observation",
+                "format": "date-time",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "generated_at": {
+                "description": "ISO-8601 UTC, Z suffix",
+                "format": "date-time",
+                "type": "string"
+              },
+              "limitations": {
+                "description": "known caveats, verbatim from the audit; never empty for PARTIAL/RESEARCH",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "methodology_version": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "missingness": {
+                "description": "fraction of expected observations that are absent, 0..1",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "production": {
+                "description": "produced by a scheduled production path, not a notebook or one-off",
+                "type": "boolean"
+              },
+              "sample_size": {
+                "description": "",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "source": {
+                "description": "the producing dataset or provider, e.g. nflverse pbp, kalshi captures, internal simulation",
+                "type": "string"
+              },
+              "source_version": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "description": "VERIFIED = production-generated on a cadence, tested, history present; PARTIAL = real but limited; RESEARCH = non-production or experimental; UNAVAILABLE = nothing supports it; UNKNOWN = not established",
+                "enum": [
+                  "VERIFIED",
+                  "PARTIAL",
+                  "RESEARCH",
+                  "UNAVAILABLE",
+                  "UNKNOWN"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "coverage",
+              "data_as_of",
+              "generated_at",
+              "limitations",
+              "methodology_version",
+              "missingness",
+              "production",
+              "sample_size",
+              "source",
+              "source_version",
+              "status"
+            ],
+            "type": "object"
+          },
+          "related_metrics": {
+            "items": {
+              "description": "met_<sport>.<slug>",
+              "pattern": "^met_[a-z]+\\.[a-z0-9_]+$",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "short_name": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "source_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "splits": {
+            "description": "split dimensions this metric is published for",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "sport": {
+            "description": "canonical sport",
+            "enum": [
+              "MLB",
+              "CFB",
+              "NFL",
+              "NBA",
+              "NHL",
+              "SOCCER",
+              "TENNIS"
+            ],
+            "type": "string"
+          },
+          "stat_type": {
+            "enum": [
+              "RATE",
+              "COUNT",
+              "PERCENT",
+              "PROBABILITY",
+              "RATING",
+              "INDEX",
+              "DURATION",
+              "CURRENCY",
+              "SCORE",
+              "OTHER"
+            ],
+            "type": "string"
+          },
+          "subcategory": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "supports": {
+            "additionalProperties": false,
+            "properties": {
+              "game_state": {
+                "description": "",
+                "type": "boolean"
+              },
+              "home_away": {
+                "description": "",
+                "type": "boolean"
+              },
+              "opponent_adjustment": {
+                "description": "",
+                "type": "boolean"
+              },
+              "percentile": {
+                "description": "",
+                "type": "boolean"
+              },
+              "rank": {
+                "description": "",
+                "type": "boolean"
+              },
+              "schedule_adjustment": {
+                "description": "",
+                "type": "boolean"
+              },
+              "splits": {
+                "description": "",
+                "type": "boolean"
+              },
+              "time_series": {
+                "description": "",
+                "type": "boolean"
+              },
+              "windows": {
+                "description": "",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "game_state",
+              "home_away",
+              "opponent_adjustment",
+              "percentile",
+              "rank",
+              "schedule_adjustment",
+              "splits",
+              "time_series",
+              "windows"
+            ],
+            "type": "object"
+          },
+          "unit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "update_frequency": {
+            "description": "per capture, daily, weekly, per run ...",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "windows": {
+            "description": "window labels this metric is published for",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "category",
+          "comparison_universe",
+          "description",
+          "entity_type",
+          "extensions",
+          "freshness",
+          "higher_is_better",
+          "historical_start",
+          "known_limitations",
+          "methodology_version",
+          "metric_id",
+          "name",
+          "quality",
+          "related_metrics",
+          "short_name",
+          "source",
+          "source_version",
+          "splits",
+          "sport",
+          "stat_type",
+          "subcategory",
+          "supports",
+          "unit",
+          "update_frequency",
+          "windows"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "kind": {
+      "const": "metric_registry"
+    },
+    "run_id": {
+      "description": "a contract id",
+      "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "edge_finder.app.v1"
+    },
+    "sport": {
+      "description": "canonical sport",
+      "enum": [
+        "MLB",
+        "CFB",
+        "NFL",
+        "NBA",
+        "NHL",
+        "SOCCER",
+        "TENNIS"
+      ],
+      "type": "string"
+    }
+  },
+  "required": [
+    "count",
+    "generated_at",
+    "items",
+    "kind",
+    "run_id",
+    "schema_version",
+    "sport"
+  ],
+  "title": "metric_registry",
+  "type": "object"
+}

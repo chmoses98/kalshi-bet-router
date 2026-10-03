@@ -1,0 +1,127 @@
+{
+  "$id": "https://edge-finder.app/schemas/edge_finder.app.v1/handicap_protocol",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "evidence_weights": {
+      "additionalProperties": false,
+      "properties": {
+        "PARTIAL": {
+          "type": "string"
+        },
+        "RESEARCH": {
+          "type": "string"
+        },
+        "UNKNOWN": {
+          "type": "string"
+        },
+        "VERIFIED": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "PARTIAL",
+        "RESEARCH",
+        "UNKNOWN",
+        "VERIFIED"
+      ],
+      "type": "object"
+    },
+    "extends": {
+      "description": "the protocol this one extends",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "forbidden": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "kind": {
+      "const": "handicap_protocol"
+    },
+    "outputs_required": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "principles": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "protocol_id": {
+      "description": "edge_finder.handicap.core.v1, edge_finder.handicap.nfl.v1 ...",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "edge_finder.app.v1"
+    },
+    "sport": {
+      "enum": [
+        "MLB",
+        "CFB",
+        "NFL",
+        "NBA",
+        "NHL",
+        "SOCCER",
+        "TENNIS",
+        "ALL"
+      ],
+      "type": "string"
+    },
+    "sport_notes": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "steps": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "instruction": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "instruction"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "title": {
+      "type": "string"
+    },
+    "version": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "evidence_weights",
+    "extends",
+    "forbidden",
+    "kind",
+    "outputs_required",
+    "principles",
+    "protocol_id",
+    "schema_version",
+    "sport",
+    "sport_notes",
+    "steps",
+    "title",
+    "version"
+  ],
+  "title": "handicap_protocol",
+  "type": "object"
+}

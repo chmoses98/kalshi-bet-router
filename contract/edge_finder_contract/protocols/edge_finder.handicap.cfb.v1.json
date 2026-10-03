@@ -1,0 +1,93 @@
+{
+  "evidence_weights": {
+    "PARTIAL": "real but limited (short history, gaps, snapshot only): weigh with the stated limitation",
+    "RESEARCH": "non-production or experimental: lower-confidence evidence; never the sole basis of a recommendation",
+    "UNKNOWN": "status not established: treat as context only",
+    "VERIFIED": "production-generated, tested, historically covered: weigh fully"
+  },
+  "extends": "edge_finder.handicap.core.v1",
+  "forbidden": [
+    "treating a model price or repository recommendation as a bet instruction",
+    "inventing injuries, lineups, weather, usage or prices absent from the packet",
+    "sizing bets or referencing bankroll",
+    "recommending a position without a fair probability and a bet-up-to price",
+    "omitting the counter-case"
+  ],
+  "kind": "handicap_protocol",
+  "outputs_required": [
+    "scope and freshness summary",
+    "evidence inventory with quality statuses and gaps",
+    "three or more game scripts with likelihoods",
+    "per-position: fair probability, bet-up-to price, confidence, strongest counter-case, correlation note",
+    "explicit PASS where no edge exists",
+    "explicit treatment of each user-focus item"
+  ],
+  "principles": [
+    "Projections, model prices and repository recommendations are EVIDENCE. They are never automatic bets and never authoritative.",
+    "Form at least three plausible game scripts before pricing anything; say which evidence supports each.",
+    "For every candidate position, state the strongest counter-case and the single most likely way it loses.",
+    "Prefer opponent-adjusted and schedule-adjusted information where the packet marks it VERIFIED; treat unadjusted values as context, not conclusions.",
+    "Inspect every market included in the packet before choosing an expression; the best expression of a view is often not the first market read.",
+    "Compare alternate expressions of the same view (full game vs period, spread vs moneyline vs total, team vs player) and explain the choice.",
+    "Distinguish independent edges from correlated positions; never count the same thesis twice.",
+    "Estimate your OWN fair probability for each position and show the reasoning; do not copy the model price.",
+    "Give a bet-up-to price (the highest price at which the position still carries a positive expected value under your fair probability).",
+    "PASS is a complete answer. When no compelling, independent, well-priced edge exists, say so.",
+    "RESEARCH-status data is lower-confidence evidence; say when a conclusion rests on it.",
+    "Never invent missing inputs. If the packet says a datum is missing or stale, reason with that gap explicitly.",
+    "Respect the price timestamps: a quote older than the packet's freshness threshold is a reference, not an executable price.",
+    "Bankroll, staking and placement are outside this protocol: output fair probabilities and bet-up-to prices only."
+  ],
+  "protocol_id": "edge_finder.handicap.cfb.v1",
+  "schema_version": "edge_finder.app.v1",
+  "sport": "CFB",
+  "sport_notes": [
+    "This repository has no production projection model: all team-strength evidence is RESEARCH or market-derived.",
+    "Use the market history and the breadth of the catalog as evidence of consensus, not as a model.",
+    "Large spreads and totals carry more variance; prefer PASS when only market data is available."
+  ],
+  "steps": [
+    {
+      "id": "read_scope",
+      "instruction": "Restate the scope (game / slate / custom tray), the data as-of time and the freshness of markets and model evidence."
+    },
+    {
+      "id": "inventory_evidence",
+      "instruction": "List the evidence by entity with its quality status (VERIFIED / PARTIAL / RESEARCH) and note what is missing."
+    },
+    {
+      "id": "game_scripts",
+      "instruction": "Write three or more plausible game scripts with rough likelihoods that sum to about one; tie each to specific evidence."
+    },
+    {
+      "id": "market_scan",
+      "instruction": "Go through every market in the packet; for each family note the current YES bid/ask and the implied probability."
+    },
+    {
+      "id": "fair_probabilities",
+      "instruction": "For the markets your scripts bear on, estimate an independent fair probability with a short derivation."
+    },
+    {
+      "id": "compare_model",
+      "instruction": "Compare your fair probability with the model evidence; explain agreements and disagreements rather than averaging blindly."
+    },
+    {
+      "id": "expressions",
+      "instruction": "For each view, compare alternate expressions and pick the one with the best price-to-thesis fit; state correlation with other picks."
+    },
+    {
+      "id": "counter_cases",
+      "instruction": "For each candidate position, write the strongest reason it loses and whether that risk is priced."
+    },
+    {
+      "id": "decide",
+      "instruction": "Output RECOMMEND / LEAN / PASS per position with fair probability, bet-up-to price, confidence, and the evidence status it rests on."
+    },
+    {
+      "id": "user_focus",
+      "instruction": "Address every item the user placed in the research tray explicitly, even when the verdict is PASS."
+    }
+  ],
+  "title": "Edge Finder handicapping protocol (CFB extension)",
+  "version": "1.0.0"
+}

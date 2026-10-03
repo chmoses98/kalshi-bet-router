@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import KINDS, SCHEMA_VERSION, SPORTS
+from . import CAPABILITIES, KINDS, QUALITY_STATUSES, SCHEMA_VERSION, SPORTS
 
 SCHEMA_DIR = Path(__file__).resolve().parent / "schemas"
 
@@ -481,6 +481,274 @@ SPORTS_REGISTRY = envelope("sports_registry", None, {
     "router": SPORT_LOCATION,
 }, sport_required=False)
 
+
+# ------------------------------------------------------------------ research graph (contract 1.1.0, additive)
+# Everything below is a NEW kind. No existing object above changes. The vocabulary mirrors the app
+# contract: the same ids (prt_/evt_/mkt_kalshi_), the same FRESHNESS states, the same UTC rule.
+
+QUALITY_STATUS = enum(QUALITY_STATUSES, "VERIFIED = production-generated on a cadence, tested, history present; "
+                      "PARTIAL = real but limited; RESEARCH = non-production or experimental; "
+                      "UNAVAILABLE = nothing supports it; UNKNOWN = not established")
+RESEARCH_ENTITY_TYPE = enum(["TEAM", "PLAYER", "EVENT", "MARKET", "MATCHUP"])
+WINDOW_KIND = enum(["SEASON", "LAST_N", "DATE_RANGE", "GAME", "RUN", "CUSTOM"])
+X_AXIS = enum(["GAME", "WEEK", "DATE", "RUN", "CAPTURE"])
+STAT_TYPE = enum(["RATE", "COUNT", "PERCENT", "PROBABILITY", "RATING", "INDEX", "DURATION", "CURRENCY", "SCORE", "OTHER"])
+HOME_AWAY = enum(["HOME", "AWAY", "NEUTRAL"], nullable=True)
+LINK_REL = enum(["TEAM", "PLAYER", "EVENT", "OPPONENT", "METRIC", "RANKING", "SERIES", "MARKET", "MARKET_HISTORY",
+                 "EVENT_RESEARCH", "CAPABILITIES", "SEARCH", "INDEX"])
+METRIC_ID = {"type": "string", "pattern": r"^met_[a-z]+\.[a-z0-9_]+$", "description": "met_<sport>.<slug>"}
+NMETRIC_ID = {"type": ["string", "null"], "pattern": r"^met_[a-z]+\.[a-z0-9_]+$"}
+DATE = {"type": "string", "format": "date", "description": "YYYY-MM-DD"}
+NDATE = {"type": ["string", "null"], "format": "date"}
+
+QUALITY = obj({
+    "status": QUALITY_STATUS,
+    "source": s("the producing dataset or provider, e.g. nflverse pbp, kalshi captures, internal simulation"),
+    "source_version": ns(), "methodology_version": ns(),
+    "production": boolean("produced by a scheduled production path, not a notebook or one-off"),
+    "generated_at": ts(), "data_as_of": nts("the newest underlying observation"),
+    "coverage": ns("human-readable span, e.g. 2026 weeks 1-4"),
+    "sample_size": nint(), "missingness": nnum("fraction of expected observations that are absent, 0..1"),
+    "limitations": strings("known caveats, verbatim from the audit; never empty for PARTIAL/RESEARCH"),
+}, desc="where a research object came from and how far to trust it")
+
+LINK = obj({
+    "rel": LINK_REL, "target_kind": enum(KINDS), "target_id": ns("the contract id of the target, when it has one"),
+    "label": s(), "path": ns("app-root-relative path of the target document; null only when the target is embedded"),
+}, desc="a navigable edge; every path must exist in explorer/index.json")
+
+WINDOW = obj({
+    "kind": WINDOW_KIND, "n": nint("LAST_N size"), "start": nts(), "end": nts(),
+    "label": s("SEASON, L3, L5, 2026-W04, run 2026-10-02T14:40Z ..."),
+})
+SPLIT = obj({"dimension": s("home_away, handedness, strength_state, surface ..."), "value": s()})
+NSPLIT = {"anyOf": [SPLIT, {"type": "null"}]}
+
+OBS_CONTEXT = obj({
+    "rank": nint("1 = best per higher_is_better"), "universe_size": nint(), "percentile": nnum("0..100, 100 = best"),
+    "ranking_id": NID, "universe_label": ns(),
+    "league_average": nnum(), "league_median": nnum(), "best_value": nnum(), "worst_value": nnum(),
+    "best_entity_id": NID, "worst_entity_id": NID, "higher_is_better": {"type": ["boolean", "null"]},
+}, desc="the comparison context that makes a number meaningful; never a bare percentile")
+
+OBSERVATION = obj({
+    "observation_id": ID, "metric_id": METRIC_ID, "sport": SPORT,
+    "entity_id": ID, "entity_type": RESEARCH_ENTITY_TYPE,
+    "value": nnum("the raw value; null when the source has none for this window"),
+    "adjusted_value": nnum("opponent/schedule-adjusted value when the source computes one; never invented"),
+    "display_value": ns(), "unit": ns(),
+    "window": WINDOW, "split": NSPLIT,
+    "sample_size": nint("games, plays, PA, minutes ... in the metric's sample unit"),
+    "as_of": ts(), "season": ns(), "event_id": NID, "opponent_id": NID,
+    "context": {"anyOf": [OBS_CONTEXT, {"type": "null"}]},
+    "source": s(), "quality_status": QUALITY_STATUS,
+    "extensions": EXTENSIONS,
+})
+
+SUPPORTS = obj({
+    "rank": boolean(), "percentile": boolean(), "time_series": boolean(), "windows": boolean(), "splits": boolean(),
+    "opponent_adjustment": boolean(), "schedule_adjustment": boolean(), "home_away": boolean(), "game_state": boolean(),
+})
+METRIC = obj({
+    "metric_id": METRIC_ID, "sport": SPORT, "name": s(), "short_name": s(), "description": s(),
+    "entity_type": RESEARCH_ENTITY_TYPE, "category": s(), "subcategory": ns(), "unit": ns(),
+    "stat_type": STAT_TYPE, "higher_is_better": {"type": ["boolean", "null"]},
+    "comparison_universe": ns("e.g. NFL teams, 2026 season"),
+    "supports": SUPPORTS, "windows": strings("window labels this metric is published for"),
+    "splits": strings("split dimensions this metric is published for"),
+    "source": s(), "source_version": ns(), "methodology_version": ns(),
+    "quality": QUALITY, "historical_start": NDATE, "update_frequency": ns("per capture, daily, weekly, per run ..."),
+    "freshness": FRESHNESS, "known_limitations": strings(), "related_metrics": arr(METRIC_ID),
+    "extensions": EXTENSIONS,
+})
+METRIC_REGISTRY = envelope("metric_registry", METRIC)
+
+RANKING_ENTRY = obj({
+    "rank": integer(minimum=1), "entity_id": ID, "display_name": s(), "short_name": ns(),
+    "value": nnum(), "adjusted_value": nnum(), "sample_size": nint(), "percentile": nnum(), "path": ns(),
+})
+RANKING = envelope("ranking", None, {
+    "ranking_id": ID, "metric_id": METRIC_ID,
+    "universe": obj({"label": s(), "entity_type": RESEARCH_ENTITY_TYPE, "season": ns(), "size": integer(minimum=0), "filter": ns()}),
+    "window": WINDOW, "split": NSPLIT, "as_of": ts(), "higher_is_better": {"type": ["boolean", "null"]},
+    "summary": obj({"mean": nnum(), "median": nnum(), "min": nnum(), "max": nnum(), "stdev": nnum(),
+                    "best_entity_id": NID, "worst_entity_id": NID, "sample_size_min": nint(), "sample_size_max": nint()}),
+    "entries": arr(RANKING_ENTRY, "sorted by rank ascending; rank 1 is best per higher_is_better"),
+    "quality": QUALITY, "links": arr(LINK),
+})
+
+POINT = obj({
+    "x": s("the x label: game id, week, date, run or capture label"), "t": ts(),
+    "event_id": NID, "opponent_id": NID, "value": nnum(), "adjusted_value": nnum(), "rolling_value": nnum(),
+    "sample_size": nint(), "run_id": NID, "source": ns(), "quality_status": QUALITY_STATUS, "path": ns(),
+})
+TIME_SERIES = envelope("time_series", None, {
+    "series_id": ID, "metric_id": METRIC_ID, "entity_id": ID, "entity_type": RESEARCH_ENTITY_TYPE,
+    "x_axis": X_AXIS, "split": NSPLIT, "unit": ns(), "as_of": ts(), "rolling_window": nint(),
+    "points": arr(POINT, "sorted by t ascending, then x"),
+    "quality": QUALITY, "links": arr(LINK),
+})
+
+GAME_REF = obj({
+    "event_id": ID, "start_time_utc": ts(), "opponent_id": NID, "opponent_name": ns(), "home_away": HOME_AWAY,
+    "status": s(), "result": {"anyOf": [obj({"for": nnum(), "against": nnum(), "outcome": enum(["W", "L", "T"], nullable=True)}), {"type": "null"}]},
+    "competition": ns(), "path": ns(),
+})
+PLAYER_REF = obj({"participant_id": ID, "display_name": s(), "role": ns("position / lineup slot / line"), "path": ns()})
+TEAM_REF = obj({"participant_id": ID, "display_name": s(), "short_name": ns(), "path": ns()})
+OPPONENT_REF = obj({"participant_id": ID, "display_name": s(), "event_ids": arr(ID), "path": ns()})
+MARKET_REF = obj({
+    "market_id": ID, "kalshi_ticker": s(), "event_id": NID, "market_family": s(), "yes_description": s(),
+    "market_probability": nprob(), "yes_bid": nprob(), "yes_ask": nprob(), "captured_at": nts(),
+    "participant_id": NID, "player_id": NID, "period": ns(), "line": nnum(), "threshold": nnum(),
+})
+PROJECTION_REF = obj({
+    "model_price_id": NID, "market_id": NID, "event_id": NID, "metric_id": NMETRIC_ID,
+    "fair_probability": nprob(), "market_probability": nprob(), "edge": nnum(),
+    "projection_value": nnum(), "projection_unit": ns(), "lower_bound": nnum(), "upper_bound": nnum(),
+    "generated_at": ts(), "run_id": NID, "model_version": ns(), "research_only": boolean(),
+    "authority": AUTHORITY, "quality_status": QUALITY_STATUS,
+})
+SERIES_REF = obj({"series_id": ID, "metric_id": METRIC_ID, "x_axis": X_AXIS, "split": NSPLIT, "path": s()})
+RANKING_REF = obj({"ranking_id": ID, "metric_id": METRIC_ID, "window_label": s(), "split": NSPLIT, "path": s()})
+AVAILABILITY = obj({"status": s("ACTIVE, OUT, QUESTIONABLE, IR, PROBABLE, DAY_TO_DAY, UNKNOWN ..."), "detail": ns(),
+                    "as_of": nts(), "source": s(), "event_id": NID})
+
+ENTITY_PROFILE = envelope("entity_profile", None, {
+    "entity": PARTICIPANT, "entity_type": enum(["TEAM", "PLAYER"]), "season": ns(), "league": ns(),
+    "team": {"anyOf": [TEAM_REF, {"type": "null"}]},
+    "metrics": arr(OBSERVATION, "current values with comparison context"),
+    "splits": {"type": "object", "additionalProperties": arr(OBSERVATION)},
+    "series": arr(SERIES_REF), "rankings": arr(RANKING_REF),
+    "games": arr(GAME_REF), "players": arr(PLAYER_REF), "opponents": arr(OPPONENT_REF),
+    "markets": arr(MARKET_REF), "projections": arr(PROJECTION_REF), "availability": arr(AVAILABILITY),
+    "links": arr(LINK), "quality": QUALITY, "extensions": EXTENSIONS,
+})
+
+MATCHUP_ROW = obj({"metric_id": METRIC_ID, "name": s(),
+                   "home": {"anyOf": [OBSERVATION, {"type": "null"}]}, "away": {"anyOf": [OBSERVATION, {"type": "null"}]},
+                   "note": ns()})
+DISTRIBUTION = obj({
+    "market_id": NID, "metric_id": NMETRIC_ID, "entity_id": NID, "label": s(),
+    "quantiles": {"type": "object", "additionalProperties": num(), "description": "p05, p25, p50, p75, p95 ... as the source stores them"},
+    "mean": nnum(), "stdev": nnum(), "samples": nint(), "run_id": NID, "generated_at": ts(),
+    "source": s(), "quality_status": QUALITY_STATUS,
+})
+EVENT_RESEARCH = envelope("event_research", None, {
+    "event": EVENT,
+    "participants": arr(obj({"participant_id": ID, "display_name": s(), "home_away": HOME_AWAY, "path": ns()})),
+    "matchup": arr(MATCHUP_ROW), "players": arr(obj({"participant_id": ID, "display_name": s(), "team_id": NID, "role": ns(), "path": ns()})),
+    "projections": arr(PROJECTION_REF), "distributions": arr(DISTRIBUTION),
+    "markets": arr(MARKET_REF), "market_history_path": ns(),
+    "context": obj({"injuries": arr(AVAILABILITY), "lineups": arr(free_object()), "weather": {"anyOf": [free_object(), {"type": "null"}]},
+                    "venue": {"anyOf": [free_object(), {"type": "null"}]}, "notes": strings()}),
+    "wagers": arr(ID), "links": arr(LINK), "quality": QUALITY, "extensions": EXTENSIONS,
+})
+
+PRICE_POINT = obj({"captured_at": ts(), "yes_bid": nprob(), "yes_ask": nprob(), "last_price": nprob(),
+                   "volume": nnum(), "open_interest": nnum(), "source": ns()})
+MARKET_HISTORY = envelope("market_history", None, {
+    "event_id": ID, "as_of": ts(),
+    "series": arr(obj({"market_id": ID, "kalshi_ticker": s(), "points": arr(PRICE_POINT, "sorted by captured_at")})),
+    "quality": QUALITY, "links": arr(LINK),
+})
+
+CAPABILITY = obj({
+    "capability": enum(CAPABILITIES), "status": QUALITY_STATUS, "entity_types": arr(RESEARCH_ENTITY_TYPE),
+    "summary": s(), "reasons": strings("why this status, from the audit"), "limitations": strings(),
+    "evidence": strings("app-root-relative paths that prove the capability; required for VERIFIED/PARTIAL"),
+    "coverage": ns(), "since": NDATE, "metrics": arr(METRIC_ID), "windows": strings(), "splits": strings(),
+})
+CAPABILITY_MANIFEST = envelope("capability_manifest", CAPABILITY, {
+    "split_dimensions": arr(obj({"dimension": s(), "values": strings(), "status": QUALITY_STATUS})),
+    "windows": arr(WINDOW),
+    "audit_date": DATE, "notes": strings(),
+})
+
+SEARCH_ENTRY = obj({
+    "id": s(), "kind": enum(["TEAM", "PLAYER", "EVENT", "METRIC", "RANKING", "SERIES"]),
+    "label": s(), "secondary": ns("position, team, competition ..."), "aliases": strings(),
+    "tokens": strings("lowercase, deduplicated, sorted"), "path": s(), "sport": SPORT,
+    "context": obj({"team": ns(), "position": ns(), "league": ns(), "season": ns()}),
+})
+SEARCH_INDEX = envelope("search_index", SEARCH_ENTRY)
+
+EXPLORER_FILE = obj({"kind": enum(KINDS), "sha256": s(), "bytes": integer(minimum=0), "entity_id": ns()})
+EXPLORER_INDEX = envelope("explorer_index", None, {
+    "commit_sha": ns(), "as_of": nts(), "base_manifest_run_id": NID,
+    "counts": {"type": "object", "additionalProperties": integer(minimum=0)},
+    "files": {"type": "object", "additionalProperties": EXPLORER_FILE, "description": "explorer-relative path -> entry"},
+    "capabilities_path": s(), "metrics_path": s(), "search_index_path": s(),
+    "teams": arr(TEAM_REF), "players_by_team": {"type": "object", "additionalProperties": arr(ID)},
+    "events": arr(obj({"event_id": ID, "start_time_utc": ts(), "home_participant": NID, "away_participant": NID,
+                       "participants": arr(ID), "status": s(), "path": s()})),
+    "windows": arr(WINDOW), "quality": QUALITY, "warnings": strings(),
+})
+
+PROTOCOL_STEP = obj({"id": s(), "instruction": s()})
+HANDICAP_PROTOCOL = obj({
+    "schema_version": {"const": SCHEMA_VERSION}, "kind": {"const": "handicap_protocol"},
+    "protocol_id": s("edge_finder.handicap.core.v1, edge_finder.handicap.nfl.v1 ..."), "version": s(),
+    "extends": ns("the protocol this one extends"), "sport": enum(list(SPORTS) + ["ALL"]),
+    "title": s(), "principles": strings(), "steps": arr(PROTOCOL_STEP), "outputs_required": strings(),
+    "sport_notes": strings(), "evidence_weights": obj({"VERIFIED": s(), "PARTIAL": s(), "RESEARCH": s(), "UNKNOWN": s()}),
+    "forbidden": strings(),
+})
+
+TRAY_ITEM = obj({
+    "item_id": s(), "ref_kind": enum(["TEAM", "PLAYER", "EVENT", "METRIC", "RANKING", "SERIES", "CHART_POINT", "MARKET", "PROJECTION"]),
+    "sport": SPORT, "id": s("the contract id of the referenced object"),
+    "extra": {"anyOf": [obj({"series_id": ns(), "x": ns(), "metric_id": NMETRIC_ID, "market_id": NID, "event_id": NID}), {"type": "null"}]},
+    "note": ns(), "added_at": ts(),
+})
+RESEARCH_TRAY = obj({
+    "schema_version": {"const": SCHEMA_VERSION}, "kind": {"const": "research_tray"},
+    "tray_version": s(), "items": arr(TRAY_ITEM), "updated_at": ts(),
+})
+
+PACKET_MARKET = obj({
+    "market_id": ID, "kalshi_ticker": s(), "event_id": NID, "market_family": s(), "yes_description": s(),
+    "yes_bid": nprob(), "yes_ask": nprob(), "mid": nprob(), "last_price": nprob(), "captured_at": nts(),
+    "freshness": FRESHNESS, "market_status": s(), "participant_id": NID, "player_id": NID,
+})
+PACKET_MODEL = obj({
+    "market_id": ID, "fair_probability": nprob(), "market_probability": nprob(), "edge": nnum(),
+    "projection_value": nnum(), "projection_unit": ns(), "model_version": ns(), "generated_at": ts(),
+    "research_only": boolean(), "authority": AUTHORITY, "data_quality_status": s(), "freshness": FRESHNESS,
+})
+PACKET_OBS = obj({
+    "metric_id": METRIC_ID, "name": s(), "value": nnum(), "adjusted_value": nnum(), "display_value": ns(), "unit": ns(),
+    "window": s(), "split": ns(), "rank": nint(), "universe_size": nint(), "league_average": nnum(),
+    "as_of": ts(), "quality_status": QUALITY_STATUS, "source": s(),
+})
+PACKET_EVIDENCE = obj({
+    "entity_id": ID, "entity_type": RESEARCH_ENTITY_TYPE, "label": s(), "team": ns(), "role": ns(),
+    "observations": arr(PACKET_OBS), "availability": arr(AVAILABILITY), "recent": arr(obj({
+        "x": s(), "t": ts(), "metric_id": METRIC_ID, "value": nnum(), "opponent": ns(), "event_id": NID})),
+})
+PACKET_EVENT = obj({
+    "event_id": ID, "label": s(), "start_time_utc": ts(), "status": s(), "home_participant": NID, "away_participant": NID,
+    "venue": ns(), "context_notes": strings(), "theses": arr(obj({"summary": ns(), "supporting_factors": strings(), "opposing_factors": strings(), "research_only": boolean()})),
+})
+HANDICAP_PACKET = obj({
+    "schema_version": {"const": SCHEMA_VERSION}, "kind": {"const": "handicap_packet"},
+    "packet_id": ID, "packet_version": s(),
+    "protocol": obj({"protocol_id": s(), "version": s(), "extends": ns(), "principles": strings(), "steps": arr(PROTOCOL_STEP),
+                     "outputs_required": strings(), "forbidden": strings(), "evidence_weights": obj({"VERIFIED": s(), "PARTIAL": s(), "RESEARCH": s(), "UNKNOWN": s()})}),
+    "scope": obj({"kind": enum(["GAME", "SLATE", "CUSTOM"]), "event_ids": arr(ID), "window_start": nts(), "window_end": nts(),
+                  "label": s()}),
+    "sports": arr(SPORT), "generated_at": ts(), "data_as_of": nts(),
+    "warning": s(), "user_focus": arr(obj({"item_id": s(), "ref_kind": s(), "id": s(), "label": ns(), "resolved": boolean(), "note": ns()})),
+    "events": arr(PACKET_EVENT), "evidence": arr(PACKET_EVIDENCE),
+    "markets": arr(PACKET_MARKET), "model_evidence": arr(PACKET_MODEL),
+    "repo_recommendations": arr(obj({"market_id": ID, "selection": SELECTION, "status": s(), "fair_probability": nprob(),
+                                     "bet_up_to_price": nprob(), "authority": AUTHORITY, "research_only": boolean(), "created_at": ts()})),
+    "quality": obj({"sources": strings(), "market_freshness": FRESHNESS, "model_freshness": FRESHNESS,
+                    "research_only_items": strings("metric / model ids whose status is RESEARCH"), "missing": strings(),
+                    "capabilities": {"type": "object", "additionalProperties": QUALITY_STATUS}}),
+    "budget": obj({"max_chars": integer(minimum=0), "chars": integer(minimum=0), "truncated": strings()}),
+})
+
 COLLECTIONS = {
     "events": EVENT, "markets": MARKET, "model_prices": MODEL_PRICE, "recommendations": RECOMMENDATION,
     "theses": THESIS, "wagers": WAGER, "settlements": SETTLEMENT, "runs": RUN,
@@ -490,11 +758,19 @@ SINGLETONS = {
     "manifest": MANIFEST, "health": HEALTH, "board": BOARD, "event_detail": EVENT_DETAIL,
     "performance": PERFORMANCE, "router_health": ROUTER_HEALTH, "recent_deliveries": RECENT_DELIVERIES,
     "sports_registry": SPORTS_REGISTRY,
+    # research graph
+    "explorer_index": EXPLORER_INDEX, "capability_manifest": CAPABILITY_MANIFEST, "metric_registry": METRIC_REGISTRY,
+    "entity_profile": ENTITY_PROFILE, "event_research": EVENT_RESEARCH, "ranking": RANKING,
+    "time_series": TIME_SERIES, "market_history": MARKET_HISTORY, "search_index": SEARCH_INDEX,
+    "handicap_packet": HANDICAP_PACKET, "handicap_protocol": HANDICAP_PROTOCOL, "research_tray": RESEARCH_TRAY,
 }
 
 OBJECTS = {"participant": PARTICIPANT, "event": EVENT, "market": MARKET, "model_price": MODEL_PRICE,
            "thesis": THESIS, "recommendation": RECOMMENDATION, "wager": WAGER, "settlement": SETTLEMENT,
-           "run": RUN}
+           "run": RUN,
+           # research graph objects
+           "quality": QUALITY, "link": LINK, "observation": OBSERVATION, "metric": METRIC,
+           "capability": CAPABILITY, "search_entry": SEARCH_ENTRY, "tray_item": TRAY_ITEM}
 
 
 def all_schemas() -> dict[str, dict]:

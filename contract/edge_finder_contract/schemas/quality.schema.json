@@ -1,0 +1,95 @@
+{
+  "$id": "https://edge-finder.app/schemas/edge_finder.app.v1/quality",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "where a research object came from and how far to trust it",
+  "properties": {
+    "coverage": {
+      "description": "human-readable span, e.g. 2026 weeks 1-4",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "data_as_of": {
+      "description": "the newest underlying observation",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "generated_at": {
+      "description": "ISO-8601 UTC, Z suffix",
+      "format": "date-time",
+      "type": "string"
+    },
+    "limitations": {
+      "description": "known caveats, verbatim from the audit; never empty for PARTIAL/RESEARCH",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "methodology_version": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "missingness": {
+      "description": "fraction of expected observations that are absent, 0..1",
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "production": {
+      "description": "produced by a scheduled production path, not a notebook or one-off",
+      "type": "boolean"
+    },
+    "sample_size": {
+      "description": "",
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "source": {
+      "description": "the producing dataset or provider, e.g. nflverse pbp, kalshi captures, internal simulation",
+      "type": "string"
+    },
+    "source_version": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "status": {
+      "description": "VERIFIED = production-generated on a cadence, tested, history present; PARTIAL = real but limited; RESEARCH = non-production or experimental; UNAVAILABLE = nothing supports it; UNKNOWN = not established",
+      "enum": [
+        "VERIFIED",
+        "PARTIAL",
+        "RESEARCH",
+        "UNAVAILABLE",
+        "UNKNOWN"
+      ],
+      "type": "string"
+    }
+  },
+  "required": [
+    "coverage",
+    "data_as_of",
+    "generated_at",
+    "limitations",
+    "methodology_version",
+    "missingness",
+    "production",
+    "sample_size",
+    "source",
+    "source_version",
+    "status"
+  ],
+  "title": "quality",
+  "type": "object"
+}

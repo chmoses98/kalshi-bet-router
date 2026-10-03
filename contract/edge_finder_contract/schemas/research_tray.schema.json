@@ -1,0 +1,146 @@
+{
+  "$id": "https://edge-finder.app/schemas/edge_finder.app.v1/research_tray",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "items": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "added_at": {
+            "description": "ISO-8601 UTC, Z suffix",
+            "format": "date-time",
+            "type": "string"
+          },
+          "extra": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "event_id": {
+                    "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "market_id": {
+                    "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "metric_id": {
+                    "pattern": "^met_[a-z]+\\.[a-z0-9_]+$",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "series_id": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "x": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "event_id",
+                  "market_id",
+                  "metric_id",
+                  "series_id",
+                  "x"
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "description": "the contract id of the referenced object",
+            "type": "string"
+          },
+          "item_id": {
+            "type": "string"
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ref_kind": {
+            "enum": [
+              "TEAM",
+              "PLAYER",
+              "EVENT",
+              "METRIC",
+              "RANKING",
+              "SERIES",
+              "CHART_POINT",
+              "MARKET",
+              "PROJECTION"
+            ],
+            "type": "string"
+          },
+          "sport": {
+            "description": "canonical sport",
+            "enum": [
+              "MLB",
+              "CFB",
+              "NFL",
+              "NBA",
+              "NHL",
+              "SOCCER",
+              "TENNIS"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "added_at",
+          "extra",
+          "id",
+          "item_id",
+          "note",
+          "ref_kind",
+          "sport"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "kind": {
+      "const": "research_tray"
+    },
+    "schema_version": {
+      "const": "edge_finder.app.v1"
+    },
+    "tray_version": {
+      "type": "string"
+    },
+    "updated_at": {
+      "description": "ISO-8601 UTC, Z suffix",
+      "format": "date-time",
+      "type": "string"
+    }
+  },
+  "required": [
+    "items",
+    "kind",
+    "schema_version",
+    "tray_version",
+    "updated_at"
+  ],
+  "title": "research_tray",
+  "type": "object"
+}

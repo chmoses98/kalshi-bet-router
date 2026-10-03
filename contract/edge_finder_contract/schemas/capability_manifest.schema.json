@@ -1,0 +1,298 @@
+{
+  "$id": "https://edge-finder.app/schemas/edge_finder.app.v1/capability_manifest",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "audit_date": {
+      "description": "YYYY-MM-DD",
+      "format": "date",
+      "type": "string"
+    },
+    "count": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "generated_at": {
+      "description": "ISO-8601 UTC, Z suffix",
+      "format": "date-time",
+      "type": "string"
+    },
+    "items": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "capability": {
+            "enum": [
+              "team_profiles",
+              "player_profiles",
+              "event_research",
+              "team_metrics",
+              "player_metrics",
+              "team_game_logs",
+              "player_game_logs",
+              "historical_results",
+              "opponents",
+              "opponent_adjustment",
+              "schedule_strength",
+              "recent_form_windows",
+              "usage",
+              "lineups",
+              "injuries",
+              "matchup_metrics",
+              "projection_distributions",
+              "raw_projections",
+              "market_prices",
+              "market_price_history",
+              "advanced_stats",
+              "situational_splits",
+              "player_props",
+              "team_props",
+              "game_markets",
+              "play_by_play",
+              "weather",
+              "venue_effects",
+              "calibration",
+              "historical_accuracy",
+              "clv",
+              "wager_history",
+              "rankings",
+              "time_series",
+              "comparisons",
+              "search"
+            ],
+            "type": "string"
+          },
+          "coverage": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "entity_types": {
+            "items": {
+              "enum": [
+                "TEAM",
+                "PLAYER",
+                "EVENT",
+                "MARKET",
+                "MATCHUP"
+              ],
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "evidence": {
+            "description": "app-root-relative paths that prove the capability; required for VERIFIED/PARTIAL",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "limitations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "metrics": {
+            "items": {
+              "description": "met_<sport>.<slug>",
+              "pattern": "^met_[a-z]+\\.[a-z0-9_]+$",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "reasons": {
+            "description": "why this status, from the audit",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "since": {
+            "format": "date",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "splits": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "status": {
+            "description": "VERIFIED = production-generated on a cadence, tested, history present; PARTIAL = real but limited; RESEARCH = non-production or experimental; UNAVAILABLE = nothing supports it; UNKNOWN = not established",
+            "enum": [
+              "VERIFIED",
+              "PARTIAL",
+              "RESEARCH",
+              "UNAVAILABLE",
+              "UNKNOWN"
+            ],
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "windows": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "capability",
+          "coverage",
+          "entity_types",
+          "evidence",
+          "limitations",
+          "metrics",
+          "reasons",
+          "since",
+          "splits",
+          "status",
+          "summary",
+          "windows"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "kind": {
+      "const": "capability_manifest"
+    },
+    "notes": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "run_id": {
+      "description": "a contract id",
+      "pattern": "^[a-z]{2,4}_[A-Za-z0-9._-]{4,}$",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "edge_finder.app.v1"
+    },
+    "split_dimensions": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "dimension": {
+            "type": "string"
+          },
+          "status": {
+            "description": "VERIFIED = production-generated on a cadence, tested, history present; PARTIAL = real but limited; RESEARCH = non-production or experimental; UNAVAILABLE = nothing supports it; UNKNOWN = not established",
+            "enum": [
+              "VERIFIED",
+              "PARTIAL",
+              "RESEARCH",
+              "UNAVAILABLE",
+              "UNKNOWN"
+            ],
+            "type": "string"
+          },
+          "values": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "dimension",
+          "status",
+          "values"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "sport": {
+      "description": "canonical sport",
+      "enum": [
+        "MLB",
+        "CFB",
+        "NFL",
+        "NBA",
+        "NHL",
+        "SOCCER",
+        "TENNIS"
+      ],
+      "type": "string"
+    },
+    "windows": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "end": {
+            "description": "ISO-8601 UTC, Z suffix, or null",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "enum": [
+              "SEASON",
+              "LAST_N",
+              "DATE_RANGE",
+              "GAME",
+              "RUN",
+              "CUSTOM"
+            ],
+            "type": "string"
+          },
+          "label": {
+            "description": "SEASON, L3, L5, 2026-W04, run 2026-10-02T14:40Z ...",
+            "type": "string"
+          },
+          "n": {
+            "description": "LAST_N size",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "start": {
+            "description": "ISO-8601 UTC, Z suffix, or null",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "end",
+          "kind",
+          "label",
+          "n",
+          "start"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "audit_date",
+    "count",
+    "generated_at",
+    "items",
+    "kind",
+    "notes",
+    "run_id",
+    "schema_version",
+    "split_dimensions",
+    "sport",
+    "windows"
+  ],
+  "title": "capability_manifest",
+  "type": "object"
+}

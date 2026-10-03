@@ -1,0 +1,85 @@
+{
+  "$id": "https://edge-finder.app/schemas/edge_finder.app.v1/link",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "a navigable edge; every path must exist in explorer/index.json",
+  "properties": {
+    "label": {
+      "type": "string"
+    },
+    "path": {
+      "description": "app-root-relative path of the target document; null only when the target is embedded",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "rel": {
+      "enum": [
+        "TEAM",
+        "PLAYER",
+        "EVENT",
+        "OPPONENT",
+        "METRIC",
+        "RANKING",
+        "SERIES",
+        "MARKET",
+        "MARKET_HISTORY",
+        "EVENT_RESEARCH",
+        "CAPABILITIES",
+        "SEARCH",
+        "INDEX"
+      ],
+      "type": "string"
+    },
+    "target_id": {
+      "description": "the contract id of the target, when it has one",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "target_kind": {
+      "enum": [
+        "manifest",
+        "events",
+        "markets",
+        "model_prices",
+        "recommendations",
+        "theses",
+        "wagers",
+        "settlements",
+        "runs",
+        "health",
+        "board",
+        "event_detail",
+        "performance",
+        "router_health",
+        "recent_deliveries",
+        "sports_registry",
+        "explorer_index",
+        "capability_manifest",
+        "metric_registry",
+        "entity_profile",
+        "event_research",
+        "ranking",
+        "time_series",
+        "market_history",
+        "search_index",
+        "handicap_packet",
+        "handicap_protocol",
+        "research_tray"
+      ],
+      "type": "string"
+    }
+  },
+  "required": [
+    "label",
+    "path",
+    "rel",
+    "target_id",
+    "target_kind"
+  ],
+  "title": "link",
+  "type": "object"
+}
