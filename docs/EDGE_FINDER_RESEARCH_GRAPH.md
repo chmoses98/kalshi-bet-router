@@ -229,3 +229,8 @@ and opposing evidence.
 
 The graph adds kinds, ids and files; it changes no v1 field. A v2 boundary would be required only if
 identities, probability orientation or the manifest's meaning changed. None did.
+
+## 15. Phase-2 handoff and audits
+
+The phase-2 handoff (what shipped, production proof, owner decisions) is `docs/research-graph/HANDOFF.md`;
+the eight research-data audits behind every capability status are in `docs/research-graph/audits/`.
