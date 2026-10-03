@@ -2,7 +2,7 @@
   "contract_version": "1.1.0",
   "files": {
     "__init__.py": "a7eaefec500accc3ae5482c33d709fea74f30a459c9f25b95b3918b109fdd571",
-    "__main__.py": "94456129ad87e83e1b625e232a0fc4b4be7ceaa9a7557acf3779d2b9f1aa75ca",
+    "__main__.py": "a8a8f47d0665b5155e61f7ca6d502d07228fb96fb0fe0aaf7626e710f5e20d46",
     "board.py": "ef37d5fc3107a3faee4fc01068d93cfc58ab1278a9468dc5427823113f9147c5",
     "build.py": "ec584c52d7205de9278a541a7d2530c1a91a6c1f14b255ddc7e56de55f36149d",
     "freshness.py": "5a92d0cf13105bf7303eb80ed0244421e13f31c107c11e0a3718b37294188784",
