@@ -1,0 +1,143 @@
+{
+  "bets_discovered": 309,
+  "blocked": null,
+  "by_sport": {
+    "CFB": {
+      "auto_merge": true,
+      "classification": "SUPPORTED",
+      "delivered": 114,
+      "destination_repo": "chmoses98/cfb-edge-finder",
+      "eligible": 114,
+      "failed": 0,
+      "last_error_type": null,
+      "ledger_branch": "accounting-data",
+      "routable": true,
+      "status": "DELIVERED"
+    },
+    "MLB": {
+      "auto_merge": true,
+      "classification": "SUPPORTED",
+      "delivered": null,
+      "destination_repo": "chmoses98/edge-finder-api",
+      "eligible": 107,
+      "failed": 107,
+      "last_error_type": "the",
+      "ledger_branch": "main",
+      "routable": true,
+      "status": "FAILED"
+    },
+    "NBA": {
+      "auto_merge": false,
+      "classification": "SUPPORTED",
+      "delivered": 0,
+      "destination_repo": "chmoses98/nba-edge-finder",
+      "eligible": null,
+      "failed": 0,
+      "last_error_type": null,
+      "ledger_branch": "accounting-data",
+      "routable": true,
+      "status": "NO_OP"
+    },
+    "NFL": {
+      "auto_merge": true,
+      "classification": "SUPPORTED",
+      "delivered": 60,
+      "destination_repo": "chmoses98/nfl-edge-finder",
+      "eligible": 60,
+      "failed": 0,
+      "last_error_type": null,
+      "ledger_branch": "handicap-data",
+      "routable": true,
+      "status": "DELIVERED"
+    },
+    "NHL": {
+      "auto_merge": false,
+      "classification": "SUPPORTED",
+      "delivered": 19,
+      "destination_repo": "chmoses98/NHL-edge-finder",
+      "eligible": 19,
+      "failed": 0,
+      "last_error_type": null,
+      "ledger_branch": "accounting-data",
+      "routable": true,
+      "status": "DELIVERED"
+    },
+    "SOCCER": {
+      "auto_merge": false,
+      "classification": "SUPPORTED",
+      "delivered": 9,
+      "destination_repo": "chmoses98/soccer-edge-finder",
+      "eligible": 9,
+      "failed": 0,
+      "last_error_type": null,
+      "ledger_branch": "accounting-data",
+      "routable": true,
+      "status": "DELIVERED"
+    },
+    "TENNIS": {
+      "auto_merge": false,
+      "classification": "SUPPORTED",
+      "delivered": 0,
+      "destination_repo": "chmoses98/Tennis-Edge-Finder",
+      "eligible": null,
+      "failed": 0,
+      "last_error_type": null,
+      "ledger_branch": "accounting-data",
+      "routable": true,
+      "status": "NO_OP"
+    }
+  },
+  "commit_sha": "b235dc371a5d187737b78c4399dc872b294cb1e0",
+  "deferred": null,
+  "delivered": 202,
+  "errors": [
+    "MLB: the auto-merge gate REFUSED this batch. The rows are delivered and remain on kalshi-router/MLB; they are NOT on main. See the named condition above.",
+    "router: Process completed with exit code 1.",
+    "settle NHL: the destination importer refused at least one settlement. Rows it DID write are still being delivered below.",
+    "settle SOCCER: the destination importer refused at least one settlement. Rows it DID write are still being delivered below.",
+    "settle router: Process completed with exit code 1."
+  ],
+  "failed": 107,
+  "generated_at": "2026-10-04T02:37:07Z",
+  "kind": "router_health",
+  "last_delivery_run": {
+    "concluded_at": "2026-10-04T02:26:06Z",
+    "conclusion": "failure",
+    "health_state": "blocked",
+    "run_id": "37169981955",
+    "started_at": "2026-10-04T02:05:22Z",
+    "url": "https://github.com/chmoses98/kalshi-bet-router/actions/runs/37169981955"
+  },
+  "last_poll_at": "2026-10-04T02:05:22Z",
+  "last_settlement_run": {
+    "concluded_at": "2026-10-04T02:32:13Z",
+    "conclusion": "failure",
+    "health_state": null,
+    "run_id": "37170899047",
+    "started_at": "2026-10-04T02:23:23Z",
+    "url": "https://github.com/chmoses98/kalshi-bet-router/actions/runs/37170899047"
+  },
+  "overall_status": "DEGRADED",
+  "poll_age_seconds": 1905.8,
+  "router_health_state": "blocked",
+  "run_id": "run_20261004023707000000",
+  "schema_version": "edge_finder.app.v1",
+  "sport": "ALL",
+  "thresholds": {
+    "router": {
+      "fresh_after_seconds": 1800,
+      "stale_after_seconds": 14400
+    },
+    "settlement": {
+      "fresh_after_seconds": 86400,
+      "stale_after_seconds": 259200
+    }
+  },
+  "warnings": [
+    "router health is BLOCKED: a wager exists that no destination can record; see the refusal counts",
+    "NBA: observation period (auto_merge off); deliveries open a pull request a person merges",
+    "NHL: observation period (auto_merge off); deliveries open a pull request a person merges",
+    "SOCCER: observation period (auto_merge off); deliveries open a pull request a person merges",
+    "TENNIS: observation period (auto_merge off); deliveries open a pull request a person merges"
+  ]
+}
