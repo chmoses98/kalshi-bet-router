@@ -387,6 +387,10 @@ HEALTH = envelope("health", None, {
     "warnings": strings(), "errors": strings(),
     "commit_sha": ns(),
 })
+# contract 1.2.0 (additive): an OPTIONAL ``extensions`` object for sport-specific operational state the
+# common components do not carry (CBB: the prospective research status). Not required, so every health
+# file published before 1.2.0 still validates; a consumer may ignore it.
+HEALTH["properties"]["extensions"] = EXTENSIONS
 
 COMPACT_PARTICIPANT = obj({"participant_id": ID, "display_name": s(), "short_name": ns(),
                            "participant_type": enum(["TEAM", "PLAYER", "PAIR"])})

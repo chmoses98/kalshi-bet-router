@@ -387,7 +387,7 @@ def test_protocols_are_versioned_valid_and_extend_the_core():
         assert ext["protocol_id"] == f"edge_finder.handicap.{sport.lower()}.v1" and ext["extends"] == core["protocol_id"]
         assert ext["principles"] == core["principles"] and ext["sport_notes"]
         validate.validate_document(ext)
-    assert len(P.protocol_ids()) == 8
+    assert len(P.protocol_ids()) == 9
 
 
 # ------------------------------------------------------------------ security and compatibility

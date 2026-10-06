@@ -27,6 +27,10 @@ SPORT_ALIASES = {
     "nhl": "NHL", "hockey": "NHL", "pro hockey": "NHL",
     "soccer": "SOCCER", "football (soccer)": "SOCCER", "futbol": "SOCCER",
     "tennis": "TENNIS",
+    # contract 1.2.0: NCAA Division I men's basketball is its own sport, never NBA (plain "basketball"
+    # stays NBA) and never CFB
+    "cbb": "CBB", "ncaab": "CBB", "ncaam": "CBB", "ncaamb": "CBB", "college basketball": "CBB",
+    "ncaa basketball": "CBB", "ncaa men's basketball": "CBB", "ncaa division i men's basketball": "CBB",
 }
 
 

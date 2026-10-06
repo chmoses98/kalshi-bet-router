@@ -79,6 +79,11 @@
       },
       "type": "array"
     },
+    "extensions": {
+      "additionalProperties": true,
+      "description": "sport-specific detail the common fields do not carry; never required by the UI",
+      "type": "object"
+    },
     "freshness_status": {
       "enum": [
         "FRESH",
@@ -211,7 +216,8 @@
         "NBA",
         "NHL",
         "SOCCER",
-        "TENNIS"
+        "TENNIS",
+        "CBB"
       ],
       "type": "string"
     },

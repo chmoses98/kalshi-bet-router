@@ -47,6 +47,7 @@ app/latest/
 | NHL | chmoses98/NHL-edge-finder | data-archive | app/latest |
 | SOCCER | chmoses98/soccer-edge-finder | data-archive | app/latest |
 | TENNIS | chmoses98/Tennis-Edge-Finder | tennis-data | tennis-edge-finder/data/app/latest |
+| CBB | chmoses98/cbb-edge-finder | app-data | app/latest |
 | router | chmoses98/kalshi-bet-router | app-data | app/latest (router_health, recent_deliveries, sports_registry) |
 
 Raw GitHub URLs (`raw.githubusercontent.com/<repo>/<branch>/<root>/<file>`) are the Option A static read
@@ -75,7 +76,7 @@ All ids are deterministic (`ids.py`, sha256 over domain-separated, length-prefix
 
 | id | from | note |
 |---|---|---|
-| `event_id` `evt_…` | sport + provider namespace + provider id | MLB `mlb_game_pk`, CFB `kalshi_milestone_id`, NFL `nflverse_game_id`, NBA `espn_event_id`/`nba_game_id`, NHL `nhl_game_id`, SOCCER `fixture_id`, TENNIS `kalshi_event_ticker`. Every other provider id travels in `source_ids`. |
+| `event_id` `evt_…` | sport + provider namespace + provider id | MLB `mlb_game_pk`, CFB `kalshi_milestone_id`, NFL `nflverse_game_id`, NBA `espn_event_id`/`nba_game_id`, NHL `nhl_game_id`, SOCCER `fixture_id`, TENNIS `kalshi_event_ticker`, CBB `cbb_game_id` (`G` + ESPN event id). Every other provider id travels in `source_ids`. |
 | `participant_id` `prt_…` | sport + TEAM/PLAYER/PAIR + namespace + id | tennis players are participants; `home_participant`/`away_participant` are null there |
 | `market_id` `mkt_kalshi_<TICKER>` | the Kalshi ticker | already globally unique and stable; no digest |
 | `model_price_id` `mp_…` | run_id + market_id + model_version | |
@@ -170,3 +171,20 @@ yet. Every exporter's tests assert no secret-shaped string reaches an output fil
 `app/latest/explorer/` adds the navigable research layer (metric registry, rankings with full comparison
 universes, time series, entity profiles, event research, market history, capability manifest, search index)
 and `packet.py` the AI-ready handicap packet. Everything is additive; see `docs/EDGE_FINDER_RESEARCH_GRAPH.md`.
+
+## 13. Contract 1.2.0 (additive): CBB
+
+* `CBB` (NCAA Division I men's basketball) joins `SPORTS`, with aliases `cbb`, `ncaab`, `ncaam`, `ncaamb`,
+  `college basketball`, `ncaa basketball`. Plain `basketball` still means NBA; CBB is never CFB.
+* `health.json` gains an OPTIONAL `extensions` object (sport-specific operational state). It is not required:
+  every health file published before 1.2.0 still validates, and a consumer may ignore it.
+* `health.build_health(market_required=False)`: for a sport that publishes no executable markets by design,
+  the market component is NOT_APPLICABLE and does not decide the overall status. The model component stays
+  required; the default (`True`) leaves every existing sport unchanged.
+* `protocols/edge_finder.handicap.cbb.v1.json`: the CBB handicap protocol extension (frozen research system,
+  opponent-adjusted semantics, roster confidence, thin markets).
+* `registry.json`: CBB publishes from `chmoses98/cbb-edge-finder`, branch `app-data`, root `app/latest`, built by
+  `cbb_edge/app/sift_app` from the immutable pre-tip projection archive; no recommendations, no wagers.
+
+The router does not classify or route CBB wagers (no destination profile); `router_health.by_sport.CBB` reports
+NOT_ROUTABLE until one exists.

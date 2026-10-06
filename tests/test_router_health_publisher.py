@@ -64,6 +64,9 @@ def test_documents_validate_and_name_the_failed_destination():
     assert health["by_sport"]["MLB"]["status"] == "FAILED" and health["by_sport"]["MLB"]["failed"] == 1
     assert health["by_sport"]["NBA"]["status"] == "NO_OP" and health["by_sport"]["NBA"]["routable"] is True
     assert set(health["by_sport"]) == set(prh.SPORTS)
+    # CBB (contract 1.2.0) is an app sport only: the router neither classifies nor routes it
+    cbb = health["by_sport"]["CBB"]
+    assert cbb["status"] == "NOT_ROUTABLE" and cbb["routable"] is False and cbb["classification"] == "UNSUPPORTED"
     assert health["bets_discovered"] == 3 and health["deferred"] == 1 and health["poll_age_seconds"] == 600.0
     statuses = {(i["sport"], i["status"]) for i in recent["items"]}
     assert ("MLB", "FAILED") in statuses and ("NFL", "DELIVERED") in statuses and ("CFB", "SETTLED") in statuses

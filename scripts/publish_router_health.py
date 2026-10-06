@@ -37,6 +37,7 @@ from edge_finder_contract.publish import dumps  # noqa: E402
 from edge_finder_contract.timeutil import age_seconds, now_utc, parse_ts, to_iso, to_iso_or_none  # noqa: E402
 from edge_finder_contract.validate import validate  # noqa: E402
 from kalshi_router.destinations import PROFILES  # noqa: E402
+from kalshi_router.sports import ROUTABLE_SPORTS  # noqa: E402
 
 DELIVER_WORKFLOW = "deliver-wagers.yml"
 SETTLE_WORKFLOW = "settle-wagers.yml"
@@ -133,7 +134,7 @@ def _sport_status(sport: str, parsed: dict, dry_run_default: bool) -> dict:
         status = "NO_OP"
     delivered = rows if status == "DELIVERED" else (0 if status in ("NO_OP",) else None)
     return {
-        "routable": prof is not None, "classification": "SUPPORTED" if sport in SPORTS else "UNSUPPORTED",
+        "routable": prof is not None, "classification": "SUPPORTED" if sport in {s.value for s in ROUTABLE_SPORTS} else "UNSUPPORTED",
         "destination_repo": prof.repo if prof else None, "ledger_branch": prof.ledger_branch if prof else None,
         "auto_merge": prof.auto_merge if prof else None,
         "eligible": rows, "delivered": delivered, "failed": (rows or 1) if status == "FAILED" else (0 if status != "UNKNOWN" else None),

@@ -934,7 +934,8 @@
           "NBA",
           "NHL",
           "SOCCER",
-          "TENNIS"
+          "TENNIS",
+          "CBB"
         ],
         "type": "string"
       },

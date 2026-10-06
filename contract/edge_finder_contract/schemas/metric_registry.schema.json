@@ -214,7 +214,8 @@
               "NBA",
               "NHL",
               "SOCCER",
-              "TENNIS"
+              "TENNIS",
+              "CBB"
             ],
             "type": "string"
           },
@@ -364,7 +365,8 @@
         "NBA",
         "NHL",
         "SOCCER",
-        "TENNIS"
+        "TENNIS",
+        "CBB"
       ],
       "type": "string"
     }

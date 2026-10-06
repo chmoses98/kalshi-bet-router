@@ -43,10 +43,11 @@ def _s(v: object) -> str | None:
 
 
 def overall_status(*, model_status: str, market_data_status: str, bet_authority: str, errors: list[str],
-                   payload_available: bool, export_failed: bool, model_required: bool = True) -> str:
+                   payload_available: bool, export_failed: bool, model_required: bool = True,
+                   market_required: bool = True) -> str:
     if not payload_available:
         return "UNAVAILABLE"
-    required = [market_data_status] + ([model_status] if model_required else [])
+    required = ([market_data_status] if market_required else []) + ([model_status] if model_required else [])
     if any(s == UNAVAILABLE for s in required):
         return "UNAVAILABLE"
     if any(s == STALE_C for s in required):
@@ -66,14 +67,19 @@ def build_health(*, sport: str, run_id: str, bet_authority: str, last_market_cap
                  router_applicable: bool = True, settlement_applicable: bool = True,
                  thresholds: dict[str, Thresholds] | None = None, warnings=None, errors=None,
                  extra_components: dict[str, dict] | None = None, now: object = None,
-                 generated_at: object = None) -> dict:
+                 generated_at: object = None, market_required: bool = True,
+                 extensions: dict | None = None) -> dict:
+    """``market_required=False`` (contract 1.2.0) is for a sport that publishes no executable markets by
+    design (CBB today): the market component is NOT_APPLICABLE and does not decide the overall status.
+    ``extensions`` (1.2.0, optional) carries sport-specific operational state; omitted when None."""
     now = now or now_utc()
     th = dict(DEFAULT_THRESHOLDS)
     th.update(thresholds or {})
     warnings = [str(w) for w in (warnings or [])]
     errors = [str(e) for e in (errors or [])]
     comps = {
-        "market_data": component(last_market_capture, thresholds=th["market_data"], now=now),
+        "market_data": component(last_market_capture, thresholds=th["market_data"], now=now,
+                                 required=market_required, applicable=market_required or last_market_capture is not None),
         "model": component(last_model_generated, thresholds=th["model"], now=now, required=model_required,
                            applicable=model_required),
         "export": component(last_successful_run, thresholds=th["export"], now=now, degraded=export_failed,
@@ -85,15 +91,16 @@ def build_health(*, sport: str, run_id: str, bet_authority: str, last_market_cap
     comps.update(extra_components or {})
     market_age = comps["market_data"]["age_seconds"]
     model_age = comps["model"]["age_seconds"]
-    fresh_states = [classify(market_age, th["market_data"])]
+    fresh_states = [classify(market_age, th["market_data"])] if market_required or market_age is not None else []
     if model_required:
         fresh_states.append(classify(model_age, th["model"]))
-    freshness = worst(*fresh_states)
-    if freshness == UNKNOWN and not any(s is None for s in (market_age,)):
+    freshness = worst(*fresh_states) if fresh_states else UNKNOWN
+    if freshness == UNKNOWN and market_required and not any(s is None for s in (market_age,)):
         freshness = STALE
     overall = overall_status(model_status=comps["model"]["status"], market_data_status=comps["market_data"]["status"],
                              bet_authority=bet_authority, errors=errors, payload_available=payload_available,
-                             export_failed=export_failed, model_required=model_required)
+                             export_failed=export_failed, model_required=model_required,
+                             market_required=market_required)
     ages = [a for a in (market_age, model_age) if a is not None]
     out = {
         "schema_version": SCHEMA_VERSION, "kind": "health", "sport": ids.normalize_sport(sport),
@@ -117,5 +124,7 @@ def build_health(*, sport: str, run_id: str, bet_authority: str, last_market_cap
         "warnings": warnings, "errors": errors,
         "commit_sha": _s(commit_sha),
     }
+    if extensions is not None:
+        out["extensions"] = dict(extensions)
     validate(out, "health")
     return out
