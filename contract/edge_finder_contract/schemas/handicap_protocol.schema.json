@@ -71,6 +71,7 @@
         "NHL",
         "SOCCER",
         "TENNIS",
+        "CBB",
         "ALL"
       ],
       "type": "string"

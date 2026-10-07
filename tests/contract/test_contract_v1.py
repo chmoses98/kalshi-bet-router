@@ -177,6 +177,32 @@ def test_health_degraded_when_export_failed_but_payload_stands():
     assert h["components"]["export"]["status"] == "DEGRADED"
 
 
+def test_health_market_not_required_for_a_research_sport_without_markets():
+    # contract 1.2.0: CBB publishes no executable markets by design; health must not call that a failure
+    h = _health(sport="CBB", last_market_capture=None, market_required=False)
+    assert h["market_data_status"] == "NOT_APPLICABLE" and h["overall_status"] == "RESEARCH_ONLY"
+    assert "extensions" not in h
+    h = _health(sport="CBB", last_market_capture=None, market_required=False, last_model_generated=None)
+    assert h["overall_status"] == "UNAVAILABLE", "the model stays required: no model data is never research-ready"
+    h = _health(sport="CBB", last_market_capture=None, market_required=False,
+                extensions={"cbb": {"prospective": {"n": 0}}})
+    assert h["extensions"]["cbb"]["prospective"]["n"] == 0
+    # the default still requires market data (every existing sport is unchanged)
+    assert _health(last_market_capture=None, bet_authority="MANUAL")["overall_status"] == "UNAVAILABLE"
+
+
+def test_health_files_published_before_1_2_0_still_validate():
+    h = _health()
+    assert "extensions" not in h
+    validate.validate(h, "health")
+
+
+def test_cbb_is_its_own_sport():
+    assert ids.normalize_sport("cbb") == "CBB" and ids.normalize_sport("NCAAB") == "CBB"
+    assert ids.normalize_sport("college basketball") == "CBB"
+    assert ids.normalize_sport("basketball") == "NBA" and ids.normalize_sport("cfb") == "CFB"
+
+
 def test_health_model_not_required_for_market_only_sport():
     h = _health(last_model_generated=None, model_required=False, bet_authority="MANUAL")
     assert h["overall_status"] == "HEALTHY" and h["model_status"] == "NOT_APPLICABLE"

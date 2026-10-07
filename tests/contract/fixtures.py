@@ -49,6 +49,13 @@ SPORT_CASES = {
                             ("PLAYER", "sackmann_id", "200282", "Marcos Giron", "Giron")],
                    start="2026-10-02T06:00:00Z", ticker="KXATPMATCH-26OCT02HURGEA-HUR", family="match_winner",
                    yes="Hurkacz wins the match", repo="chmoses98/Tennis-Edge-Finder", source_bet_key="kalshi:v1:" + "0" * 64),
+    # contract 1.2.0: NCAA D-I men's basketball (canonical game id = "G" + ESPN event id)
+    "CBB": dict(source="cbb_game_id", source_id="G401920982", league="NCAA D-I", season="2026-27",
+                competition="Eternal City Tip-Off",
+                home=("TEAM", "cbb_team_id", "T0352", "Villanova Wildcats", "NOVA"),
+                away=("TEAM", "cbb_team_id", "T0230", "Notre Dame Fighting Irish", "ND"),
+                start="2026-10-03T14:30:00Z", ticker="KXNCAAMBGAME-26OCT03NDNOVA-NOVA", family="game_winner",
+                yes="Villanova wins", repo="chmoses98/cbb-edge-finder", source_bet_key="kalshi:v1:" + "1" * 64),
 }
 
 

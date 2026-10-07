@@ -25,7 +25,13 @@
                "status": "ACTIVE", "notes": ["written by archive_publish.sh from the merged latest slate"]},
     "TENNIS": {"repo": "chmoses98/Tennis-Edge-Finder", "branch": "tennis-data", "app_root": "tennis-edge-finder/data/app/latest",
                "raw_base_url": "https://raw.githubusercontent.com/chmoses98/Tennis-Edge-Finder/tennis-data/tennis-edge-finder/data/app/latest",
-               "status": "ACTIVE", "notes": ["the tennis-data branch keeps everything under the tennis-edge-finder/data prefix"]}
+               "status": "ACTIVE", "notes": ["the tennis-data branch keeps everything under the tennis-edge-finder/data prefix"]},
+    "CBB": {"repo": "chmoses98/cbb-edge-finder", "branch": "app-data", "app_root": "app/latest",
+            "raw_base_url": "https://raw.githubusercontent.com/chmoses98/cbb-edge-finder/app-data/app/latest",
+            "status": "ACTIVE", "notes": ["NCAA Division I men's basketball: a prospectively frozen research system (incumbent pure-0.2.0, shadow challengers, the P-ROSTER-1 roster overlay)",
+                                          "no recommendations and no wagers; bet_authority RESEARCH_ONLY",
+                                          "the app publication is derived from the immutable pre-tip projection archive, roster truth and the prospective scoreboard by cbb_edge/app/sift_app; it never re-runs a model",
+                                          "the app-data branch is replaced wholesale on every publish (the archives stay on their append-only branches)"]}
   },
   "router": {"repo": "chmoses98/kalshi-bet-router", "branch": "app-data", "app_root": "app/latest",
              "raw_base_url": "https://raw.githubusercontent.com/chmoses98/kalshi-bet-router/app-data/app/latest",
