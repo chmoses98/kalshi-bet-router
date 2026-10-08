@@ -176,11 +176,17 @@ class DestinationProfile:
     A combo's sport is proven by its legs (`classify.classify_with_legs`), but proving the sport does not make
     a ledger able to hold the wager. True only where the whole lifecycle was read and holds for a ticker
     that names no single game: the importer and the destination's validator treat `market_ticker` as an
-    opaque string, and the SETTLEMENT is the exchange's own settlement of that combo market, delivered by
-    this router (a `settlement_importer` exists). False by default, and False for MLB, which settles its own
-    wagers from the contract it parses out of the ticker and explicitly defers multi-market combos
-    (`edge-finder-api lib/wager_settlement_semantics.py: SIDE_DEFERRED_MULTI_MARKET_COMBO`) -- a combo filed
-    there would never settle. A combo for such a destination is refused COMBO_NOT_RECORDABLE (BLOCKED)."""
+    opaque string, and the SETTLEMENT is the exchange's own settlement of that combo market -- delivered by
+    this router where a `settlement_importer` exists, or, for a destination that settles its own wagers, graded
+    by that destination from the exchange's own final result for the combo contract. False by default; a combo
+    for a destination without it is refused COMBO_NOT_RECORDABLE (BLOCKED).
+
+    MLB (2026-10-08): edge-finder-api settles its own wagers from MLB Stats API game outcomes, which a combo --
+    naming no single game -- cannot use, so until now it was False. edge-finder-api now records a combo as ONE
+    `wagerStructure: COMBO_CONTRACT` wager (the combo ticker its opaque identity, legs as provenance only) and
+    settles it ONLY from the exchange's own final yes/no result for that contract
+    (lib/edgelab/combo_contract_settlement.py), leaving it pending when that result is not final or not
+    binary."""
 
 
 #: Every destination production routing is willing to push to.
@@ -230,6 +236,9 @@ PROFILES: dict[Sport, DestinationProfile] = {
             "{receipts}",
         ),
         settlement_importer=None,
+        # Settles its own: a combo is graded by edge-finder-api from the exchange's own final result for the
+        # combo contract (scripts/edgelab/settle_combo_contracts.py), never by this router and never from legs.
+        records_combo_wagers=True,
         committable_prefixes=("data/",),
         mergeable_paths=frozenset({"data/edgelab/bets/bets.jsonl"}),
         ledger_branch_runs_ci=True,
@@ -589,12 +598,10 @@ def render_command(
 
 
 def combo_destination_names() -> frozenset[str]:
-    """Sports whose destination can record a combo wager. A destination that settles its own wagers is never
-    one, whatever its flag says: its settlement would have to grade a ticker that names no single game."""
-    return frozenset(
-        sport.value for sport, profile in PROFILES.items()
-        if profile.records_combo_wagers and profile.settlement_importer is not None
-    )
+    """Sports whose destination can record a combo wager end to end: the profile says so
+    (``records_combo_wagers``), which for a destination that settles its own wagers means its own settlement
+    grades the combo from the exchange's own result for that contract (see the field's docstring)."""
+    return frozenset(sport.value for sport, profile in PROFILES.items() if profile.records_combo_wagers)
 
 
 def describe(sport_name: str) -> dict[str, Any]:

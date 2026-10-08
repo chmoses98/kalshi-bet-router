@@ -308,6 +308,12 @@ class ProductionWager:
     #: "BUY" / "SELL" when the verb is established, else None. Only destinations whose schema carries it
     #: (NFL: `execution_action`) receive it.
     execution_action: str | None = None
+    #: True when the market is a multivariate COMBO whose sport its legs proved (classify.classify_with_legs).
+    is_combo: bool = False
+    #: The combo's legs as the exchange stated them -- ((market_ticker, event_ticker, side), ...) -- carried
+    #: ONLY as provenance for a destination that records it (MLB's COMBO_CONTRACT `comboLegs`). Never an input
+    #: to any verdict, price or result. Empty for a single market.
+    combo_legs: tuple = ()
 
 
 # ------------------------------------------------ the production filter itself
@@ -595,6 +601,7 @@ def evaluate_order(
     include_pre_cutover: bool = False,
     is_combo: bool = False,
     combo_destinations: frozenset[str] = frozenset(),
+    combo_legs: tuple = (),
 ) -> tuple[ProductionWager | None, ProductionRefusal | None, OrderFinality | None]:
     """Apply every gate to one order, cheapest and most decisive first.
 
@@ -684,6 +691,8 @@ def evaluate_order(
             fill_count=order.fill_count,
             finality=finality,
             execution_action=action,
+            is_combo=is_combo,
+            combo_legs=tuple(combo_legs) if is_combo else (),
         ),
         None,
         finality,
@@ -721,6 +730,7 @@ def evaluate_production(
     combo_tickers: frozenset[str] = frozenset(),
     combo_destinations: frozenset[str] = frozenset(),
     on_refusal=None,
+    combo_legs: dict | None = None,
 ) -> tuple[list[ProductionWager], ProductionDiagnostics]:
     """Filter every order down to the ones safe to deliver, and count the rest.
 
@@ -743,6 +753,7 @@ def evaluate_production(
             include_pre_cutover,
             is_combo=order.ticker in combo_tickers,
             combo_destinations=combo_destinations,
+            combo_legs=(combo_legs or {}).get(order.ticker, ()),
         )
         if include_pre_cutover and not is_after_cutover(order):
             # Counted as what it is, so a recovery run's report still says how
@@ -1011,7 +1022,19 @@ def to_mlb_import_row(wager: ProductionWager, import_batch_id: str) -> dict:
     """
     if not isinstance(import_batch_id, str) or not import_batch_id.strip():
         raise ValueError("an import batch id is required to build an MLB row")
-    return to_import_row(wager)
+    row = to_import_row(wager)
+    if wager.is_combo:
+        # ONE Kalshi combo contract (edge-finder-api `wagerStructure: COMBO_CONTRACT`): the combo ticker is the
+        # wager's opaque market identity and edge-finder-api settles it ONLY from the exchange's own final result
+        # for that contract. The legs ride along as provenance; nothing grades them. Added only for a combo, so
+        # every straight MLB row stays byte-for-byte what it always was (a replay must never CONFLICT).
+        row["wagerStructure"] = "COMBO_CONTRACT"
+        row["marketFamily"] = "multi_market_combo"
+        row["comboLegs"] = [
+            {"marketTicker": ticker, "eventTicker": event, "side": side}
+            for ticker, event, side in wager.combo_legs
+        ] or None
+    return row
 
 
 #: Which emitter speaks each destination's language. A sport absent from this

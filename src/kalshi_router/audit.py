@@ -781,6 +781,7 @@ def _evaluate_production(
     # not two, and counting them twice would overstate the gap.
     sports, game_dates, statuses, unresolved_reasons, combo_tickers = _classify_candidates(
         resolver, taxonomy, {o.ticker for o in candidates})
+    combo_legs = _combo_leg_provenance(resolver, combo_tickers)
 
     destinations = frozenset(sport.value for sport in DESTINATION_REPOS)
     refused_orders: list = []
@@ -796,6 +797,7 @@ def _evaluate_production(
         combo_tickers=combo_tickers,
         combo_destinations=combo_destination_names(),
         on_refusal=lambda order, refusal: refused_orders.append((order, refusal)),
+        combo_legs=combo_legs,
     )
 
     # Attached after the filter runs: the filter counts REFUSALS, which are per
@@ -816,6 +818,27 @@ def _evaluate_production(
         )
         _profile_destination_refusals(refusals, resolver, refused_orders, sports, combo_tickers)
     return wagers, diagnostics
+
+
+def _combo_leg_provenance(resolver, combo_tickers):
+    """{combo ticker: ((leg market ticker, leg event ticker, YES|NO|None), ...)} exactly as the exchange states
+    them in ``mve_selected_legs``. Public catalogue data, carried only into a destination payload (never printed),
+    and only as provenance."""
+    from .refusals import combo_legs, leg_market_ticker
+
+    out = {}
+    for ticker in combo_tickers:
+        legs = []
+        for leg in combo_legs(resolver.resolve(ticker).market):
+            leg_ticker = leg_market_ticker(leg)
+            if leg_ticker is None:
+                continue
+            side = str(leg.get("side") or "").strip().upper()
+            event = leg.get("event_ticker")
+            legs.append((leg_ticker, event if isinstance(event, str) and event.strip() else None,
+                         side if side in ("YES", "NO") else None))
+        out[ticker] = tuple(legs)
+    return out
 
 
 def _classify_candidates(resolver, taxonomy, tickers):
