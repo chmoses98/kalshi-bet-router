@@ -16,6 +16,8 @@ multivariate COMBO market whose series names no sport and whose legs do.
 
 from __future__ import annotations
 
+import json
+
 from kalshi_router.refusals import RefusalProfile, RefusedMarketProfile, describe_series
 
 from .synthetic import (
@@ -78,14 +80,20 @@ def test_deliver_profiles_a_combo_whose_legs_are_all_mlb(monkeypatch, local_env,
         ["deliver", "--out-dir", str(tmp_path / "payloads"), "--allow-stabilization"]
     )
     assert code == 0, err
-    # 2026-10-08: the legs PROVE this combo is MLB (classify_with_legs), so it is no longer "sport
-    # unresolved". It is still BLOCKED -- MLB settles its own wagers and cannot grade a combo -- under the
-    # reason that is actually true.
+    # 2026-10-08: the legs PROVE this combo is MLB (classify_with_legs). edge-finder-api now records a combo as
+    # ONE COMBO_CONTRACT wager and settles it from the exchange's own result for that contract, so it is
+    # delivered -- with the combo ticker as its identity and the legs as provenance only.
     assert "sport unresolved: 0" in out
-    assert "competition absent: 0" in out
-    assert "combo the destination cannot record: 2" in out
-    assert "BLOCKED (cannot be recorded, and waiting will not help): 2" in out
-    assert "HEALTH=blocked" in out
+    assert "combo the destination cannot record: 0" in out
+    assert "eligible orders on COMBO markets (sport proven by every leg): 2" in out
+    assert "BLOCKED (cannot be recorded, and waiting will not help): 0" in out
+    payload = json.loads((tmp_path / "payloads" / "MLB.json").read_text())
+    assert len(payload["rows"]) == 2
+    for row in payload["rows"]:
+        assert row["marketTicker"] == COMBO_MARKET and row["gameDate"] == "2026-09-22"
+        assert row["wagerStructure"] == "COMBO_CONTRACT" and row["marketFamily"] == "multi_market_combo"
+        assert [(l["marketTicker"], l["side"]) for l in row["comboLegs"]] == [(LEG_A, "YES"), (LEG_B, "YES")]
+        assert "legs" not in row, "a combo contract is never written in the MULTI_LEG legs[] shape"
 
 
 def test_the_profile_names_no_market_event_or_series(monkeypatch, local_env, tmp_path):
@@ -129,5 +137,6 @@ def test_deliver_prints_one_coverage_line_per_destination(monkeypatch, local_env
     lines = [line for line in out.splitlines() if line.startswith("ROUTER_COVERAGE ")]
     assert any(line.startswith("ROUTER_COVERAGE sport=MLB ") for line in lines), out
     mlb = next(line for line in lines if " sport=MLB " in line)
-    assert "refused_provably=2" in mlb
-    assert "eligible=0" in mlb and "newest_game_date=none" in mlb
+    # Delivered since 2026-10-08 (MLB records COMBO_CONTRACT wagers), so nothing provably-MLB is refused.
+    assert "refused_provably=0" in mlb
+    assert "eligible=2" in mlb and "newest_game_date=2026-09-22" in mlb

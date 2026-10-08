@@ -407,12 +407,26 @@ def test_12_a_combo_whose_legs_span_two_dates_has_no_game_date():
 
 
 def test_only_destinations_that_can_settle_a_combo_record_one():
-    assert combo_destination_names() == frozenset({"CFB", "NFL", "NHL", "NBA", "SOCCER", "TENNIS"})
-    assert profile_for("MLB").records_combo_wagers is False
+    # MLB joined 2026-10-08: edge-finder-api records a COMBO_CONTRACT wager and settles it from the exchange's
+    # own final result for the combo contract (it settles its own wagers, so it has no router settlement importer).
+    assert combo_destination_names() == frozenset({"CFB", "NFL", "NHL", "NBA", "SOCCER", "TENNIS", "MLB"})
     for profile in PROFILES.values():
-        if profile.records_combo_wagers:
-            assert profile.settlement_importer is not None
+        if profile.records_combo_wagers and profile.settlement_importer is None:
+            assert profile.sport is Sport.MLB, "a self-settling destination needs its own combo settlement path"
     assert ProductionRefusal.COMBO_NOT_RECORDABLE in NEEDS_ATTENTION_REFUSALS
+
+
+def test_a_destination_that_cannot_record_a_combo_still_refuses_it():
+    from kalshi_router.production import evaluate_order
+
+    from .test_production_filter import NOW, order
+
+    wager, refusal, _ = evaluate_order(order(), "MLB", "2026-09-27", "settled", NOW, frozenset({"MLB"}),
+                                       is_combo=True, combo_destinations=frozenset())
+    assert wager is None and refusal is ProductionRefusal.COMBO_NOT_RECORDABLE
+    straight, refusal, _ = evaluate_order(order(), "MLB", "2026-09-27", "settled", NOW, frozenset({"MLB"}),
+                                          is_combo=False, combo_destinations=frozenset())
+    assert refusal is None and straight.is_combo is False and straight.combo_legs == ()
 
 
 def _fills():
@@ -459,3 +473,22 @@ def test_end_to_end_a_combo_spanning_two_dates_is_refused_for_its_date_and_profi
     assert "#1: NFL; orders 1 on 2026-09-27; combo, 3 legs stated, 3 dated, 2 distinct leg date(s)" in out
     for token in (COMBO, COMBO_EVENT, *legs, *SENSITIVE_TOKENS):
         assert token not in out
+
+
+def test_a_straight_mlb_row_is_byte_for_byte_unchanged_and_only_a_combo_gains_the_contract_fields():
+    from dataclasses import replace
+
+    from kalshi_router.production import evaluate_order, to_import_row, to_mlb_import_row
+
+    from .test_production_filter import NOW, order
+
+    straight, _, _ = evaluate_order(order(), "MLB", "2026-09-27", "settled", NOW, frozenset({"MLB"}))
+    assert to_mlb_import_row(straight, "kalshi-router-v1") == to_import_row(straight)
+    combo = replace(straight, is_combo=True, combo_legs=(("KXMLBGAME-A", "KXMLBGAME-E", "YES"),))
+    row = to_mlb_import_row(combo, "kalshi-router-v1")
+    assert row["wagerStructure"] == "COMBO_CONTRACT" and row["marketFamily"] == "multi_market_combo"
+    assert row["comboLegs"] == [{"marketTicker": "KXMLBGAME-A", "eventTicker": "KXMLBGAME-E", "side": "YES"}]
+    assert {k: v for k, v in row.items() if k not in ("wagerStructure", "marketFamily", "comboLegs")} \
+        == to_import_row(combo)
+    no_legs = to_mlb_import_row(replace(combo, combo_legs=()), "kalshi-router-v1")
+    assert no_legs["comboLegs"] is None

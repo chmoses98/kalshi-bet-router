@@ -374,6 +374,13 @@ not a registry gap, not missing metadata: a classification gap.
   from the contract it parses out of the ticker and explicitly defers combos. An MLB combo is refused
   `combo_not_recordable_by_destination` -- still BLOCKED, under its true reason.
 
+  **MLB joined 2026-10-08** (edge-finder-api #278): it records a combo as ONE `wagerStructure: COMBO_CONTRACT`
+  wager -- the combo ticker its opaque identity, side/price/stake/contracts/economics/identity as any straight
+  wager, the legs only as `comboLegs` provenance -- and settles it ONLY from the exchange's own final yes/no result
+  for that contract (`lib/edgelab/combo_contract_settlement.py`), leaving it pending when the result is not final
+  or not binary. `to_mlb_import_row` adds `wagerStructure`, `marketFamily: multi_market_combo` and `comboLegs`
+  only for a combo, so every straight MLB row is byte-for-byte unchanged.
+
 No ticker prefix, collection name or title decides anything.
 
 ### Settlements WAITING_FOR_PARENT_WAGER
