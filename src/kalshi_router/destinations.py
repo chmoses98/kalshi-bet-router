@@ -455,10 +455,15 @@ PROFILES: dict[Sport, DestinationProfile] = {
         row_identity_field="source_bet_key",
         requires_season=False,
         settlement_economics="router-settlement-economics.v2",
-        # OBSERVATION PERIOD until the full path is proven end to end against the live destination (classifier on
-        # real NHL markets, import, identical re-import DUPLICATE_NOOP, settlement, orphan refusal, validator,
-        # containment, reconciliation, a production dry run). The gate still runs and still prints its verdict.
-        auto_merge=False,
+        # Observation period CLOSED 2026-10-08, on the criteria this entry set (2026-09-29) and the CFB precedent
+        # (docs/DESTINATIONS.md "The observation period"): the full path proven end to end against the live
+        # destination -- classifier on real NHL markets (19 orders), import (NEW 2026-10-02), identical re-import
+        # DUPLICATE_NOOP (every run since), orphan refusal (19 refused in settle run 37713992507 while the wagers
+        # were unmerged), settlement (19 NEW, settle run 37731709440), validator (accepted every run), containment
+        # (ONLY_CANONICAL_WAGER_FILES_CHANGED), reconciliation (UNACCOUNTED 0, wagers and settlements), the
+        # activation dry run (36624801843) -- and the first real batches read and merged by hand: wagers #8
+        # (c237b89) and settlements #26 (d2e0842). The twelve gate conditions are unchanged; a REFUSAL is still red.
+        auto_merge=True,
         # The NHL routed ledger reads market_ticker only to pair a settlement with its wager (same ticker and
         # side); settlement comes from this router.
         records_combo_wagers=True,
@@ -472,7 +477,8 @@ PROFILES: dict[Sport, DestinationProfile] = {
 }
 
 
-def _shared_ledger_profile(sport: Sport, repo: str, notes: tuple[str, ...]) -> DestinationProfile:
+def _shared_ledger_profile(sport: Sport, repo: str, notes: tuple[str, ...],
+                           auto_merge: bool = False) -> DestinationProfile:
     """A destination that imports through the contract's shared routed ledger.
 
     NBA, SOCCER and TENNIS (2026-10-02, app-readiness pass) are ACCOUNTING ONLY destinations with the NHL shape:
@@ -482,9 +488,10 @@ def _shared_ledger_profile(sport: Sport, repo: str, notes: tuple[str, ...]) -> D
     installed); not season-partitioned; settlement economics v2 from the first row. Identity is minted by the
     destination: `<prefix>w-` / `<prefix>s-` + sha256(source_bet_key)[:24].
 
-    auto_merge is False: an OBSERVATION PERIOD, as for NHL, until a real delivery has been watched through the
-    gate on each destination. The branch is still pushed and the pull request still opened; only the final merge
-    waits for a person.
+    auto_merge is False by default: an OBSERVATION PERIOD, as for NHL, until a real delivery has been watched
+    through the gate on each destination. The branch is still pushed and the pull request still opened; only the
+    final merge waits for a person. A destination's period closes per destination, by its own evidence (SOCCER:
+    2026-10-08).
     """
     return DestinationProfile(
         sport=sport,
@@ -509,7 +516,7 @@ def _shared_ledger_profile(sport: Sport, repo: str, notes: tuple[str, ...]) -> D
         row_identity_field="source_bet_key",
         requires_season=False,
         settlement_economics="router-settlement-economics.v2",
-        auto_merge=False,
+        auto_merge=auto_merge,
         # contract/edge_finder_contract/routed_ledger.py: market_ticker is an opaque required string, compared
         # only to pair a settlement with its wager; settlement comes from this router.
         records_combo_wagers=True,
@@ -528,7 +535,14 @@ PROFILES[Sport.NBA] = _shared_ledger_profile(Sport.NBA, "chmoses98/nba-edge-find
 PROFILES[Sport.SOCCER] = _shared_ledger_profile(Sport.SOCCER, "chmoses98/soccer-edge-finder", (
     "identity minted by the destination: socw-/socs- + sha256(source_bet_key)[:24]",
     "soccer_edge.router (PositionV1) remains the repository's own translation layer; delivery uses the shared ledger",
-))
+),
+    # Observation period CLOSED 2026-10-08 (docs/DESTINATIONS.md): real orders classified SOCCER (9), import NEW
+    # (2026-10-02), identical re-import DUPLICATE_NOOP every run, settlement 9 NEW (settle run 37731709440),
+    # validator accepted every run, containment, reconciliation UNACCOUNTED 0, and the first real batches read and
+    # merged by hand: wagers #33 (86435d8), settlements #37 (c5c0dab). NBA and TENNIS stay in observation: no real
+    # wager has reached either yet.
+    auto_merge=True,
+)
 PROFILES[Sport.TENNIS] = _shared_ledger_profile(Sport.TENNIS, "chmoses98/Tennis-Edge-Finder", (
     "identity minted by the destination: tenw-/tens- + sha256(source_bet_key)[:24]",
     "tennis settlements can be SCALAR on the exchange (walkovers); a scalar result arrives with result absent and "

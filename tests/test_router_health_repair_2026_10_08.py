@@ -179,13 +179,18 @@ def _line(prefix, payload):
     return f"job\tstep\t2026-10-08T02:00:00.000Z {prefix}{json.dumps(payload)}"
 
 
+#: Destinations still in their OBSERVATION period (auto_merge off) stand in for the 2026-10-08 NHL/SOCCER shape:
+#: NHL and SOCCER themselves graduated the same day, once their first real batches had been read and merged.
+OBS_A, OBS_B = "NBA", "TENNIS"
+
+
 def _deliver_log(health="delivered", blocked=0):
     status = {"health": health, "import_batch_id": "kalshi-router-v1",
-              "payload_rows": {"CFB": 119, "MLB": 113, "NFL": 91, "NHL": 19, "SOCCER": 9},
+              "payload_rows": {"CFB": 119, "MLB": 113, "NFL": 91, OBS_A: 19, OBS_B: 9},
               "production": {"eligible": 351, "blocked_orders": blocked, "deferred_orders": 0}}
     lines = [f"job\tstep\t2026-10-08T02:00:00.000Z HEALTH={health}", _line("ROUTER_STATUS_JSON=", status)]
-    for sport, rows, on_ledger in (("CFB", 119, 119), ("MLB", 113, 113), ("NFL", 91, 91), ("NHL", 19, 0),
-                                   ("SOCCER", 9, 0)):
+    for sport, rows, on_ledger in (("CFB", 119, 119), ("MLB", 113, 113), ("NFL", 91, 91), (OBS_A, 19, 0),
+                                   (OBS_B, 9, 0)):
         lines.append(_line("ROUTER_DELIVERY_JSON=", {"sport": sport, "verdict": "PASS", "dry_run": False, "note": ""}))
         lines.append(_line("ROUTER_RECONCILE_JSON=", {
             "sport": sport, "kind": "wagers", "payload_rows": rows, "on_ledger": on_ledger,
@@ -196,16 +201,16 @@ def _deliver_log(health="delivered", blocked=0):
 
 def _settle_log(nhl_error=False):
     lines = ["job\tstep\t2026-10-08T01:45:00.000Z settlement payloads written (rows per destination; rows are NOT printed):"]
-    for sport, rows in (("CFB", 117), ("NFL", 91), ("NHL", 19), ("SOCCER", 9)):
+    for sport, rows in (("CFB", 117), ("NFL", 91), (OBS_A, 19), (OBS_B, 9)):
         lines.append(f"job\tstep\t2026-10-08T01:45:00.000Z   {sport}: {rows}")
     lines.append("job\tstep\t2026-10-08T01:45:00.000Z ")
-    for sport, rows, waiting in (("CFB", 117, 0), ("NFL", 91, 0), ("NHL", 19, 19), ("SOCCER", 9, 9)):
+    for sport, rows, waiting in (("CFB", 117, 0), ("NFL", 91, 0), (OBS_A, 19, 19), (OBS_B, 9, 9)):
         lines.append(_line("ROUTER_RECONCILE_JSON=", {
             "sport": sport, "kind": "settlements", "payload_rows": rows, "on_ledger": rows - waiting,
             "proposed_not_merged": 0, "waiting_for_parent_wager": waiting, "refused": 0,
             "refused_awaiting_parent": 0, "unaccounted": 0}))
     if nhl_error:
-        lines.append("job\tstep\t2026-10-08T01:48:00.000Z ##[error]NHL: the destination importer refused at least one settlement.")
+        lines.append(f"job\tstep\t2026-10-08T01:48:00.000Z ##[error]{OBS_A}: the destination importer refused at least one settlement.")
     return "\n".join(lines)
 
 
@@ -229,7 +234,7 @@ def test_9_waiting_parent_settlements_and_awaiting_merge_wagers_leave_the_router
     health, recent = _build(_deliver_log(), _settle_log())
     assert health["overall_status"] == "HEALTHY"
     assert health["errors"] == []
-    for sport, n in (("NHL", 19), ("SOCCER", 9)):
+    for sport, n in ((OBS_A, 19), (OBS_B, 9)):
         route = health["by_sport"][sport]
         assert route["status"] == "AWAITING_MANUAL_MERGE"
         assert route["delivered"] == n and route["proposed_not_merged"] == n and route["on_ledger"] == 0
@@ -241,8 +246,8 @@ def test_9_waiting_parent_settlements_and_awaiting_merge_wagers_leave_the_router
     assert health["by_sport"]["CFB"]["settlement"]["status"] == "SETTLED"
     assert health["delivered"] == 351 and health["blocked"] == 0
     items = {(i["sport"], i["status"]) for i in recent["items"]}
-    assert ("NHL", "WAITING_FOR_PARENT_WAGER") in items and ("NHL", "AWAITING_MANUAL_MERGE") in items
-    nhl_settle = next(i for i in recent["items"] if i["sport"] == "NHL" and i["status"] == "WAITING_FOR_PARENT_WAGER")
+    assert (OBS_A, "WAITING_FOR_PARENT_WAGER") in items and (OBS_A, "AWAITING_MANUAL_MERGE") in items
+    nhl_settle = next(i for i in recent["items"] if i["sport"] == OBS_A and i["status"] == "WAITING_FOR_PARENT_WAGER")
     assert nhl_settle["retry_status"] == "WILL_RETRY"
 
 
@@ -256,8 +261,18 @@ def test_10_a_genuinely_blocked_wager_keeps_the_router_degraded_even_when_settle
 def test_10_a_genuine_settlement_failure_still_degrades():
     health, _ = _build(_deliver_log(), _settle_log(nhl_error=True), settle_run=dict(SRUN, conclusion="failure"))
     assert health["overall_status"] == "DEGRADED"
-    assert health["by_sport"]["NHL"]["settlement"]["status"] == "FAILED"
-    assert any(e.startswith("settle NHL:") for e in health["errors"])
+    assert health["by_sport"][OBS_A]["settlement"]["status"] == "FAILED"
+    assert any(e.startswith(f"settle {OBS_A}:") for e in health["errors"])
+
+
+def test_a_graduated_destination_with_an_in_flight_proposal_is_delivered_not_awaiting_a_person():
+    """NHL graduated 2026-10-08 (auto_merge on): a proposal not yet merged is the gate waiting on its own,
+    which is DELIVERED -- never 'awaiting a person's merge'."""
+    log = _deliver_log().replace(f'"sport": "{OBS_A}"', '"sport": "NHL"').replace(f'"{OBS_A}": 19', '"NHL": 19')
+    health, _ = _build(log, _settle_log())
+    assert health["by_sport"]["NHL"]["status"] == "DELIVERED"
+    assert health["by_sport"]["NHL"]["proposed_not_merged"] == 19
+    assert not any(w.startswith("NHL: 19 wager(s) delivered to the open proposal") for w in health["warnings"])
 
 
 def test_a_health_document_published_before_1_3_0_still_validates():

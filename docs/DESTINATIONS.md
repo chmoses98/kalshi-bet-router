@@ -318,7 +318,7 @@ checkout exists).
 | ledger files | `data/accounting/wagers.jsonl`, `settlements.jsonl` | same | same |
 | identity | `nbaw-`/`nbas-` + sha256(key)[:24] | `socw-`/`socs-` | `tenw-`/`tens-` |
 | economics | v2 from the first row | v2 | v2 |
-| auto_merge | **False** (observation) | **False** | **False** |
+| auto_merge | **False** (observation) | **True** (graduated 2026-10-08) | **False** |
 
 **Classification.**
 * NBA is a CLOSED-vocabulary league like the NHL: "Pro Basketball (M)", "NBA", "National Basketball
@@ -414,3 +414,23 @@ SOCCER, so `auto_merge` stays False -- no gate lowered, nothing flipped to clear
 `AWAITING_MANUAL_MERGE` and `WAITING_FOR_PARENT_WAGER` the hold no longer reads as a failure. Merging NHL #8 and
 SOCCER #33 by hand is the next observation step; the next settlement run then imports their settlements and
 proposes them, and once both have been read the flag is the one-line change this file has always described.
+
+### NHL and SOCCER graduate: READY_FOR_AUTO_MERGE (2026-10-08, later the same day)
+
+The one criterion the table above found unmet -- a real batch read and merged by a person, and a settlement landed
+-- was then met, on the owner's instruction, with every pre-merge fact re-verified independently of the router's own
+gate (head unchanged, router-authored single commit on the current ledger head, append-only, the destination's own
+validator incl. `--against` the base, every row carrying the router identity, no duplicate key, no manual edit):
+
+| | NHL | SOCCER |
+|---|---|---|
+| wager batch merged by hand | #8 → `c237b89` (19) | #33 → `86435d8` (9) |
+| settlement run after the merge | 37731709440: 19 NEW, 0 waiting, 0 refused, 0 unaccounted | same run: 9 NEW, 0/0/0 |
+| settlement batch merged by hand | #26 → `d2e0842` (19, every one paired with its wager by key, ticker and side) | #37 → `c5c0dab` (9) |
+| orphan refusal observed in production | 19 (settle run 37713992507, before the wagers merged) | 9 (same run) |
+
+So every item NHL's profile listed (classifier on real markets, import, identical re-import DUPLICATE_NOOP,
+settlement, orphan refusal, validator, containment, reconciliation, a production dry run) and the CFB precedent's
+"real batches read by a person" are satisfied. `auto_merge=True` for NHL and SOCCER is the one-field change this file
+promised; the twelve gate conditions, the receipt vocabulary, the validator, the mergeable paths and "a REFUSAL needs
+a person" are unchanged. NBA and TENNIS stay in observation: no real wager has reached either.
