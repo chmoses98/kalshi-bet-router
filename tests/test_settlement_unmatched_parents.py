@@ -335,10 +335,13 @@ def settle_step() -> str:
     raise AssertionError("the settlement delivery step is gone from settle-wagers.yml")
 
 
-@pytest.fixture
-def world(tmp_path):
+def _build_world(tmp_path, wager_pull):
     """cfb-edge-finder in the 2026-09-26 shape: 41 wagers on `accounting-data`,
-    2 more on the open, unmerged wager proposal, and 43 settled markets."""
+    2 more on the router's unmerged wager proposal branch, and 43 settled markets.
+
+    ``wager_pull``: the GitHub pull request for that wager branch, or None for no open pull request. Since
+    2026-10-08 that decides the 2 rows' fate (scripts/settlement_parents.py): with a valid open proposal they
+    are WAITING_FOR_PARENT_WAGER and withheld; without one they go to the importer and are refused, red."""
     if shutil.which("git") is None:  # pragma: no cover
         pytest.skip("git is required to exercise the real settlement step")
 
@@ -403,7 +406,8 @@ def world(tmp_path):
     summary.write_text("")
 
     stub = GitHubStub(remote, DESTINATION, branch=SETTLEMENT_BRANCH, base_branch=LEDGER_BRANCH,
-                      check_runs=())
+                      check_runs=(),
+                      other_pulls=({WAGER_PROPOSAL: wager_pull} if wager_pull is not None else None))
     api_root = stub.start()
     env = dict(os.environ)
     env.update(
@@ -418,9 +422,28 @@ def world(tmp_path):
         HOME=str(home),
         PATH=f"{bin_dir}:{os.environ['PATH']}",
     )
+    return stub, {"tmp": tmp_path, "env": env, "remote": remote, "summary": summary, "stub": stub,
+                  "seed": seed, "receipts": runner_temp / "settle-receipts-CFB.json"}
+
+
+@pytest.fixture
+def world(tmp_path):
+    """The wager proposal branch exists but NO pull request is open for it (closed, or never opened): the 2
+    rows have no VALID parent proposal, so they go to the importer and are refused -- the fail-closed path,
+    exactly the behaviour before WAITING_FOR_PARENT_WAGER existed."""
+    stub, w = _build_world(tmp_path, wager_pull=None)
     try:
-        yield {"tmp": tmp_path, "env": env, "remote": remote, "summary": summary,
-               "seed": seed, "receipts": runner_temp / "settle-receipts-CFB.json"}
+        yield w
+    finally:
+        stub.stop()
+
+
+@pytest.fixture
+def waiting_world(tmp_path):
+    """The real 2026-09-26 shape: the wager proposal is an OPEN pull request (#56) into the ledger branch."""
+    stub, w = _build_world(tmp_path, wager_pull={"number": 56, "base": LEDGER_BRANCH})
+    try:
+        yield w
     finally:
         stub.stop()
 
@@ -482,8 +505,10 @@ def test_G_valid_settlements_are_written_and_proposed_while_their_siblings_wager
 
     # Every one of the 43 is accounted for; the 2 are REFUSED and named as
     # awaiting their wager -- never proposed, never on the ledger, never lost.
-    assert (f"on ledger 0, proposed not merged {ON_LEDGER}, refused {ON_PROPOSAL} "
+    assert (f"on ledger 0, proposed not merged {ON_LEDGER}, WAITING_FOR_PARENT_WAGER 0, refused {ON_PROPOSAL} "
             f"{{'REFUSED': {ON_PROPOSAL}}} ({ON_PROPOSAL} of them await their wager") in result.stdout
+    # ... because no pull request is open for the wager branch, the parent check found no VALID proposal.
+    assert "{'no_open_pull_request': 2}" in result.stdout
     assert "UNACCOUNTED 0" in result.stdout
     assert "settlement reconciliation by identity found" not in result.stdout
 
@@ -516,7 +541,8 @@ def test_once_the_wager_proposal_merges_the_deferred_settlements_land_with_no_on
     assert sorted(proposed) == sorted(key(i) for i in range(1, ON_LEDGER + ON_PROPOSAL + 1))
     # Reconciliation runs after the gate: with the hold closed the 43 are
     # already canonical by the time it counts them.
-    assert f"on ledger {ON_LEDGER + ON_PROPOSAL}, proposed not merged 0, refused 0" in result.stdout
+    assert (f"on ledger {ON_LEDGER + ON_PROPOSAL}, proposed not merged 0, WAITING_FOR_PARENT_WAGER 0, refused 0"
+            in result.stdout)
     assert "UNACCOUNTED 0" in result.stdout
     # The observation period closed 2026-09-28: the gate passed on a clean,
     # idempotent, validator-accepted batch and the router merged it. All 43
@@ -569,3 +595,91 @@ def test_H_nfl_never_reaches_the_season_script():
     gate = step.index('if [ "${needs_season}" = "true" ]; then')
     call = step.index("scripts/settlement_season.py")
     assert gate < call < step.index("fi", call)
+
+
+# ------------------------------------------------- WAITING_FOR_PARENT_WAGER, through the committed bash (2026-10-08)
+#
+# The production state that motivated it: NHL 19 and SOCCER 9 settlements, every wager imported cleanly onto an
+# open router proposal that passes every gate condition and is held only because those destinations are in their
+# observation period. The importer refused every settlement as an orphan and the run went red every four hours.
+# The same sequencing case is driven here on the CFB shape, with the wager proposal's pull request OPEN.
+
+def _waiting_keys():
+    return {key(i) for i in range(ON_LEDGER + 1, ON_LEDGER + ON_PROPOSAL + 1)}
+
+
+def merge_wager_proposal_onto_the_current_ledger(w):
+    """A person merges the wager proposal AFTER settlements have landed: the ledger keeps them and gains the 2."""
+    seed = w["seed"]
+    _git("fetch", "--quiet", str(w["remote"]), LEDGER_BRANCH, cwd=seed)
+    _git("checkout", "--quiet", "-B", "merge-proposal", "FETCH_HEAD", cwd=seed)
+    (seed / "wagers" / f"{SEASON}.jsonl").write_text(
+        jsonl(wager_row(i) for i in range(1, ON_LEDGER + ON_PROPOSAL + 1)))
+    _git("commit", "--quiet", "-am", "merge the wager proposal", cwd=seed)
+    _git("push", "--quiet", str(w["remote"]), f"merge-proposal:{LEDGER_BRANCH}", cwd=seed)
+
+
+def test_W1_a_settlement_whose_wager_is_on_the_open_proposal_waits_and_is_not_a_failure(waiting_world):
+    w = waiting_world
+    result = run_settle(w)
+    out = result.stdout + result.stderr
+    assert result.returncode == 0, out
+
+    # The parent check ran first and withheld exactly the 2.
+    assert (f"settlement parents (CFB, {ON_LEDGER + ON_PROPOSAL} settled row(s)): canonical {ON_LEDGER}, "
+            f"WAITING_FOR_PARENT_WAGER {ON_PROPOSAL} (wagers on open proposal #56") in result.stdout
+    # The importer never saw them: it wrote the 41 and refused nothing.
+    receipts = json.loads(w["receipts"].read_text())
+    assert receipts["written"] == ON_LEDGER and receipts["refused"] == 0
+    assert "refused at least one settlement" not in out and "DELIVERED PARTIALLY" not in out
+    # NOT recorded as settled anywhere.
+    for ref in (SETTLEMENT_BRANCH, LEDGER_BRANCH):
+        assert not _waiting_keys() & set(remote_keys(w, ref, SETTLEMENTS_FILE))
+    # NOT silently dropped: reconciliation accounts for them as WAITING, and nothing is unaccounted.
+    assert f"WAITING_FOR_PARENT_WAGER {ON_PROPOSAL}, refused 0" in result.stdout
+    assert "UNACCOUNTED 0" in result.stdout
+    line = next(l for l in result.stdout.splitlines() if l.startswith("ROUTER_RECONCILE_JSON="))
+    assert json.loads(line.split("=", 1)[1])["waiting_for_parent_wager"] == ON_PROPOSAL
+
+
+def test_W2_waiting_rows_are_re_offered_and_import_exactly_once_after_the_parent_merges(waiting_world):
+    w = waiting_world
+    assert run_settle(w).returncode == 0
+    # Re-offered: the next run, parents still unmerged, withholds the same 2 and changes nothing.
+    again = run_settle(w)
+    assert again.returncode == 0, again.stdout + again.stderr
+    assert f"WAITING_FOR_PARENT_WAGER {ON_PROPOSAL} (wagers on open proposal" in again.stdout
+
+    merge_wager_proposal_onto_the_current_ledger(w)
+    w["stub"].merged_sha = None  # the next settlement batch opens a fresh pull request
+    landed = run_settle(w)
+    assert landed.returncode == 0, landed.stdout + landed.stderr
+    assert f"canonical {ON_LEDGER + ON_PROPOSAL}, WAITING_FOR_PARENT_WAGER 0" in landed.stdout
+    assert "MERGED #" in landed.stdout
+    on_ledger = remote_keys(w, LEDGER_BRANCH, SETTLEMENTS_FILE)
+    assert sorted(on_ledger) == sorted(key(i) for i in range(1, ON_LEDGER + ON_PROPOSAL + 1))
+    assert len(on_ledger) == len(set(on_ledger)), "a settlement row was written twice"
+
+    # And once more: every row is a duplicate no-op; nothing new is written.
+    w["stub"].merged_sha = None
+    quiet = run_settle(w)
+    assert quiet.returncode == 0, quiet.stdout + quiet.stderr
+    assert "every settlement was already recorded (no-op)" in quiet.stdout
+    assert sorted(remote_keys(w, LEDGER_BRANCH, SETTLEMENTS_FILE)) == sorted(on_ledger)
+
+
+def test_W3_a_draft_wager_proposal_is_not_a_valid_parent_and_fails_closed(waiting_world):
+    w = waiting_world
+    w["stub"].other_pulls[WAGER_PROPOSAL]["draft"] = True
+    result = run_settle(w)
+    assert result.returncode == 1
+    assert "{'pull_request_is_draft': 2}" in result.stdout
+    assert json.loads(w["receipts"].read_text())["refused"] == ON_PROPOSAL
+    assert "WAITING_FOR_PARENT_WAGER 0, refused 2" in result.stdout
+
+
+def test_W4_the_waiting_run_log_carries_no_key_ticker_or_payout(waiting_world):
+    result = run_settle(waiting_world)
+    combined = result.stdout + result.stderr + waiting_world["summary"].read_text()
+    for secret in ("kalshi:v1", "KXNCAAF", "9.83", "20.0"):
+        assert secret not in combined, f"the settlement log leaked {secret!r}"

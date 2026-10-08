@@ -33,7 +33,7 @@ import json
 import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 
 class GitHubStub:
@@ -41,7 +41,7 @@ class GitHubStub:
                  base_branch="main",
                  check_runs=(("test", "completed", "success"),),
                  mergeable=True, mergeable_state="clean", draft=False,
-                 allow_merge=True, pull_number=218):
+                 allow_merge=True, pull_number=218, other_pulls=None):
         self.remote_path = str(remote_path)
         self.destination = destination
         self.branch = branch
@@ -56,6 +56,11 @@ class GitHubStub:
         self.draft = draft
         self.allow_merge = allow_merge
         self.pull_number = pull_number
+        #: OTHER open pull requests on the same repository, answered from the same bare repo:
+        #: ``{branch: {"number": n, "base": base_branch, "draft": bool, "state": "open"}}``. A destination
+        #: carries the router's wager proposal AND its settlement proposal at once, and the settlement step
+        #: asks GitHub about the wager proposal (scripts/settlement_parents.py).
+        self.other_pulls = dict(other_pulls or {})
         self.merged_sha = None
         self.merge_requests = []
         self._server = None
@@ -128,6 +133,20 @@ class GitHubStub:
             "mergeable_state": self.mergeable_state,
         }
 
+    def _other_pull_payload(self, branch):
+        spec = self.other_pulls.get(branch)
+        sha = self._ref(f"refs/heads/{branch}") if spec else None
+        if sha is None:
+            return None
+        return {
+            "number": spec.get("number", 1), "state": spec.get("state", "open"),
+            "draft": spec.get("draft", False), "merged": False,
+            "head": {"ref": branch, "sha": spec.get("sha", sha),
+                     "repo": {"full_name": spec.get("repo", self.destination)}},
+            "base": {"ref": spec.get("base", self.base_branch)},
+            "mergeable": True, "mergeable_state": "clean",
+        }
+
     # ── routing ──────────────────────────────────────────────────────
     def handle_get(self, url):
         parts = [p for p in url.path.split("/") if p]
@@ -137,12 +156,20 @@ class GitHubStub:
         tail = parts[3:]
 
         if tail[:1] == ["pulls"] and len(tail) == 1:
-            pull = self._pull_payload()
+            head = (parse_qs(url.query).get("head") or [""])[0].split(":", 1)[-1]
+            if head and head in self.other_pulls:
+                pull = self._other_pull_payload(head)
+            else:
+                pull = self._pull_payload()
             # The script filters by open state; a merged pull request must
             # stop being listed, exactly as GitHub stops listing it.
             return 200, ([pull] if pull and pull["state"] == "open" else [])
 
         if tail[:1] == ["pulls"] and len(tail) == 2:
+            for branch, spec in self.other_pulls.items():
+                if str(spec.get("number")) == tail[1]:
+                    pull = self._other_pull_payload(branch)
+                    return (200, pull) if pull else (404, {"message": "not found"})
             pull = self._pull_payload()
             return (200, pull) if pull else (404, {"message": "not found"})
 

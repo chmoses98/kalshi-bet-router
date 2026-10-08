@@ -118,7 +118,9 @@
               "DRY_RUN",
               "NO_OP",
               "SETTLED",
-              "PARTIAL"
+              "PARTIAL",
+              "WAITING_FOR_PARENT_WAGER",
+              "AWAITING_MANUAL_MERGE"
             ],
             "type": "string"
           },

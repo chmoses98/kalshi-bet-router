@@ -266,7 +266,8 @@ def test_nhl_reconciliation_reads_the_exact_ledger_paths(tmp_path):
     assert rd.ledger_keys(str(work), "HEAD", prof, "settlements") == {"k-on-ledger"}
     receipts = normalise({"rows": [{"source_bet_key": "k-new", "wager_id": "nhlw-1", "duplicate_status": "NEW", "success": True}]})
     out = rd.classify(["k-on-ledger", "k-new", "k-lost"], {"k-on-ledger"}, receipts)
-    assert out["counts"] == {"ON_LEDGER": 1, "PROPOSED_NOT_MERGED": 1, "REFUSED": 0, "UNACCOUNTED": 1}
+    assert out["counts"] == {"ON_LEDGER": 1, "PROPOSED_NOT_MERGED": 1, "WAITING_FOR_PARENT_WAGER": 0,
+                             "REFUSED": 0, "UNACCOUNTED": 1}
 
 
 # ------------------------------------------------------------------ end to end with the destination's own code

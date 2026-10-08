@@ -15,7 +15,15 @@ reads this repository's own PUBLIC workflow run logs (`actions: read`) — the `
 tested in `tests/test_router_health_publisher.py`). By construction it publishes nothing that is not already
 public; it also scrubs anything ticker-, key- or amount-shaped as a second line of defence.
 
-`overall_status`: UNAVAILABLE (no run), STALE (last poll older than 4 h), DEGRADED (run failed, a destination
-failed, or the router is BLOCKED), HEALTHY. `router_health_state` is the router's own vocabulary
-(`healthy_no_op`, `delivered`, `not_routable`, `deferred`, `blocked`). The sport table says, per sport, whether
+`overall_status`: UNAVAILABLE (no run), STALE (last poll older than 4 h), DEGRADED (a delivery or settlement run
+failed, a destination failed or refused a settlement, or the router is BLOCKED), HEALTHY.
+
+Since contract 1.3.0 the two PENDING states are told apart from failure and never degrade the router on their own:
+a sport `AWAITING_MANUAL_MERGE` (wagers delivered to an open proposal of an observation-period destination) and a
+sport whose `settlement.status` is `WAITING_FOR_PARENT_WAGER` (settled rows withheld because their wager is on
+that proposal). Both are counted (`awaiting_manual_merge`, `waiting_for_parent_wager`) and named in `warnings`.
+The publisher reads them from the `ROUTER_RECONCILE_JSON=` line `scripts/reconcile_delivery.py` prints per
+destination and kind, and from `ROUTER_SETTLEMENT_PARENTS_JSON=` (`scripts/settlement_parents.py`).
+
+`router_health_state` is the router's own vocabulary (`healthy_no_op`, `delivered`, `not_routable`, `deferred`, `blocked`). The sport table says, per sport, whether
 it is classified and profiled, where it goes, whether it auto-merges, and what the last run did.

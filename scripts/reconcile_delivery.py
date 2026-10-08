@@ -11,6 +11,10 @@ the new ones. So after the delivery step, each source key in it must be in exact
                          the proposal has not merged yet (the gate is waiting, or the destination is held for
                          observation) -- a legitimate, visible pending state
     REFUSED              the destination's importer refused it (REFUSED / CONFLICT), with its reason on the receipt
+    WAITING_FOR_PARENT_WAGER
+                         settlements only: withheld from the importer this run because its wager is on the router's
+                         valid, open wager proposal and not yet canonical (kalshi_router.settlement_parents). Not
+                         settled, not refused, re-offered every run.
     UNACCOUNTED          none of the above: a wager the router built that is on no ledger, on no proposal and
                          was refused by nobody. The one state that must never exist.
 
@@ -44,6 +48,9 @@ from kalshi_router.destinations import UnknownDestinationError, profile_for  # n
 from kalshi_router.receipts import normalise  # noqa: E402
 
 ON_LEDGER, PROPOSED, REFUSED, UNACCOUNTED = "ON_LEDGER", "PROPOSED_NOT_MERGED", "REFUSED", "UNACCOUNTED"
+#: Settlements only: withheld from the importer because the parent wager is on a VALID open router proposal and
+#: not yet canonical (kalshi_router.settlement_parents). Accounted for, never written, re-offered every run.
+WAITING = "WAITING_FOR_PARENT_WAGER"
 ACCEPTED = frozenset({"NEW", "DUPLICATE_NOOP", "CORRECTED"})
 KEY_FIELDS = ("source_bet_key", "sourceBetKey")
 
@@ -67,8 +74,8 @@ def payload_keys(payload: dict, kind: str = "wagers") -> list:
     return keys
 
 
-def _keys_from_text(text: str) -> set:
-    out = set()
+def _rows_from_text(text: str) -> list:
+    out = []
     for line in text.splitlines():
         line = line.strip()
         if not line:
@@ -78,14 +85,22 @@ def _keys_from_text(text: str) -> set:
         except ValueError:
             continue
         if isinstance(row, dict):
-            for f in KEY_FIELDS:
-                if row.get(f):
-                    out.add(row[f])
+            out.append(row)
     return out
+
+
+def _key_of(row: dict):
+    return next((row[f] for f in KEY_FIELDS if row.get(f)), None)
 
 
 def ledger_keys(work: str, ref: str, profile, kind: str = "wagers") -> set:
     """Every source key on `ref` of the destination's canonical wager (or settlement) ledger."""
+    return {key for key in (_key_of(row) for row in ledger_records(work, ref, profile, kind)) if key}
+
+
+def ledger_records(work: str, ref: str, profile, kind: str = "wagers") -> list:
+    """Every parsed record on `ref` of the destination's wager (or settlement) ledger. Held in memory only:
+    the rows are the sensitive thing, and nothing that calls this prints one."""
     settlements = kind == "settlements"
     if profile.record_layout == "json_per_file":
         matching = [p for p in profile.committable_prefixes if ("settlement" in p) == settlements]
@@ -97,11 +112,11 @@ def ledger_keys(work: str, ref: str, profile, kind: str = "wagers") -> set:
             raise RuntimeError("could not list the ledger")
         paths = [p for p in listing.stdout.splitlines() if p.endswith(".json")]
         if not paths:
-            return set()
+            return []
         batch = subprocess.run(["git", "-C", work, "cat-file", "--batch"],
                                input="".join(f"{ref}:{p}\n" for p in paths).encode(),
                                capture_output=True, check=False)
-        keys, data, i = set(), batch.stdout, 0
+        rows, data, i = [], batch.stdout, 0
         # --batch output: b"<sha> blob <size>\n<content>\n" per object; sizes are BYTES.
         while i < len(data):
             nl = data.index(b"\n", i)
@@ -116,24 +131,26 @@ def ledger_keys(work: str, ref: str, profile, kind: str = "wagers") -> set:
                 doc = json.loads(body.decode("utf-8"))
             except (ValueError, UnicodeDecodeError):
                 continue
-            for f in KEY_FIELDS:
-                if isinstance(doc, dict) and doc.get(f):
-                    keys.add(doc[f])
-        return keys
-    keys = set()
+            if isinstance(doc, dict):
+                rows.append(doc)
+        return rows
+    rows = []
     for path in sorted(p for p in profile.mergeable_paths if ("settlement" in p) == settlements):
         shown = _git(work, "show", f"{ref}:{path}")
         if shown.returncode == 0:
-            keys |= _keys_from_text(shown.stdout)
-    return keys
+            rows.extend(_rows_from_text(shown.stdout))
+    return rows
 
 
-def classify(keys: list, on_ledger: set, receipts, parents_on_ledger: set | None = None) -> dict:
+def classify(keys: list, on_ledger: set, receipts, parents_on_ledger: set | None = None,
+             waiting: set | None = None) -> dict:
     """`parents_on_ledger`, for settlements only: every source key on the canonical WAGER ledger. When given, a
     REFUSED settlement whose wager is not among them is also counted as awaiting its wager. It never moves a row
-    out of REFUSED."""
+    out of REFUSED. `waiting`, for settlements only: the keys withheld as WAITING_FOR_PARENT_WAGER this run. A
+    receipt for such a key (there should be none) or the key already on the ledger outranks it."""
     by_key = {r.source_key: r for r in receipts if r.source_key}
-    counts = {ON_LEDGER: 0, PROPOSED: 0, REFUSED: 0, UNACCOUNTED: 0}
+    waiting = waiting or set()
+    counts = {ON_LEDGER: 0, PROPOSED: 0, WAITING: 0, REFUSED: 0, UNACCOUNTED: 0}
     reasons: dict = {}
     awaiting_parent = 0
     for key in keys:
@@ -151,6 +168,8 @@ def classify(keys: list, on_ledger: set, receipts, parents_on_ledger: set | None
             continue
         if r is not None and r.verdict in ACCEPTED and r.success:
             counts[PROPOSED] += 1
+        elif r is None and key in waiting:
+            counts[WAITING] += 1
         elif r is not None and not (r.verdict in ACCEPTED and r.success):
             counts[REFUSED] += 1
             reasons[str(r.verdict)] = reasons.get(str(r.verdict), 0) + 1
@@ -170,6 +189,8 @@ def main(argv=None) -> int:
     ap.add_argument("--receipts", required=True)
     ap.add_argument("--kind", default="wagers", choices=["wagers", "settlements"])
     ap.add_argument("--ref", default=None, help="ledger ref to read (default: a fresh fetch of the ledger branch)")
+    ap.add_argument("--waiting", default=None,
+                    help="settlements only: the keys scripts/settlement_parents.py withheld as WAITING_FOR_PARENT_WAGER")
     a = ap.parse_args(argv)
     try:
         profile = profile_for(a.sport)
@@ -201,15 +222,32 @@ def main(argv=None) -> int:
             parents = ledger_keys(a.work, ref, profile, "wagers")
         except RuntimeError:
             parents = None
-    result = classify(payload_keys(payload, a.kind), on_ledger, receipts, parents)
+    waiting = set()
+    if a.waiting and os.path.exists(a.waiting):
+        try:
+            waiting = {k for k in (json.load(open(a.waiting, encoding="utf-8")).get("waiting_for_parent_wager")
+                                   or []) if k}
+        except (OSError, ValueError, AttributeError):
+            print("  reconciliation could not read the waiting-for-parent list", file=sys.stderr)
+            return 2
+    result = classify(payload_keys(payload, a.kind), on_ledger, receipts, parents, waiting)
     c = result["counts"]
     awaiting = ""
     if result.get("refused_awaiting_parent"):
         awaiting = (f" ({result['refused_awaiting_parent']} of them await their wager on the canonical ledger -- "
                     "delivered-but-unmerged or undelivered; re-offered next run)")
+    waiting_text = f", WAITING_FOR_PARENT_WAGER {c[WAITING]}" if a.kind == "settlements" else ""
     print(f"  reconciliation by identity ({a.sport} {a.kind}, {result['payload_rows']} eligible row(s)): "
-          f"on ledger {c[ON_LEDGER]}, proposed not merged {c[PROPOSED]}, refused {c[REFUSED]} "
+          f"on ledger {c[ON_LEDGER]}, proposed not merged {c[PROPOSED]}{waiting_text}, refused {c[REFUSED]} "
           f"{result['refused_by_verdict'] or ''}{awaiting}, UNACCOUNTED {c[UNACCOUNTED]}")
+    # The same counts as ONE JSON line for the app-facing health publisher (scripts/publish_router_health.py),
+    # which reads this public log back. A sport, a kind and integers: nothing that is not printed above.
+    print("ROUTER_RECONCILE_JSON=" + json.dumps({
+        "sport": a.sport, "kind": a.kind, "payload_rows": result["payload_rows"],
+        "on_ledger": c[ON_LEDGER], "proposed_not_merged": c[PROPOSED], "waiting_for_parent_wager": c[WAITING],
+        "refused": c[REFUSED], "refused_awaiting_parent": result.get("refused_awaiting_parent"),
+        "unaccounted": c[UNACCOUNTED],
+    }, sort_keys=True))
     return 1 if c[UNACCOUNTED] else 0
 
 

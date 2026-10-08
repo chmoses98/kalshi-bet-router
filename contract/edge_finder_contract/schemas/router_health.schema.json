@@ -3,6 +3,13 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
+    "awaiting_manual_merge": {
+      "description": "wagers delivered to open proposals of observation-period destinations, awaiting a person's merge",
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
     "bets_discovered": {
       "description": "",
       "type": [
@@ -73,9 +80,98 @@
               "null"
             ]
           },
+          "on_ledger": {
+            "description": "eligible wagers on the destination's canonical ledger",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "proposed_not_merged": {
+            "description": "eligible wagers delivered to the router's open proposal and not yet merged",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "routable": {
             "description": "the router has a classification AND a destination profile for this sport",
             "type": "boolean"
+          },
+          "settlement": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "on_ledger": {
+                    "description": "",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "proposed_not_merged": {
+                    "description": "",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "refused": {
+                    "description": "refused by the destination's importer (fail closed)",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "rows": {
+                    "description": "settled rows in the last settlement run's payload",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "status": {
+                    "enum": [
+                      "SETTLED",
+                      "NO_OP",
+                      "WAITING_FOR_PARENT_WAGER",
+                      "AWAITING_MANUAL_MERGE",
+                      "FAILED",
+                      "UNKNOWN"
+                    ],
+                    "type": "string"
+                  },
+                  "unaccounted": {
+                    "description": "",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "waiting_for_parent_wager": {
+                    "description": "withheld: the parent wager is on the open, unmerged wager proposal",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "on_ledger",
+                  "proposed_not_merged",
+                  "refused",
+                  "rows",
+                  "status",
+                  "unaccounted",
+                  "waiting_for_parent_wager"
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "status": {
             "enum": [
@@ -85,6 +181,7 @@
               "REFUSED",
               "NOT_ROUTABLE",
               "DRY_RUN",
+              "AWAITING_MANUAL_MERGE",
               "UNKNOWN"
             ],
             "type": "string"
@@ -330,6 +427,13 @@
         "type": "object"
       },
       "type": "object"
+    },
+    "waiting_for_parent_wager": {
+      "description": "settlements withheld because their wager is on an open, unmerged proposal",
+      "type": [
+        "integer",
+        "null"
+      ]
     },
     "warnings": {
       "items": {

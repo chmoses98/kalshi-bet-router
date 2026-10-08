@@ -121,6 +121,8 @@ class GameDateSource(str, Enum):
     EVENT_FIELD = "event_field"
     #: Parsed strictly from the event ticker's own date segment.
     EVENT_TICKER = "event_ticker"
+    #: A combo's legs, every one of which established the same date. See :func:`resolve_combo_game_date`.
+    COMBO_LEGS = "combo_legs"
     #: Nothing established it.
     NONE = "none"
 
@@ -177,6 +179,34 @@ def resolve_game_date(context: MarketContext | None) -> tuple[str | None, GameDa
                 # contests, so there is no ambiguity to resolve.
                 return f"20{year}-{month:02d}-{int(day):02d}", GameDateSource.EVENT_TICKER
     return None, GameDateSource.NONE
+
+
+def resolve_combo_game_date(
+    context: MarketContext | None, resolve_leg
+) -> tuple[str | None, GameDateSource]:
+    """The contest date of a multivariate COMBO, from its legs only, or refuse.
+
+    A combo's own event ticker is a collection identifier, not a contest label, so its date segment (if a
+    hash happened to look like one) is never read. Each leg's date is established exactly as a single
+    market's is (:func:`resolve_game_date`), and the combo has a game date only when EVERY leg established
+    one and they are all the SAME date. A parlay spanning two dates has no single contest date; inventing
+    one (the first leg, the last, the close time) would file it under a week or season it may not belong to.
+    """
+    from .refusals import combo_legs, leg_market_ticker
+
+    legs = combo_legs(context.market) if context is not None else []
+    tickers = [leg_market_ticker(leg) for leg in legs]
+    if not tickers or any(t is None for t in tickers):
+        return None, GameDateSource.NONE
+    dates = set()
+    for ticker in tickers:
+        date, _source = resolve_game_date(resolve_leg(ticker))
+        if date is None:
+            return None, GameDateSource.NONE
+        dates.add(date)
+    if len(dates) != 1:
+        return None, GameDateSource.NONE
+    return next(iter(dates)), GameDateSource.COMBO_LEGS
 
 
 def _event_ticker(context: MarketContext) -> str | None:

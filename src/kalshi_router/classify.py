@@ -45,7 +45,7 @@ aggregates.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Iterable
 
@@ -57,6 +57,7 @@ from .competitions import (
     sport_from_competition,
     sport_from_taxonomy_sport,
 )
+from .refusals import combo_legs, is_combo, leg_market_ticker
 from .series_registry import lookup_series_ticker
 from .sports import ROUTABLE_SPORTS, Sport
 
@@ -73,6 +74,11 @@ class EvidenceLevel(str, Enum):
     L3_MILESTONE = "L3_milestone"
     L4_SERIES_METADATA = "L4_series_metadata"
     L5_SERIES_REGISTRY = "L5_series_registry"
+    #: A multivariate COMBO whose own event names no competition, decided by its LEGS: every leg classified,
+    #: through this same hierarchy on the leg's own metadata, into one routable sport. Never part of
+    #: ``LEVEL_ORDER``: it is not a rung a single market can stand on, it is how a combo inherits the verdict
+    #: its legs already earned. See :func:`classify_with_legs`.
+    COMBO_LEGS = "combo_legs"
 
 
 LEVEL_ORDER: tuple[EvidenceLevel, ...] = (
@@ -102,6 +108,14 @@ class UnresolvedReason(str, Enum):
     EVIDENCE_CONFLICT = "evidence_conflict"
     AMBIGUOUS_FAMILY = "ambiguous_sport_family_without_league"
     INSUFFICIENT = "insufficient_authoritative_metadata"
+    #: A combo (``mve_selected_legs``) whose legs cannot all be read: the field is missing or a leg names no
+    #: market. Without every leg there is no evidence for the whole wager.
+    COMBO_LEGS_UNAVAILABLE = "combo_legs_unavailable"
+    #: A combo with at least one leg the classifier could not place in a routable sport (UNRESOLVED, OTHER,
+    #: or itself a combo).
+    COMBO_LEG_UNRESOLVED = "combo_leg_unresolved"
+    #: A combo whose legs classify into more than one sport. No single-sport ledger can hold it honestly.
+    COMBO_LEGS_SPAN_SPORTS = "combo_legs_span_sports"
 
 
 #: Fields of the event-metadata document this classifier reads.  Kalshi documents
@@ -719,6 +733,93 @@ def classify_market(
 
     return build(winner.sport, f"{winner.level.value}: {winner.detail}", evidence, series_ticker,
                  resolved_by=winner.level, unverified=used_unverified, conflict=conflict)
+
+
+# ------------------------------------------------------- combos (multivariate)
+#
+# THE 2026-10 BLOCK. 29 post-cutover orders were refused as `competition_absent`, every one of them on a
+# multivariate COMBO (Kalshi's "Exotics" category, `mve_selected_legs`). A combo's own event carries no
+# competition and its series names no sport -- by construction: it is a collection, and the sports live on
+# its legs. The single-market hierarchy above therefore had nothing to stand on, and it correctly refused.
+#
+# The legs are ordinary markets with their own authoritative metadata, and the refusal profiler
+# (`refusals.py`) was already classifying each one through this same hierarchy -- it printed "every leg
+# classified NFL" for 24 of them, run after run, while the router refused them. That is a classification
+# gap, not missing evidence: the evidence was fetched, read, and thrown away.
+#
+# So a combo inherits its legs' verdict, and only when that verdict is unanimous and complete:
+#
+#   * the combo's OWN evidence is consulted first and is never overruled quietly. A terminal combo-level
+#     refusal (malformed metadata, an unknown or ambiguous competition, a conflict) stays terminal. Only
+#     "nothing at this level" -- COMPETITION_ABSENT or INSUFFICIENT -- may be completed by the legs;
+#   * every leg must be stated with a market ticker and classify, on its own metadata, into ONE routable
+#     sport. One unresolved leg, one OTHER leg, a nested combo, or two sports, and the whole combo stays
+#     UNRESOLVED with a reason that says which;
+#   * if the combo's own evidence DID decide a sport and the legs decide a different one, that is an
+#     evidence conflict and the combo is UNRESOLVED.
+#
+# No ticker prefix, no collection name and no title is read to reach the verdict.
+
+#: Combo-level outcomes the legs may complete. Anything else at the combo level is terminal.
+COMBO_COMPLETABLE = frozenset({UnresolvedReason.COMPETITION_ABSENT, UnresolvedReason.INSUFFICIENT})
+
+
+def classify_with_legs(
+    context: MarketContext,
+    resolve_leg,
+    taxonomy: "SportTaxonomy | None" = None,
+    milestone_index: "MilestoneIndex | None" = None,
+) -> Classification:
+    """:func:`classify_market`, plus the combo rule above. ``resolve_leg(ticker) -> MarketContext``.
+
+    A market that is not a combo gets exactly :func:`classify_market`'s answer; nothing about a single
+    market's classification changes here.
+    """
+    base = classify_market(context, taxonomy=taxonomy, milestone_index=milestone_index)
+    if not is_combo(context.market):
+        return base
+    if base.sport is Sport.UNRESOLVED and base.unresolved_reason not in COMBO_COMPLETABLE:
+        return base
+
+    def refuse(reason: UnresolvedReason, detail: str) -> Classification:
+        return replace(base, sport=Sport.UNRESOLVED, reason=f"{reason.value}: {detail}",
+                       resolved_by=None, unresolved_reason=reason)
+
+    legs = combo_legs(context.market)
+    tickers = [leg_market_ticker(leg) for leg in legs]
+    if not legs or any(t is None for t in tickers):
+        if base.sport is not Sport.UNRESOLVED:
+            # The combo's own metadata decided, exactly as it would for a single market; the legs add nothing.
+            return base
+        return refuse(UnresolvedReason.COMBO_LEGS_UNAVAILABLE,
+                      "the combo's legs are not all stated with a market ticker")
+
+    leg_sports: set[Sport] = set()
+    for ticker in tickers:
+        leg_context = resolve_leg(ticker)
+        if is_combo(leg_context.market):
+            return refuse(UnresolvedReason.COMBO_LEG_UNRESOLVED, "a leg is itself a combo")
+        verdict = classify_market(leg_context, taxonomy=taxonomy, milestone_index=milestone_index)
+        if verdict.sport not in ROUTABLE_SPORTS:
+            return refuse(UnresolvedReason.COMBO_LEG_UNRESOLVED,
+                          f"a leg classified {verdict.sport.value}")
+        leg_sports.add(verdict.sport)
+    if len(leg_sports) != 1:
+        return refuse(UnresolvedReason.COMBO_LEGS_SPAN_SPORTS,
+                      "legs classified " + ", ".join(sorted(s.value for s in leg_sports)))
+
+    sport = next(iter(leg_sports))
+    if base.sport is not Sport.UNRESOLVED:
+        if base.sport is sport:
+            return base
+        return refuse(UnresolvedReason.EVIDENCE_CONFLICT,
+                      f"combo evidence={base.sport.value} vs legs={sport.value}")
+    evidence = base.evidence + (
+        Evidence("combo.legs", EvidenceStrength.AUTHORITATIVE, f"{len(tickers)} legs",
+                 sport=sport, level=EvidenceLevel.COMBO_LEGS),
+    )
+    return replace(base, sport=sport, reason=f"{EvidenceLevel.COMBO_LEGS.value}: {len(tickers)} legs, all {sport.value}",
+                   evidence=evidence, resolved_by=EvidenceLevel.COMBO_LEGS, unresolved_reason=None)
 
 
 # ---------------------------------------------- measuring the L2 ambiguity gate

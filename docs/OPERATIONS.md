@@ -430,6 +430,19 @@ Ordered by attention required, not by outcome: a run that delivered one wager
 and cannot record another is `BLOCKED`, because the delivery needs nothing from
 anyone and the refusal does.
 
+### Pending is not failed *(2026-10-08)*
+
+Two states are pending BY DESIGN and must never read as failures (`docs/APP_HEALTH.md`):
+
+| State | Where | Meaning | Action |
+|---|---|---|---|
+| `AWAITING_MANUAL_MERGE` | a sport's wager delivery | delivered to the router's open proposal, every gate condition passed, destination in its observation period (`auto_merge` off) | a person merges the pull request when they have read it |
+| `WAITING_FOR_PARENT_WAGER` | a settled row | its wager is on that valid, open proposal and not yet canonical; withheld from the importer, re-offered every run | none -- it imports the first run after the wager merges |
+
+A settlement whose parent is NOT on a valid open proposal (no branch, no open pull request, a draft, a moved head,
+the parent absent, duplicated or with another ticker/side) still goes to the importer, is refused, and the run is
+red. See `src/kalshi_router/settlement_parents.py`.
+
 **A refusal is not a failure.** `BLOCKED` is a warning annotation, never a red
 job: failing a scheduled job every 15 minutes for something only the owner can
 fix would train them to ignore it. A run that reports *no* health state **is** a
