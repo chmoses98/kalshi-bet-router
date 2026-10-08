@@ -439,6 +439,8 @@ def _run_deliver(args, client, out, err) -> int:
     print(result.production.render(), file=out)
     print("", file=out)
     print(result.refusals.render(), file=out)
+    print("", file=out)
+    print(result.refusals.render_game_dates(), file=out)
     counts = write_payloads(result.production_wagers, args.out_dir)
     print("", file=out)
     print("payloads written (rows per destination; rows are NOT printed):", file=out)

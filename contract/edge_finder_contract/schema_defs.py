@@ -474,6 +474,33 @@ DELIVERY = obj({
 })
 RECENT_DELIVERIES = envelope("recent_deliveries", DELIVERY, sport_required=False)
 
+# contract 1.3.0 (additive): the router's health distinguishes the two PENDING states that are not failures.
+#   * AWAITING_MANUAL_MERGE -- every eligible wager is delivered to the router's open proposal, every gate
+#     passed, and the destination is in its observation period (auto_merge off): a person merges it.
+#   * WAITING_FOR_PARENT_WAGER -- a settled market whose wager is on that open proposal and not yet canonical.
+#     Withheld from the importer, re-offered every run, imported once the wager merges.
+# New enum values and OPTIONAL fields only: every router_health / recent_deliveries document published before
+# 1.3.0 still validates, and a consumer may ignore what it does not know.
+SPORT_ROUTE["properties"]["status"]["enum"].insert(-1, "AWAITING_MANUAL_MERGE")
+SPORT_ROUTE["properties"]["on_ledger"] = nint("eligible wagers on the destination's canonical ledger")
+SPORT_ROUTE["properties"]["proposed_not_merged"] = nint(
+    "eligible wagers delivered to the router's open proposal and not yet merged")
+SPORT_SETTLEMENT = obj({
+    "status": enum(["SETTLED", "NO_OP", "WAITING_FOR_PARENT_WAGER", "AWAITING_MANUAL_MERGE", "FAILED", "UNKNOWN"]),
+    "rows": nint("settled rows in the last settlement run's payload"),
+    "on_ledger": nint(), "proposed_not_merged": nint(),
+    "waiting_for_parent_wager": nint("withheld: the parent wager is on the open, unmerged wager proposal"),
+    "refused": nint("refused by the destination's importer (fail closed)"),
+    "unaccounted": nint(),
+})
+SPORT_ROUTE["properties"]["settlement"] = {"anyOf": [SPORT_SETTLEMENT, {"type": "null"}]}
+ROUTER_HEALTH["properties"]["awaiting_manual_merge"] = nint(
+    "wagers delivered to open proposals of observation-period destinations, awaiting a person's merge")
+ROUTER_HEALTH["properties"]["waiting_for_parent_wager"] = nint(
+    "settlements withheld because their wager is on an open, unmerged proposal")
+for _status in ("WAITING_FOR_PARENT_WAGER", "AWAITING_MANUAL_MERGE"):
+    DELIVERY["properties"]["status"]["enum"].append(_status)
+
 SPORT_LOCATION = obj({
     "repo": s(), "branch": s(), "app_root": s("path of the app directory in that branch"),
     "raw_base_url": s("https://raw.githubusercontent.com/<repo>/<branch>/<app_root>"),

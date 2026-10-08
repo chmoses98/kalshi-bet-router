@@ -152,7 +152,8 @@ jobs:
             [ "${DRY_RUN}" = "true" ] && return 0
             local status=0
             python "${GITHUB_WORKSPACE}/scripts/reconcile_delivery.py" --sport "${sport}" --kind settlements \
-              --work "${work}" --payload "${payload}" --receipts "${receipts}" || status=$?
+              --work "${work}" --payload "${payload}" --receipts "${receipts}" \
+              ${waiting_keys:+--waiting "${waiting_keys}"} || status=$?
             if [ "${status}" -ne 0 ]; then
               echo "::error::${sport}: settlement reconciliation by identity found a settled row that is on no ledger, on no proposal and refused by nobody (exit ${status})."
               failures=$((failures + 1))
@@ -161,6 +162,7 @@ jobs:
           for payload in "${payloads[@]}"; do
             base="$(basename "${payload}" .json)"
             sport="${base%-settlements}"
+            waiting_keys=""
 
             profile_status=0
             repo="$(python "${GITHUB_WORKSPACE}/scripts/destination_profile.py" \
@@ -213,6 +215,43 @@ jobs:
             git -C "${work}" fetch -q --depth 1 origin \
               "+refs/heads/${ledger_branch}:refs/remotes/origin/${ledger_branch}"
 
+            # PARENT WAGERS FIRST (scripts/settlement_parents.py, policy in
+            # src/kalshi_router/settlement_parents.py). A settled row whose wager
+            # is on the router's VALID, OPEN wager proposal -- delivered, every
+            # gate passed, held only because this destination is in its
+            # observation period -- is WAITING_FOR_PARENT_WAGER: withheld from
+            # the importer, never written, never refused, re-offered on the next
+            # run, and imported normally the first run after its wager merges.
+            # Everything else goes to the importer exactly as before, which
+            # refuses any orphan (fail closed). If the check itself cannot run,
+            # the FULL payload goes to the importer: the old behaviour, red.
+            import_payload="${payload}"
+            ready_payload="${RUNNER_TEMP}/settle-ready-${sport}.json"
+            waiting_keys="${RUNNER_TEMP}/settle-waiting-${sport}.json"
+            rm -f "${ready_payload}" "${waiting_keys}"
+            parents_status=0
+            python "${GITHUB_WORKSPACE}/scripts/settlement_parents.py" --sport "${sport}" \
+              --work "${work}" --payload "${payload}" \
+              --ready-out "${ready_payload}" --waiting-out "${waiting_keys}" || parents_status=$?
+            if [ "${parents_status}" -eq 0 ]; then
+              import_payload="${ready_payload}"
+            else
+              echo "::warning::${sport}: parent wagers could not be checked (exit ${parents_status}); every settlement goes to the importer, which refuses any whose wager is not canonical."
+              waiting_keys=""
+            fi
+            receipts="${RUNNER_TEMP}/settle-receipts-${sport}.json"
+            ready_rows="$(python -c 'import json,sys; print(len(json.load(open(sys.argv[1])).get("settlements") or []))' "${import_payload}")"
+            if [ "${ready_rows}" = "0" ]; then
+              # Every settled row waits for its parent wager. Not a failure and
+              # not a refusal: nothing is imported, nothing is pushed, and the
+              # reconciliation below accounts for every row as WAITING.
+              echo "  nothing to import this run: every settled row is WAITING_FOR_PARENT_WAGER (re-offered next run)."
+              echo "${sport}: WAITING_FOR_PARENT_WAGER -- every settled row's wager is on the open, unmerged proposal" >> "${GITHUB_STEP_SUMMARY}"
+              echo '[]' > "${receipts}"
+              reconcile
+              continue
+            fi
+
             code="${work}"
             if [ "${needs_code}" = "true" ]; then
               code="${RUNNER_TEMP}/settle-code-${sport}"
@@ -239,7 +278,7 @@ jobs:
             if [ "${needs_season}" = "true" ]; then
               season_status=0
               season="$(python "${GITHUB_WORKSPACE}/scripts/settlement_season.py" \
-                --payload "${payload}" --ledger-dir "${work}")" || season_status=$?
+                --payload "${import_payload}" --ledger-dir "${work}")" || season_status=$?
               if [ "${season_status}" -ne 0 ] || [ -z "${season}" ]; then
                 echo "::error::${sport}: the season could not be established from the ledger's own wagers; nothing was imported."
                 failures=$((failures + 1))
@@ -248,10 +287,9 @@ jobs:
               echo "  season ledger: ${season}"
             fi
 
-            receipts="${RUNNER_TEMP}/settle-receipts-${sport}.json"
             mapfile -t import_argv < <(
               python "${GITHUB_WORKSPACE}/scripts/destination_profile.py" "${sport}" \
-                --importer settlement --payload "${payload}" --work "${work}" \
+                --importer settlement --payload "${import_payload}" --work "${work}" \
                 --code "${code}" --receipts "${receipts}" \
                 ${season:+--season "${season}"}
             )
@@ -293,7 +331,7 @@ jobs:
             rerun_receipts="${RUNNER_TEMP}/settle-receipts-rerun-${sport}.json"
             mapfile -t rerun_argv < <(
               python "${GITHUB_WORKSPACE}/scripts/destination_profile.py" "${sport}" \
-                --importer settlement --payload "${payload}" --work "${work}" \
+                --importer settlement --payload "${import_payload}" --work "${work}" \
                 --code "${code}" --receipts "${rerun_receipts}" \
                 ${season:+--season "${season}"}
             )

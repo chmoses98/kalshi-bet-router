@@ -344,3 +344,66 @@ pushed, the pull-request step fails for that sport only, and every later run ret
 **Soccer's own importer.** `soccer_edge.router` (PositionV1, year-sharded `archive/positions/`) remains in that
 repository as its translation layer, but delivery goes through the shared ledger so the router has one
 destination shape to reconcile, one validator contract, and one merge-path rule for all three.
+
+## Router health repair (2026-10-08): combos, waiting parents, observation
+
+Production before this change (delivery run 37714804665, settlement run 37713992507): `HEALTH: blocked` with
+30 BLOCKED orders (29 `sport unresolved` / `competition absent`, 1 `game date not established`), and the
+settlement run red because NHL (19) and SOCCER (9) settlements were refused as orphans.
+
+### The 29: multivariate COMBO markets the router could already prove
+
+All 29 were COMBO (parlay) markets -- series category `Exotics`, legs stated in `mve_selected_legs`. A combo's own
+event carries no competition and its series names no sport, by construction, so L1-L5 had nothing to stand on.
+The legs do: the router's refusal profiler (`refusals.py`) classified every leg through the full hierarchy on the
+leg's own metadata and printed, every run, NFL=24, CFB=4, MLB=1 -- and the classifier ignored it. Not a new sport,
+not a registry gap, not missing metadata: a classification gap.
+
+`classify.classify_with_legs` closes it, and nothing wider:
+
+* only a combo whose OWN level found nothing (`competition_absent` / `insufficient`) may be completed by its legs;
+  every terminal combo-level verdict (malformed metadata, unknown or ambiguous competition, conflict) stays;
+* every leg must be stated with a ticker and classify into ONE routable sport -- an unresolved or OTHER leg, a
+  nested combo, or two sports keep it UNRESOLVED (`combo_leg_unresolved`, `combo_legs_span_sports`,
+  `combo_legs_unavailable`); combo evidence that disagrees with the legs is an `evidence_conflict`;
+* its game date comes from the legs only, and only when every leg is dated and all share one date
+  (`wager.resolve_combo_game_date`); the combo's own ticker is never parsed for a date;
+* the destination must be able to RECORD a combo (`DestinationProfile.records_combo_wagers`): True for CFB, NFL,
+  NHL, NBA, SOCCER, TENNIS (importers and validators treat `market_ticker` as an opaque string; settlement is the
+  exchange's own settlement of that market, delivered by this router), False for MLB, which settles its own wagers
+  from the contract it parses out of the ticker and explicitly defers combos. An MLB combo is refused
+  `combo_not_recordable_by_destination` -- still BLOCKED, under its true reason.
+
+No ticker prefix, collection name or title decides anything.
+
+### Settlements WAITING_FOR_PARENT_WAGER
+
+`scripts/settlement_parents.py` (policy: `src/kalshi_router/settlement_parents.py`) runs before every settlement
+importer. A settled row whose wager is on the canonical ledger imports as before. A row whose wager is on the
+router's wager proposal, where that proposal is VALID (open, non-draft pull request from `kalshi-router/<SPORT>`
+in the destination's own repository into its ledger branch, head = the commit just read, exactly one wager record
+with that key and the same ticker and side) is WITHHELD: not written, not settled, not refused, re-offered every
+run, imported normally the first run after the wager merges (the importer's idempotency makes that exactly once).
+Anything else goes to the importer, which refuses it -- red, exactly as before. Reconciliation counts the
+withheld rows as `WAITING_FOR_PARENT_WAGER`; the health publisher shows them without degrading the router.
+
+### NHL and SOCCER auto-merge: KEEP_OBSERVATION_MODE (both)
+
+| evidence (to 2026-10-08) | NHL | SOCCER |
+|---|---|---|
+| wager rows delivered / refused / unaccounted | 19 / 0 / 0 | 9 / 0 / 0 |
+| importer idempotency (second identical import) | changed nothing, every run | changed nothing, every run |
+| destination validator | accepted | accepted |
+| merge gate (12 conditions) | MERGE, all PASS (#8) | MERGE, all PASS (#33) |
+| proposal history | one router commit (2026-10-02 23:33Z), append-only, no manual edit | same |
+| canonical identity reconciliation | proposed-not-merged 19, UNACCOUNTED 0 | 9, UNACCOUNTED 0 |
+| real batch read and merged by a person | **no** | **no** |
+| settlement observed landing in production | **no** (never possible: no canonical parent yet) | **no** |
+
+The gate passes, but the router's established graduation rule is not the gate alone. CFB's observation closed only
+after a person had read and hand-merged real wager AND settlement batches (#58, #57) and a postmortem reconciled
+them; NHL's own profile lists `settlement` among the things to prove end to end. Neither has happened for NHL or
+SOCCER, so `auto_merge` stays False -- no gate lowered, nothing flipped to clear health. With
+`AWAITING_MANUAL_MERGE` and `WAITING_FOR_PARENT_WAGER` the hold no longer reads as a failure. Merging NHL #8 and
+SOCCER #33 by hand is the next observation step; the next settlement run then imports their settlements and
+proposes them, and once both have been read the flag is the one-line change this file has always described.

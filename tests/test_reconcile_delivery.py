@@ -129,7 +129,8 @@ def test_a_settlement_refused_because_its_wager_is_not_on_the_ledger_yet_is_name
     # "conflicted" has no receipt at all: that is still UNACCOUNTED, and still fails.
     assert _run(tmp_path, repo, "CFB", payload, receipts, kind="settlements") == 1
     out = capsys.readouterr().out
-    assert "proposed not merged 2, refused 2 {'REFUSED': 2} (1 of them await their wager" in out
+    assert ("proposed not merged 2, WAITING_FOR_PARENT_WAGER 0, refused 2 {'REFUSED': 2} "
+            "(1 of them await their wager") in out
     assert "UNACCOUNTED 1" in out
 
 
@@ -139,6 +140,7 @@ def test_the_awaiting_sub_count_never_moves_a_row_out_of_refused():
     with_parents = R.classify(["p"], set(), receipts, parents_on_ledger=set())
     without = R.classify(["p"], set(), receipts)
     assert with_parents["counts"] == without["counts"] == {"ON_LEDGER": 0, "PROPOSED_NOT_MERGED": 0,
+                                                           "WAITING_FOR_PARENT_WAGER": 0,
                                                            "REFUSED": 1, "UNACCOUNTED": 0}
     assert with_parents["refused_awaiting_parent"] == 1
     assert "refused_awaiting_parent" not in without

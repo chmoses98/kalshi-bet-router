@@ -78,14 +78,14 @@ def test_deliver_profiles_a_combo_whose_legs_are_all_mlb(monkeypatch, local_env,
         ["deliver", "--out-dir", str(tmp_path / "payloads"), "--allow-stabilization"]
     )
     assert code == 0, err
-    # The refusal the production filter already reported ...
-    assert "sport unresolved: 2" in out
-    assert "competition absent: 1" in out
-    # ... and now what it IS.
-    assert "orders on COMBO (multivariate) markets: 2" in out
-    assert "every leg classified MLB: 2" in out
-    assert "2026-09-22: 1" in out and "2026-09-23: 1" in out
-    assert "title='Multi Game Extended'" in out
+    # 2026-10-08: the legs PROVE this combo is MLB (classify_with_legs), so it is no longer "sport
+    # unresolved". It is still BLOCKED -- MLB settles its own wagers and cannot grade a combo -- under the
+    # reason that is actually true.
+    assert "sport unresolved: 0" in out
+    assert "competition absent: 0" in out
+    assert "combo the destination cannot record: 2" in out
+    assert "BLOCKED (cannot be recorded, and waiting will not help): 2" in out
+    assert "HEALTH=blocked" in out
 
 
 def test_the_profile_names_no_market_event_or_series(monkeypatch, local_env, tmp_path):

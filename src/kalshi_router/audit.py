@@ -720,34 +720,13 @@ def evaluate_window(client, resolver, replay, taxonomy, now, window):
     The window's end is the cutover structurally (see BackfillWindow), so this
     cannot be pointed at production's range however it is called.
     """
-    from .classify import classify_market
-    from .destination import DESTINATION_REPOS
+    from .destinations import combo_destination_names
     from .production import evaluate_production
-    from .wager import resolve_game_date
 
     candidates = [o for o in replay.orders.values() if window.contains(o)]
 
-    sports: dict[str, str] = {}
-    game_dates: dict[str, str] = {}
-    statuses: dict[str, str] = {}
-    unresolved_reasons: dict[str, int] = {}
-    for ticker in sorted({o.ticker for o in candidates}):
-        context = resolver.resolve(ticker)
-        try:
-            classification = classify_market(context, taxonomy=taxonomy)
-        except KalshiRouterError:
-            continue
-        if classification.sport.value == "UNRESOLVED":
-            reason = classification.unresolved_reason
-            key = reason.value if reason is not None else None
-            unresolved_reasons[key] = unresolved_reasons.get(key, 0) + 1
-        sports[ticker] = classification.sport.value
-        date, _source = resolve_game_date(context)
-        if date:
-            game_dates[ticker] = date
-        raw_status = (context.market or {}).get("status")
-        if isinstance(raw_status, str) and raw_status.strip():
-            statuses[ticker] = raw_status
+    sports, game_dates, statuses, unresolved_reasons, combo_tickers = _classify_candidates(
+        resolver, taxonomy, {o.ticker for o in candidates})
 
     # Every sport is admitted here, not just those with an importer: a wager
     # for a sport with no destination must be REPORTED as
@@ -764,6 +743,8 @@ def evaluate_window(client, resolver, replay, taxonomy, now, window):
         destinations,
         allow_stabilization=True,
         include_pre_cutover=True,
+        combo_tickers=combo_tickers,
+        combo_destinations=combo_destination_names(),
     )
     for key, count in unresolved_reasons.items():
         field = UNRESOLVED_COUNTERS.get(key, "unresolved_reason_unavailable")
@@ -783,9 +764,8 @@ def _evaluate_production(
     """
     from decimal import Decimal
 
-    from .classify import classify_market
     from .destination import DESTINATION_REPOS
-    from .wager import resolve_game_date
+    from .destinations import combo_destination_names
 
     # A recovery run has to resolve metadata for the historical orders too --
     # they are candidates now. This is the expensive path, and it is why
@@ -796,32 +776,14 @@ def _evaluate_production(
         if include_pre_cutover or is_after_cutover(o)
     ]
 
-    sports: dict[str, str] = {}
-    game_dates: dict[str, str] = {}
-    statuses: dict[str, str] = {}
-    # WHY a market could not be classified, counted per MARKET rather than per
+    # WHY a market could not be classified is counted per MARKET rather than per
     # order: two orders on one unclassifiable market are one taxonomy problem,
     # not two, and counting them twice would overstate the gap.
-    unresolved_reasons: dict[str, int] = {}
-    for ticker in sorted({o.ticker for o in candidates}):
-        context = resolver.resolve(ticker)
-        try:
-            classification = classify_market(context, taxonomy=taxonomy)
-        except KalshiRouterError:
-            continue
-        if classification.sport.value == "UNRESOLVED":
-            reason = classification.unresolved_reason
-            key = reason.value if reason is not None else None
-            unresolved_reasons[key] = unresolved_reasons.get(key, 0) + 1
-        sports[ticker] = classification.sport.value
-        date, _source = resolve_game_date(context)
-        if date:
-            game_dates[ticker] = date
-        raw_status = (context.market or {}).get("status")
-        if isinstance(raw_status, str) and raw_status.strip():
-            statuses[ticker] = raw_status
+    sports, game_dates, statuses, unresolved_reasons, combo_tickers = _classify_candidates(
+        resolver, taxonomy, {o.ticker for o in candidates})
 
     destinations = frozenset(sport.value for sport in DESTINATION_REPOS)
+    refused_orders: list = []
     wagers, diagnostics = evaluate_production(
         replay.orders.values(),
         sports,
@@ -831,6 +793,9 @@ def _evaluate_production(
         destinations,
         allow_stabilization,
         include_pre_cutover,
+        combo_tickers=combo_tickers,
+        combo_destinations=combo_destination_names(),
+        on_refusal=lambda order, refusal: refused_orders.append((order, refusal)),
     )
 
     # Attached after the filter runs: the filter counts REFUSALS, which are per
@@ -849,13 +814,105 @@ def _evaluate_production(
         _profile_refusals(
             refusals, resolver, taxonomy, candidates, sports, include_pre_cutover
         )
+        _profile_destination_refusals(refusals, resolver, refused_orders, sports, combo_tickers)
     return wagers, diagnostics
+
+
+def _classify_candidates(resolver, taxonomy, tickers):
+    """Classify every candidate market once: (sports, game_dates, statuses, unresolved_reasons, combo_tickers).
+
+    A multivariate COMBO is classified by its legs (classify.classify_with_legs) and dated by its legs
+    (wager.resolve_combo_game_date); every other market exactly as before. ``combo_tickers`` holds the combos
+    whose legs proved a sport, so the production filter can ask whether that sport's destination can record
+    one.
+    """
+    from .classify import classify_with_legs
+    from .refusals import is_combo
+    from .wager import resolve_combo_game_date, resolve_game_date
+
+    sports: dict[str, str] = {}
+    game_dates: dict[str, str] = {}
+    statuses: dict[str, str] = {}
+    unresolved_reasons: dict[str, int] = {}
+    combo_tickers: set[str] = set()
+    for ticker in sorted(tickers):
+        context = resolver.resolve(ticker)
+        try:
+            classification = classify_with_legs(context, resolver.resolve, taxonomy=taxonomy)
+        except KalshiRouterError:
+            continue
+        if classification.sport.value == "UNRESOLVED":
+            reason = classification.unresolved_reason
+            key = reason.value if reason is not None else None
+            unresolved_reasons[key] = unresolved_reasons.get(key, 0) + 1
+        sports[ticker] = classification.sport.value
+        combo = is_combo(context.market)
+        if combo and classification.sport.value not in ("UNRESOLVED", "OTHER"):
+            combo_tickers.add(ticker)
+        date, _source = (resolve_combo_game_date(context, resolver.resolve) if combo
+                         else resolve_game_date(context))
+        if date:
+            game_dates[ticker] = date
+        raw_status = (context.market or {}).get("status")
+        if isinstance(raw_status, str) and raw_status.strip():
+            statuses[ticker] = raw_status
+    return sports, game_dates, statuses, unresolved_reasons, frozenset(combo_tickers)
+
+
+def _profile_destination_refusals(refusals, resolver, refused_orders, sports, combo_tickers):
+    """Counts-only profiles of the two destination-side BLOCKED refusals: a combo its destination cannot
+    record (by sport), and a market whose contest date could not be established (by shape)."""
+    from .production import ProductionRefusal
+    from .refusals import (
+        GameDateRefusalProfile,
+        combo_legs,
+        date_field_names,
+        describe_series,
+        is_combo,
+        leg_market_ticker,
+        utc_date,
+    )
+    from .wager import _EVENT_TICKER_DATE, _event_ticker, resolve_game_date
+
+    by_ticker: dict[str, GameDateRefusalProfile] = {}
+    for order, refusal in refused_orders:
+        if refusal is ProductionRefusal.COMBO_NOT_RECORDABLE:
+            sport = sports.get(order.ticker) or "UNRESOLVED"
+            refusals.combos_not_recordable[sport] = refusals.combos_not_recordable.get(sport, 0) + 1
+            continue
+        if refusal is not ProductionRefusal.GAME_DATE_NOT_ESTABLISHED:
+            continue
+        profile = by_ticker.get(order.ticker)
+        if profile is None:
+            context = resolver.resolve(order.ticker)
+            category, title, tags = describe_series(context.series)
+            event_ticker = _event_ticker(context)
+            profile = GameDateRefusalProfile(
+                sport=sports.get(order.ticker) or "UNRESOLVED",
+                series_category=category, series_title=title, series_tags=tags,
+                event_ticker_has_date_segment=(None if event_ticker is None
+                                               else bool(_EVENT_TICKER_DATE.search(event_ticker))),
+                event_date_fields=date_field_names(context.event),
+                market_date_fields=date_field_names(context.market),
+            )
+            if is_combo(context.market):
+                profile.combo = True
+                legs = [leg_market_ticker(leg) for leg in combo_legs(context.market)]
+                profile.legs_stated = len(legs)
+                dates = [resolve_game_date(resolver.resolve(t))[0] for t in legs if t]
+                profile.legs_dated = sum(1 for d in dates if d)
+                profile.distinct_leg_dates = len({d for d in dates if d})
+            by_ticker[order.ticker] = profile
+            refusals.game_date_markets.append(profile)
+        profile.orders += 1
+        day = utc_date(order.first_execution_time) or "date unknown"
+        profile.order_dates[day] = profile.order_dates.get(day, 0) + 1
 
 
 def _profile_refusals(refusals, resolver, taxonomy, candidates, sports,
                       include_pre_cutover=False):
     """Fill ``refusals`` with one profile per market refused for its sport."""
-    from .classify import classify_market
+    from .classify import classify_market, classify_with_legs
     from .refusals import (
         RefusedMarketProfile,
         combo_legs,
@@ -877,7 +934,7 @@ def _profile_refusals(refusals, resolver, taxonomy, candidates, sports,
         if profile is None:
             context = resolver.resolve(order.ticker)
             try:
-                classification = classify_market(context, taxonomy=taxonomy)
+                classification = classify_with_legs(context, resolver.resolve, taxonomy=taxonomy)
                 reason = (classification.unresolved_reason.value
                           if classification.unresolved_reason is not None
                           else "positively another sport or category")

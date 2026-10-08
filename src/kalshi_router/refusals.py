@@ -142,11 +142,47 @@ def describe_series(series: dict[str, Any] | None) -> tuple[str | None, str | No
     return category, title, tags
 
 
+#: Field NAMES (never values) whose presence on the event or market says what date evidence the exchange
+#: offered for a market refused GAME_DATE_NOT_ESTABLISHED.
+DATE_FIELD_NAMES = ("game_date", "scheduled_start_time", "strike_date", "expected_expiration_time",
+                    "close_time", "open_time", "occurrence_datetime", "event_start_time", "start_date")
+
+
+@dataclass
+class GameDateRefusalProfile:
+    """One market refused GAME_DATE_NOT_ESTABLISHED, described by shape. Holds no identifier and no value."""
+
+    sport: str
+    orders: int = 0
+    order_dates: dict[str, int] = field(default_factory=dict)
+    combo: bool = False
+    legs_stated: int = 0
+    legs_dated: int = 0
+    distinct_leg_dates: int = 0
+    series_category: str | None = None
+    series_title: str | None = None
+    series_tags: tuple[str, ...] = ()
+    #: Whether the event ticker carries a DDMMMYY-shaped segment at all (not its value).
+    event_ticker_has_date_segment: bool | None = None
+    event_date_fields: tuple[str, ...] = ()
+    market_date_fields: tuple[str, ...] = ()
+
+
+def date_field_names(mapping: dict[str, Any] | None) -> tuple[str, ...]:
+    if not isinstance(mapping, dict):
+        return ()
+    return tuple(name for name in DATE_FIELD_NAMES if mapping.get(name) not in (None, ""))
+
+
 @dataclass
 class RefusalProfile:
     """Every refused-for-sport market after the cutover, and the orders on it."""
 
     markets: list[RefusedMarketProfile] = field(default_factory=list)
+    #: Markets refused GAME_DATE_NOT_ESTABLISHED (a classified, routable sport with no provable contest date).
+    game_date_markets: list[GameDateRefusalProfile] = field(default_factory=list)
+    #: Orders on combos whose sport the legs proved but whose destination cannot record a combo, by sport.
+    combos_not_recordable: dict[str, int] = field(default_factory=dict)
 
     @property
     def orders(self) -> int:
@@ -169,6 +205,29 @@ class RefusalProfile:
             key = market.all_legs_one_sport or "mixed/unresolved"
             out[key] = out.get(key, 0) + market.orders
         return dict(sorted(out.items()))
+
+    def render_game_dates(self) -> str:
+        lines = ["game-date refusals, profiled (sport, public catalogue descriptors and field NAMES only;",
+                 "no ticker, value, price, size or id):",
+                 f"  markets: {len(self.game_date_markets)}   orders: "
+                 f"{sum(m.orders for m in self.game_date_markets)}"]
+        for number, m in enumerate(self.game_date_markets, 1):
+            shape = (f"combo, {m.legs_stated} legs stated, {m.legs_dated} dated, "
+                     f"{m.distinct_leg_dates} distinct leg date(s)" if m.combo else "single market")
+            lines.append(f"    #{number}: {m.sport}; orders {m.orders} on "
+                         f"{', '.join(sorted(m.order_dates)) or '-'}; {shape}")
+            descriptor = f"category={m.series_category or '-'}"
+            if m.series_title:
+                descriptor += f"; title={m.series_title[:60]!r}"
+            if m.series_tags:
+                descriptor += f"; tags={','.join(m.series_tags)[:60]!r}"
+            lines.append(f"        series {descriptor}")
+            lines.append(f"        event ticker has a date segment: {m.event_ticker_has_date_segment}; "
+                         f"event date fields: {','.join(m.event_date_fields) or 'none'}; "
+                         f"market date fields: {','.join(m.market_date_fields) or 'none'}")
+        if not self.game_date_markets:
+            lines.append("  none")
+        return "\n".join(lines)
 
     def render(self) -> str:
         lines = [
@@ -223,7 +282,11 @@ def coverage_lines(wagers, refusals: RefusalProfile, sports) -> list[str]:
     counts only.
     """
     lines = []
-    provable = refusals.combos_by_leg_sport()
+    provable = dict(refusals.combos_by_leg_sport())
+    # A combo whose legs PROVE the sport but whose destination cannot record it is still this sport's wager
+    # that is not being delivered.
+    for sport, count in refusals.combos_not_recordable.items():
+        provable[sport] = provable.get(sport, 0) + count
     for sport in sorted(sports):
         own = [w for w in wagers if w.sport == sport]
         newest_game = max((w.game_date for w in own), default="none")

@@ -188,3 +188,26 @@ and `packet.py` the AI-ready handicap packet. Everything is additive; see `docs/
 
 The router does not classify or route CBB wagers (no destination profile); `router_health.by_sport.CBB` reports
 NOT_ROUTABLE until one exists.
+
+## 14. Contract 1.3.0 (additive): router health tells pending from failed
+
+Only `router_health` and `recent_deliveries` change, and only by ADDING optional fields and enum values; every
+document published before 1.3.0 still validates (pinned by
+`tests/test_router_health_repair_2026_10_08.py::test_a_health_document_published_before_1_3_0_still_validates`).
+
+* `router_health.by_sport.<SPORT>.status` gains `AWAITING_MANUAL_MERGE`: every eligible wager is delivered to the
+  router's open proposal, every gate condition passed, and the destination is in its observation period
+  (`auto_merge` off), so a person merges it. Pending by design; it never degrades `overall_status`.
+* `by_sport.<SPORT>` gains optional `on_ledger`, `proposed_not_merged` and `settlement` (null when the last
+  settlement run did not consider the sport): `{status, rows, on_ledger, proposed_not_merged,
+  waiting_for_parent_wager, refused, unaccounted}` with `status` one of `SETTLED`, `NO_OP`,
+  `WAITING_FOR_PARENT_WAGER`, `AWAITING_MANUAL_MERGE`, `FAILED`, `UNKNOWN`.
+* top level gains optional `awaiting_manual_merge` and `waiting_for_parent_wager` (counts).
+* `recent_deliveries.items[].status` gains `WAITING_FOR_PARENT_WAGER` and `AWAITING_MANUAL_MERGE`.
+
+`overall_status` stays DEGRADED for every genuine problem: a BLOCKED wager, a failed destination, a red
+settlement run, or a settlement a destination refused. `blocked` and `deferred` are now populated (they were
+null: the publisher read counters the status line never carried).
+
+No other repository consumes `router_health`; their vendored 1.2.0 copies stay valid and pick 1.3.0 up on the next
+`edge_finder_contract.sync`.

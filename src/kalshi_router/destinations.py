@@ -170,6 +170,18 @@ class DestinationProfile:
     week). This is the same permission `mergeable_paths` grants, stated as a
     pattern: a file of any other shape still refuses."""
 
+    records_combo_wagers: bool = False
+    """Whether this ledger can RECORD a wager on a multivariate COMBO (parlay) market, end to end.
+
+    A combo's sport is proven by its legs (`classify.classify_with_legs`), but proving the sport does not make
+    a ledger able to hold the wager. True only where the whole lifecycle was read and holds for a ticker
+    that names no single game: the importer and the destination's validator treat `market_ticker` as an
+    opaque string, and the SETTLEMENT is the exchange's own settlement of that combo market, delivered by
+    this router (a `settlement_importer` exists). False by default, and False for MLB, which settles its own
+    wagers from the contract it parses out of the ticker and explicitly defers multi-market combos
+    (`edge-finder-api lib/wager_settlement_semantics.py: SIDE_DEFERRED_MULTI_MARKET_COMBO`) -- a combo filed
+    there would never settle. A combo for such a destination is refused COMBO_NOT_RECORDABLE (BLOCKED)."""
+
 
 #: Every destination production routing is willing to push to.
 #:
@@ -292,6 +304,10 @@ PROFILES: dict[Sport, DestinationProfile] = {
         ),
         row_identity_field="source_bet_key",
         requires_season=True,
+        # Read 2026-10-08: import_routed_wagers / validate_accounting_ledger treat market_ticker as an opaque
+        # string; decision attribution matches it EXACTLY (a combo matches no recommendation and stays
+        # unattributed, which is true); settlement comes from this router.
+        records_combo_wagers=True,
         notes=(
             "ledger on accounting-data, importer on main: two checkouts",
             "one file per season, and the season is named rather than inferred",
@@ -368,6 +384,9 @@ PROFILES: dict[Sport, DestinationProfile] = {
         # #26), and the owner asked for delivery to be hands-off; the first
         # scheduled batch was watched as it landed.
         auto_merge=True,
+        # Read 2026-10-08: imported_wager.v1 requires market_ticker as a non-empty string and nothing more; the
+        # week comes from game_date (one date for a combo, by construction); settlement comes from this router.
+        records_combo_wagers=True,
         notes=(
             "ledger on handicap-data, importer on main: two checkouts",
             "one JSON file per record; the week is resolved by the destination from the real schedule",
@@ -431,6 +450,9 @@ PROFILES: dict[Sport, DestinationProfile] = {
         # real NHL markets, import, identical re-import DUPLICATE_NOOP, settlement, orphan refusal, validator,
         # containment, reconciliation, a production dry run). The gate still runs and still prints its verdict.
         auto_merge=False,
+        # The NHL routed ledger reads market_ticker only to pair a settlement with its wager (same ticker and
+        # side); settlement comes from this router.
+        records_combo_wagers=True,
         notes=(
             "ACCOUNTING ONLY: manually placed Kalshi NHL wagers; no NHL model is involved and none has authority",
             "ledger on accounting-data (orphan: README + data/accounting/ only), importer and validator on main",
@@ -479,6 +501,9 @@ def _shared_ledger_profile(sport: Sport, repo: str, notes: tuple[str, ...]) -> D
         requires_season=False,
         settlement_economics="router-settlement-economics.v2",
         auto_merge=False,
+        # contract/edge_finder_contract/routed_ledger.py: market_ticker is an opaque required string, compared
+        # only to pair a settlement with its wager; settlement comes from this router.
+        records_combo_wagers=True,
         notes=(
             "ACCOUNTING ONLY: manually placed Kalshi wagers; no model is involved and none has authority",
             "ledger on accounting-data (orphan: README + data/accounting/ only), importer and validator on main",
@@ -563,6 +588,15 @@ def render_command(
     return out
 
 
+def combo_destination_names() -> frozenset[str]:
+    """Sports whose destination can record a combo wager. A destination that settles its own wagers is never
+    one, whatever its flag says: its settlement would have to grade a ticker that names no single game."""
+    return frozenset(
+        sport.value for sport, profile in PROFILES.items()
+        if profile.records_combo_wagers and profile.settlement_importer is not None
+    )
+
+
 def describe(sport_name: str) -> dict[str, Any]:
     """The profile as plain JSON, for the delivery workflow's shell to read.
 
@@ -593,5 +627,6 @@ def describe(sport_name: str) -> dict[str, Any]:
         "record_layout": profile.record_layout,
         "settlement_economics": profile.settlement_economics,
         "mergeable_patterns": list(profile.mergeable_patterns),
+        "records_combo_wagers": profile.records_combo_wagers,
         "notes": list(profile.notes),
     }

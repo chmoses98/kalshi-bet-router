@@ -273,6 +273,12 @@ class ProductionRefusal(str, Enum):
     #: A sell/reduction, which is not an original wager and has no agreed
     #: downstream representation yet.
     REDUCTION_NOT_REPRESENTABLE = "reduction_not_representable"
+    #: The order is on a multivariate COMBO whose legs prove its sport, and that sport's destination cannot
+    #: record a combo (``DestinationProfile.records_combo_wagers`` is False). MLB is the case: edge-finder-api
+    #: settles its own wagers from the contract it parses out of the ticker and explicitly defers a
+    #: multi-market combo, so a combo filed there would never settle. A real wager nobody can record, so it is
+    #: BLOCKED (derived into NEEDS_ATTENTION_REFUSALS) -- but with its true reason, not "sport unresolved".
+    COMBO_NOT_RECORDABLE = "combo_not_recordable_by_destination"
 
 
 @dataclass(frozen=True)
@@ -329,6 +335,10 @@ class ProductionDiagnostics:
     refused_destination_not_activated: int = 0
     refused_game_date_not_established: int = 0
     refused_reduction_not_representable: int = 0
+    refused_combo_not_recordable: int = 0
+
+    #: Eligible orders on a multivariate COMBO, classified by its legs (included in ``eligible``).
+    eligible_combo_orders: int = 0
 
     #: SELL orders delivered to a destination that still records the CONTRACT traded as the side (every
     #: destination except those in EXPOSURE_SIDE_DESTINATIONS). Counts only: a non-zero value means such a
@@ -365,6 +375,10 @@ class ProductionDiagnostics:
     unresolved_evidence_conflict: int = 0
     unresolved_ambiguous_family: int = 0
     unresolved_insufficient: int = 0
+    #: Combos (multivariate markets) the leg rule could not complete; see classify.classify_with_legs.
+    unresolved_combo_legs_unavailable: int = 0
+    unresolved_combo_leg_unresolved: int = 0
+    unresolved_combo_legs_span_sports: int = 0
     unresolved_reason_unavailable: int = 0
 
     #: Which finality verdict post-cutover orders received.
@@ -374,7 +388,13 @@ class ProductionDiagnostics:
     finality_unknown: int = 0
 
     def as_dict(self) -> dict[str, int]:
-        return dict(vars(self))
+        """Every counter, plus the two DERIVED totals the health token is computed from. They are properties,
+        so ``vars`` alone never carried them, and the app-facing publisher printed ``blocked: null`` beside a
+        ``HEALTH=blocked`` it could not count."""
+        out = dict(vars(self))
+        out["blocked_orders"] = self.blocked_orders
+        out["deferred_orders"] = self.deferred_orders
+        return out
 
     @property
     def refusals_total(self) -> int:
@@ -455,6 +475,10 @@ class ProductionDiagnostics:
             f"{self.refused_game_date_not_established}",
             f"    reduction not representable: "
             f"{self.refused_reduction_not_representable}",
+            f"    combo the destination cannot record: "
+            f"{self.refused_combo_not_recordable}",
+            f"  eligible orders on COMBO markets (sport proven by every leg): "
+            f"{self.eligible_combo_orders}",
             "  sell orders delivered (orders; the side a sale is recorded under):",
             f"    by exposure, with execution_action: {self.sell_orders_recorded_by_exposure}",
             f"    by contract traded (destination semantics unchanged): "
@@ -482,6 +506,11 @@ class ProductionDiagnostics:
             f"    evidence conflict: {self.unresolved_evidence_conflict}",
             f"    ambiguous family without a league: {self.unresolved_ambiguous_family}",
             f"    insufficient authoritative metadata: {self.unresolved_insufficient}",
+            f"    combo legs not all stated: {self.unresolved_combo_legs_unavailable}",
+            f"    combo with a leg outside every routable sport: "
+            f"{self.unresolved_combo_leg_unresolved}",
+            f"    combo whose legs span more than one sport: "
+            f"{self.unresolved_combo_legs_span_sports}",
             f"    reason unavailable: {self.unresolved_reason_unavailable}",
             "",
             f"  deferred (a gate that opens on its own): {self.deferred_orders}",
@@ -530,6 +559,7 @@ _REFUSAL_COUNTERS = {
     ProductionRefusal.DESTINATION_NOT_ACTIVATED: "refused_destination_not_activated",
     ProductionRefusal.GAME_DATE_NOT_ESTABLISHED: "refused_game_date_not_established",
     ProductionRefusal.REDUCTION_NOT_REPRESENTABLE: "refused_reduction_not_representable",
+    ProductionRefusal.COMBO_NOT_RECORDABLE: "refused_combo_not_recordable",
 }
 
 _FINALITY_COUNTERS = {
@@ -563,6 +593,8 @@ def evaluate_order(
     destinations: frozenset[str],
     allow_stabilization: bool = False,
     include_pre_cutover: bool = False,
+    is_combo: bool = False,
+    combo_destinations: frozenset[str] = frozenset(),
 ) -> tuple[ProductionWager | None, ProductionRefusal | None, OrderFinality | None]:
     """Apply every gate to one order, cheapest and most decisive first.
 
@@ -611,6 +643,11 @@ def evaluate_order(
         if classification_sport in ROW_BUILDERS:
             return None, ProductionRefusal.DESTINATION_NOT_ACTIVATED, finality
         return None, ProductionRefusal.NO_DESTINATION_IMPORTER, finality
+
+    # A combo reaches here only with its sport proven by every leg. Whether the destination can RECORD one is
+    # that destination's property, stated in its profile -- never inferred here.
+    if is_combo and classification_sport not in combo_destinations:
+        return None, ProductionRefusal.COMBO_NOT_RECORDABLE, finality
 
     if not game_date:
         return None, ProductionRefusal.GAME_DATE_NOT_ESTABLISHED, finality
@@ -666,6 +703,9 @@ UNRESOLVED_COUNTERS: dict[str, str] = {
     "evidence_conflict": "unresolved_evidence_conflict",
     "ambiguous_sport_family_without_league": "unresolved_ambiguous_family",
     "insufficient_authoritative_metadata": "unresolved_insufficient",
+    "combo_legs_unavailable": "unresolved_combo_legs_unavailable",
+    "combo_leg_unresolved": "unresolved_combo_leg_unresolved",
+    "combo_legs_span_sports": "unresolved_combo_legs_span_sports",
 }
 
 
@@ -678,8 +718,15 @@ def evaluate_production(
     destinations: frozenset[str],
     allow_stabilization: bool = False,
     include_pre_cutover: bool = False,
+    combo_tickers: frozenset[str] = frozenset(),
+    combo_destinations: frozenset[str] = frozenset(),
+    on_refusal=None,
 ) -> tuple[list[ProductionWager], ProductionDiagnostics]:
-    """Filter every order down to the ones safe to deliver, and count the rest."""
+    """Filter every order down to the ones safe to deliver, and count the rest.
+
+    ``combo_tickers``: the markets that are multivariate combos (their sport, in ``sports``, was proven by
+    their legs). ``combo_destinations``: the sports whose destination can record one. ``on_refusal(order,
+    refusal)``, when given, is told every refusal -- for the counts-only profilers; it decides nothing."""
     diagnostics = ProductionDiagnostics()
     eligible: list[ProductionWager] = []
 
@@ -694,6 +741,8 @@ def evaluate_production(
             destinations,
             allow_stabilization,
             include_pre_cutover,
+            is_combo=order.ticker in combo_tickers,
+            combo_destinations=combo_destinations,
         )
         if include_pre_cutover and not is_after_cutover(order):
             # Counted as what it is, so a recovery run's report still says how
@@ -707,10 +756,14 @@ def evaluate_production(
         if refusal is not None:
             counter = _REFUSAL_COUNTERS[refusal]
             setattr(diagnostics, counter, getattr(diagnostics, counter) + 1)
+            if on_refusal is not None:
+                on_refusal(order, refusal)
             continue
         assert wager is not None
         eligible.append(wager)
         diagnostics.eligible += 1
+        if order.ticker in combo_tickers:
+            diagnostics.eligible_combo_orders += 1
         if order.is_sell:
             if wager.sport in EXPOSURE_SIDE_DESTINATIONS:
                 diagnostics.sell_orders_recorded_by_exposure += 1

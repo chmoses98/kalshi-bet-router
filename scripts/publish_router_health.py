@@ -61,7 +61,7 @@ def parse_log(text: str) -> dict:
     """Everything the publisher reads out of one run's log. Tolerates the ``job\\tstep\\ttimestamp `` prefixes
     ``gh run view --log`` adds, and the absence of any line."""
     out: dict = {"health": None, "status": None, "deliveries": [], "errors": [], "settlement_rows": {},
-                 "settlements_ready": None}
+                 "settlements_ready": None, "reconciled": {}, "settlement_parents": {}}
     in_settlement_block = False
     for raw in text.splitlines():
         line = raw.split("\t")[-1] if "\t" in raw else raw
@@ -78,6 +78,21 @@ def parse_log(text: str) -> dict:
                 out["deliveries"].append(json.loads(line[len("ROUTER_DELIVERY_JSON="):]))
             except json.JSONDecodeError:
                 out["errors"].append({"sport": None, "message": "unparseable ROUTER_DELIVERY_JSON line"})
+        elif line.startswith("ROUTER_RECONCILE_JSON="):
+            # One per destination and kind (scripts/reconcile_delivery.py): where every eligible row IS.
+            try:
+                row = json.loads(line[len("ROUTER_RECONCILE_JSON="):])
+                if row.get("sport") in SPORTS:
+                    out["reconciled"][(row["sport"], row.get("kind") or "wagers")] = row
+            except (json.JSONDecodeError, KeyError, AttributeError):
+                out["errors"].append({"sport": None, "message": "unparseable ROUTER_RECONCILE_JSON line"})
+        elif line.startswith("ROUTER_SETTLEMENT_PARENTS_JSON="):
+            try:
+                row = json.loads(line[len("ROUTER_SETTLEMENT_PARENTS_JSON="):])
+                if row.get("sport") in SPORTS:
+                    out["settlement_parents"][row["sport"]] = row
+            except (json.JSONDecodeError, AttributeError):
+                out["errors"].append({"sport": None, "message": "unparseable ROUTER_SETTLEMENT_PARENTS_JSON line"})
         elif line.startswith("::error::") or line.startswith("##[error]"):
             # A workflow command reaches the raw job log rewritten by the runner (`##[error]...`); the
             # `::error::` form survives only in the step's own echo. Both mean the same thing.
@@ -112,11 +127,47 @@ def _run_ref(run: dict | None, health_state: str | None = None) -> dict:
             "conclusion": run.get("conclusion") or run.get("status"), "health_state": health_state}
 
 
-def _sport_status(sport: str, parsed: dict, dry_run_default: bool) -> dict:
+def _settlement_status(sport: str, settle_parsed: dict | None, auto_merge: bool | None) -> dict | None:
+    """One sport's outcome in the last SETTLEMENT run, or None when that run did not consider it.
+
+    FAILED only for a genuine failure (an ``::error::`` for the sport: an importer refusal, a validator or gate
+    refusal, an unaccounted row). WAITING_FOR_PARENT_WAGER when rows were withheld because their wager is on the
+    open, unmerged proposal -- a sequencing state, not a failure. AWAITING_MANUAL_MERGE when settlements were
+    proposed to an observation-period destination and wait for a person."""
+    if not settle_parsed:
+        return None
+    rec = (settle_parsed.get("reconciled") or {}).get((sport, "settlements"))
+    rows = (settle_parsed.get("settlement_rows") or {}).get(sport)
+    if rec is None and rows is None:
+        return None
+    failed = any(e.get("sport") == sport for e in settle_parsed.get("errors", []))
+    rec = rec or {}
+    waiting = rec.get("waiting_for_parent_wager") or 0
+    proposed = rec.get("proposed_not_merged") or 0
+    if failed:
+        status = "FAILED"
+    elif not rec:
+        status = "UNKNOWN"
+    elif waiting:
+        status = "WAITING_FOR_PARENT_WAGER"
+    elif proposed and auto_merge is False:
+        status = "AWAITING_MANUAL_MERGE"
+    elif rows:
+        status = "SETTLED"
+    else:
+        status = "NO_OP"
+    return {"status": status, "rows": rows if rows is not None else rec.get("payload_rows"),
+            "on_ledger": rec.get("on_ledger"), "proposed_not_merged": rec.get("proposed_not_merged"),
+            "waiting_for_parent_wager": rec.get("waiting_for_parent_wager"), "refused": rec.get("refused"),
+            "unaccounted": rec.get("unaccounted")}
+
+
+def _sport_status(sport: str, parsed: dict, dry_run_default: bool, settle_parsed: dict | None = None) -> dict:
     prof = PROFILES.get(next((s for s in PROFILES if s.value == sport), None))
     rows = (parsed.get("status") or {}).get("payload_rows", {}).get(sport)
     delivery = next((d for d in parsed.get("deliveries", []) if d.get("sport") == sport), None)
     errors = [e for e in parsed.get("errors", []) if e.get("sport") == sport]
+    rec = (parsed.get("reconciled") or {}).get((sport, "wagers")) or {}
     if prof is None:
         status = "NOT_ROUTABLE"
     elif delivery is not None:
@@ -124,6 +175,10 @@ def _sport_status(sport: str, parsed: dict, dry_run_default: bool) -> dict:
             status = "FAILED"
         elif delivery.get("dry_run") or dry_run_default:
             status = "DRY_RUN"
+        elif (rec.get("proposed_not_merged") or 0) > 0 and prof.auto_merge is False:
+            # Delivered to the router's open proposal, every gate condition passed, held for a person by the
+            # destination's observation period. Pending by design -- not a failure.
+            status = "AWAITING_MANUAL_MERGE"
         else:
             status = "DELIVERED"
     elif errors:
@@ -132,7 +187,7 @@ def _sport_status(sport: str, parsed: dict, dry_run_default: bool) -> dict:
         status = "UNKNOWN"
     else:
         status = "NO_OP"
-    delivered = rows if status == "DELIVERED" else (0 if status in ("NO_OP",) else None)
+    delivered = rows if status in ("DELIVERED", "AWAITING_MANUAL_MERGE") else (0 if status in ("NO_OP",) else None)
     return {
         "routable": prof is not None, "classification": "SUPPORTED" if sport in {s.value for s in ROUTABLE_SPORTS} else "UNSUPPORTED",
         "destination_repo": prof.repo if prof else None, "ledger_branch": prof.ledger_branch if prof else None,
@@ -140,6 +195,8 @@ def _sport_status(sport: str, parsed: dict, dry_run_default: bool) -> dict:
         "eligible": rows, "delivered": delivered, "failed": (rows or 1) if status == "FAILED" else (0 if status != "UNKNOWN" else None),
         "status": status,
         "last_error_type": (errors[0]["message"].split(" ")[0].strip(":;,.") if errors else None),
+        "on_ledger": rec.get("on_ledger"), "proposed_not_merged": rec.get("proposed_not_merged"),
+        "settlement": _settlement_status(sport, settle_parsed, prof.auto_merge if prof else None),
     }
 
 
@@ -156,17 +213,24 @@ def build_documents(*, deliver_run: dict | None, deliver_parsed: dict | None, se
     health_state = deliver_parsed.get("health") or "unknown"
     production = (deliver_parsed.get("status") or {}).get("production", {})
     dry_run = any(d.get("dry_run") for d in deliver_parsed.get("deliveries", []))
-    by_sport = {s: _sport_status(s, deliver_parsed, dry_run) for s in SPORTS}
+    by_sport = {s: _sport_status(s, deliver_parsed, dry_run, settle_parsed if settle_run else None)
+                for s in SPORTS}
     warnings: list[str] = []
     errors: list[str] = [f"{e['sport'] or 'router'}: {e['message']}" for e in deliver_parsed.get("errors", [])]
     errors += [f"settle {e['sport'] or 'router'}: {e['message']}" for e in settle_parsed.get("errors", [])]
     conclusion = (deliver_run or {}).get("conclusion")
+    settle_conclusion = (settle_run or {}).get("conclusion")
+    # A GENUINE settlement failure degrades the router: a red settlement run, or a sport whose settlement the
+    # destination refused. A settlement WAITING_FOR_PARENT_WAGER does not -- its run is green by construction.
+    settlement_failed = settle_conclusion not in ("success", None) or any(
+        (v.get("settlement") or {}).get("status") == "FAILED" for v in by_sport.values())
     if deliver_run is None:
         overall = "UNAVAILABLE"
         warnings.append("no delivery run found")
     elif freshness == "STALE":
         overall = "STALE"
-    elif conclusion not in ("success", None) or health_state == "blocked" or any(v["status"] == "FAILED" for v in by_sport.values()):
+    elif (conclusion not in ("success", None) or health_state == "blocked" or settlement_failed
+          or any(v["status"] == "FAILED" for v in by_sport.values())):
         overall = "DEGRADED"
     elif health_state == "unknown":
         overall = "DEGRADED"
@@ -175,10 +239,26 @@ def build_documents(*, deliver_run: dict | None, deliver_parsed: dict | None, se
         overall = "HEALTHY"
     if health_state == "blocked":
         warnings.append("router health is BLOCKED: a wager exists that no destination can record; see the refusal counts")
+    if settlement_failed:
+        warnings.append("settlement: a destination refused or could not record a settlement; see errors")
     for s, v in by_sport.items():
-        if v["routable"] and v["auto_merge"] is False:
+        if not v["routable"]:
+            continue
+        if v["status"] == "AWAITING_MANUAL_MERGE":
+            warnings.append(f"{s}: {v['proposed_not_merged']} wager(s) delivered to the open proposal, awaiting a "
+                            f"person's merge (observation period, auto_merge off) -- pending by design, not a failure")
+        elif v["auto_merge"] is False:
             warnings.append(f"{s}: observation period (auto_merge off); deliveries open a pull request a person merges")
+        settled = v.get("settlement") or {}
+        if settled.get("waiting_for_parent_wager"):
+            warnings.append(f"{s}: {settled['waiting_for_parent_wager']} settlement(s) WAITING_FOR_PARENT_WAGER -- "
+                            "their wagers are on the open, unmerged proposal; withheld, re-offered every run, "
+                            "imported once the wager merges")
     eligible = production.get("eligible")
+    awaiting_merge = sum(v.get("proposed_not_merged") or 0 for v in by_sport.values()
+                         if v["status"] == "AWAITING_MANUAL_MERGE")
+    waiting_parent = sum((v.get("settlement") or {}).get("waiting_for_parent_wager") or 0
+                         for v in by_sport.values())
     health = {
         "schema_version": SCHEMA_VERSION, "kind": "router_health", "sport": "ALL", "run_id": run_id,
         "generated_at": to_iso(now),
@@ -190,6 +270,8 @@ def build_documents(*, deliver_run: dict | None, deliver_parsed: dict | None, se
         "bets_discovered": eligible, "delivered": sum((v["delivered"] or 0) for v in by_sport.values()) if eligible is not None else None,
         "failed": sum((v["failed"] or 0) for v in by_sport.values()) if deliver_run else None,
         "blocked": production.get("blocked_orders"), "deferred": production.get("deferred_orders"),
+        "awaiting_manual_merge": awaiting_merge if deliver_run else None,
+        "waiting_for_parent_wager": waiting_parent if settle_run else None,
         "by_sport": by_sport,
         "thresholds": {k: v.as_dict() for k, v in th.items()},
         "warnings": warnings, "errors": errors, "commit_sha": commit_sha,
@@ -202,12 +284,14 @@ def build_documents(*, deliver_run: dict | None, deliver_parsed: dict | None, se
         if deliver_run and (v["eligible"] or v["status"] == "FAILED"):
             rec = {"run_id": str(deliver_run.get("databaseId")), "run_url": deliver_run.get("url"),
                    "started_at": last_poll, "sport": sport, "destination": v["destination_repo"],
-                   "status": v["status"] if v["status"] in ("DELIVERED", "FAILED", "DRY_RUN", "NO_OP", "PARTIAL") else "NO_OP",
+                   "status": (v["status"] if v["status"] in ("DELIVERED", "FAILED", "DRY_RUN", "NO_OP", "PARTIAL",
+                                                             "AWAITING_MANUAL_MERGE") else "NO_OP"),
                    "rows": v["eligible"], "attempt": None, "error_type": v["last_error_type"],
                    "error_message": next((e["message"] for e in deliver_parsed.get("errors", []) if e.get("sport") == sport), None),
                    "wager_ids": [], "first_failed_at": last_poll if v["status"] == "FAILED" else None,
                    "last_attempt_at": last_poll,
-                   "retry_status": "WILL_RETRY" if v["status"] == "FAILED" else ("RESOLVED" if v["status"] == "DELIVERED" else "NOT_APPLICABLE")}
+                   "retry_status": ("WILL_RETRY" if v["status"] == "FAILED" else
+                                    "RESOLVED" if v["status"] == "DELIVERED" else "NOT_APPLICABLE")}
             key = (rec["run_id"], rec["sport"], rec["status"])
             if key not in seen:
                 items.append(rec)
@@ -216,12 +300,14 @@ def build_documents(*, deliver_run: dict | None, deliver_parsed: dict | None, se
         s_started = to_iso_or_none(settle_run.get("createdAt"))
         for sport, rows in settle_parsed.get("settlement_rows", {}).items():
             failed = any(e.get("sport") == sport for e in settle_parsed.get("errors", []))
+            waiting = ((by_sport.get(sport) or {}).get("settlement") or {}).get("status") == "WAITING_FOR_PARENT_WAGER"
             rec = {"run_id": str(settle_run.get("databaseId")), "run_url": settle_run.get("url"), "started_at": s_started,
                    "sport": sport, "destination": by_sport.get(sport, {}).get("destination_repo"),
-                   "status": "FAILED" if failed else "SETTLED", "rows": rows, "attempt": None,
+                   "status": "FAILED" if failed else ("WAITING_FOR_PARENT_WAGER" if waiting else "SETTLED"),
+                   "rows": rows, "attempt": None,
                    "error_type": None, "error_message": next((e["message"] for e in settle_parsed.get("errors", []) if e.get("sport") == sport), None),
                    "wager_ids": [], "first_failed_at": s_started if failed else None, "last_attempt_at": s_started,
-                   "retry_status": "WILL_RETRY" if failed else "RESOLVED"}
+                   "retry_status": "WILL_RETRY" if (failed or waiting) else "RESOLVED"}
             key = (rec["run_id"], rec["sport"], rec["status"])
             if key not in seen:
                 items.append(rec)
@@ -307,7 +393,10 @@ def main(argv: list[str] | None = None) -> int:
     print(f"router health: {health['overall_status']} (router state {health['router_health_state']}); "
           f"recent deliveries: {recent['count']}")
     for sport, v in health["by_sport"].items():
-        print(f"  {sport}: {v['status']} eligible={v['eligible']} delivered={v['delivered']}")
+        settled = v.get("settlement") or {}
+        print(f"  {sport}: {v['status']} eligible={v['eligible']} delivered={v['delivered']} "
+              f"on_ledger={v.get('on_ledger')} proposed_not_merged={v.get('proposed_not_merged')} "
+              f"settlement={settled.get('status')} waiting_for_parent={settled.get('waiting_for_parent_wager')}")
     return 0
 
 
