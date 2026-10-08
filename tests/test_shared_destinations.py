@@ -206,7 +206,9 @@ def test_profiles_describe_the_shared_ledger_contract(sport):
     assert prof.committable_prefixes == ("data/accounting/",)
     assert prof.ledger_branch_runs_ci is False and prof.ledger_validator is not None
     assert prof.settlement_importer is not None and prof.settlement_economics == ECONOMICS_V2
-    assert prof.requires_season is False and prof.auto_merge is False
+    assert prof.requires_season is False
+    # Observation closes per destination, on its own evidence: SOCCER on 2026-10-08 (docs/DESTINATIONS.md).
+    assert prof.auto_merge is (sport == "SOCCER")
     d = describe(sport)
     assert d["needs_separate_code_checkout"] and d["has_ledger_validator"]
     cmd = render_command(prof.wager_importer, payload="/p.json", work="/w", code="/c", receipts="/r.json")
