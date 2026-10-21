@@ -21,4 +21,4 @@ The client is read-only (`client.py:121-156`, GET only, allow-listed paths); fee
 
 1. Add `exchange_action` (`buy`/`sell`), `order_id`, `order_created_at`, `last_fill_at`, `ledger_ingested_at` and `taker` to the *raw* router record, and either refuse or represent reductions instead of filing them as purchases.
 2. Allow an optional opaque `recommendation_ref` (card hash + ticker + side), or an explicit `MANUAL` marker, supplied by the owner at entry — never inferred.
-3. Reconcile the docs with the code on NHL auto-merge: commit `fce1690` graduates NHL; the research reviewed an earlier state in which docs and code disagreed.
+3. Re-check the docs against the code on NHL auto-merge: the earlier PR #52 audit reported a disagreement; `fce1690` ("NHL and SOCCER graduate to auto-merge") is the latest change in that area and was not reviewed by this research.
