@@ -193,3 +193,53 @@ so.
 
 Dispatch it manually (`workflow_dispatch`) to refresh immediately before a
 slate.
+
+---
+
+## 7. The NFL destination
+
+The same reading is delivered to the NFL desk, `chmoses98/nfl-edge-finder`
+(public), by a **separate** workflow, `.github/workflows/publish-bankroll-nfl.yml`.
+`publish-bankroll.yml` (MLB) is not touched by it; the two share only the
+scripts, which already take `--repo`, `--secret-name` and `--token-env`.
+
+| | |
+|---|---|
+| **Sealed** | the same five-field allowlisted context as section 4, as the Actions secret `KALSHI_BANKROLL_CONTEXT` on `chmoses98/nfl-edge-finder` |
+| **Semantics** | **AVAILABLE CASH** (`KALSHI_AVAILABLE_CASH_BALANCE`). Not total bankroll, not exposure, not `portfolio_value` |
+| **Never** | committed, uploaded, summarised or logged. The report step prints shape only (`observedAt`, `valueType`, `source`, `currency`, `amount: ***withheld***`) |
+| **Freshness** | the destination refuses a reading older than **30 minutes**. The workflow runs at `7,22,37,52 * * * *` (every 15 minutes, offset from the MLB run) and on `workflow_dispatch` |
+| **Token** | `DOWNSTREAM_SECRETS_TOKEN_NFL`, a fine-grained PAT with **`Secrets: Read and write` on `chmoses98/nfl-edge-finder` only**. Separate from the MLB `DOWNSTREAM_SECRETS_TOKEN` so that token is not widened |
+| **Isolation** | own concurrency group (`publish-bankroll-nfl`), own token; an NFL failure cannot cancel or delay the MLB reading |
+
+Like the MLB job it refuses to run from any ref but `main`, verifies the
+credential with one read-only request **before** the account is read, writes
+the reading to `$RUNNER_TEMP`, seals it, and reads the secret's metadata back
+to confirm the write.
+
+### The owner's one manual step
+
+No code creates a credential. Until this is done the workflow fails at its
+preflight (reading nothing from the account), the destination holds no
+reading, and **the NFL card authorises no stakes**:
+
+1. Create a fine-grained PAT. Repository access: **only**
+   `chmoses98/nfl-edge-finder`. Repository permission: **Secrets: Read and
+   write**, nothing else.
+2. Store it on `chmoses98/kalshi-bet-router` as the Actions secret
+   **`DOWNSTREAM_SECRETS_TOKEN_NFL`**.
+3. Dispatch *Publish bankroll to the NFL desk* once, or wait up to 15 minutes.
+
+### How the NFL side consumes it
+
+`KALSHI_BANKROLL_CONTEXT` is exposed to the NFL workflow as the environment
+variable of that name. Its real-money preflight reads `bankroll`,
+`observedAt`, `valueType` and `source` from it, and must refuse to authorise
+stakes when the variable is absent, unparseable, not
+`KALSHI_AVAILABLE_CASH_BALANCE`, or older than 30 minutes. The amount may be
+used to size stakes in the run but must not be written to a committed card,
+log line or summary: publish status, age and `sizingAllowed` only.
+
+> The publisher script's preflight prints a generic stderr line naming
+> `DOWNSTREAM_SECRETS_TOKEN`; in the NFL job that wording is the shared
+> script's, and the job's `::error::` annotation names the real remedy.
