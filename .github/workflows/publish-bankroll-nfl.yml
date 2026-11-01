@@ -1,0 +1,167 @@
+# Publish the account's current available cash to the NFL desk.
+#
+# This is the NFL twin of publish-bankroll.yml (the MLB destination). It is a
+# SEPARATE workflow on purpose: the MLB publication is untouched by it, and a
+# fault here -- a missing token, a wrong scope, a rename on the NFL side --
+# cannot stop, slow or cancel the MLB reading. Different concurrency group,
+# different token, different cron minutes.
+#
+# WHY A SECRET AND NOT A FILE, AN ARTIFACT OR A LOG LINE
+# ------------------------------------------------------
+# BOTH repositories involved are PUBLIC:
+#
+#   chmoses98/kalshi-bet-router   public
+#   chmoses98/nfl-edge-finder     public
+#
+# On a public repository, workflow logs, job summaries and uploaded
+# artifacts are readable by anyone on the internet, with no login, and a
+# commit is public forever. A GitHub Actions SECRET is the one channel that
+# is not: it is sealed client-side with libsodium against the destination
+# repository's Actions public key, the REST API has no plaintext read, and
+# it is decrypted only inside a workflow run of that repository.
+#
+# The destination exposes it to its workflows as the environment variable
+# KALSHI_BANKROLL_CONTEXT. Its real-money preflight must refuse to authorise
+# stakes when no fresh cash evidence exists, so until the token below exists
+# the NFL card authorises NO stakes. That is the correct degraded behaviour.
+# See docs/BANKROLL_DELIVERY.md, "The NFL destination".
+#
+# WHAT IS SEALED
+# --------------
+# AVAILABLE CASH (GET /portfolio/balance, labelled
+# KALSHI_AVAILABLE_CASH_BALANCE). Not total bankroll, not exposure.
+#
+# SCOPE OF THE CREDENTIAL WIDENING
+# --------------------------------
+# This job reads GET /portfolio/balance and nothing else. The Kalshi client
+# has no order, cancel, amend, withdraw, deposit or transfer capability, and
+# those routes are pinned unreachable by tests. Reading the balance is not
+# permission to trade, and nothing here grants it.
+name: Publish bankroll to the NFL desk
+
+on:
+  # Same cadence as the MLB publisher, offset by a few minutes so the two
+  # authenticated Kalshi reads do not land on the same second. The
+  # destination refuses a reading older than 30 minutes; 15-minute runs leave
+  # headroom for one delayed or failed scheduled run.
+  schedule:
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Its own group: this must never queue behind, or cancel, the MLB run.
+  # Last writer wins, and the newest reading is the one worth having.
+  group: publish-bankroll-nfl
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    name: Read balance, seal it into the NFL destination
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Refuse to run credentialed code from an untrusted ref
+        run: |
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::error::This credentialed workflow may only run from refs/heads/main (got ${GITHUB_REF})."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install router
+        run: python -m pip install --disable-pip-version-check --quiet . pynacl
+
+      # THE CREDENTIAL IS CHECKED BEFORE THE ACCOUNT IS TOUCHED.
+      #
+      # One read-only request -- the destination's Actions public key -- which
+      # is exactly the capability the seal needs. A token that passes here can
+      # seal; a token that fails here never could have. No Kalshi credential
+      # is present in this step.
+      - name: Verify the delivery credential (no account is read yet)
+        id: preflight
+        env:
+          DOWNSTREAM_SECRETS_TOKEN_NFL: ${{ secrets.DOWNSTREAM_SECRETS_TOKEN_NFL }}
+          DESTINATION_REPO: chmoses98/nfl-edge-finder
+          DESTINATION_SECRET: KALSHI_BANKROLL_CONTEXT
+        run: |
+          set -euo pipefail
+          status=0
+          python "${GITHUB_WORKSPACE}/scripts/publish_bankroll_secret.py" \
+            --preflight-only \
+            --token-env DOWNSTREAM_SECRETS_TOKEN_NFL \
+            --repo "${DESTINATION_REPO}" \
+            --secret-name "${DESTINATION_SECRET}" || status=$?
+          case "${status}" in
+            0) ;;
+            3)
+              echo "::error::The NFL bankroll publisher cannot deliver: DOWNSTREAM_SECRETS_TOKEN_NFL is missing or is not scoped to ${DESTINATION_REPO} with 'Secrets: Read and write'. NOTHING was read from the Kalshi account this run. OWNER ACTION: create a fine-grained PAT whose only repository is ${DESTINATION_REPO} and whose only permission is 'Secrets: Read and write', then store it on chmoses98/kalshi-bet-router as the Actions secret DOWNSTREAM_SECRETS_TOKEN_NFL. (Ignore the stderr line above that names DOWNSTREAM_SECRETS_TOKEN: that is the shared publisher script's generic wording and the MLB token is not involved.) It is deliberately separate from the MLB token DOWNSTREAM_SECRETS_TOKEN so that token is not widened. Until then the NFL card has no fresh cash evidence and authorises NO stakes, which is the correct degraded behaviour."
+              exit 3 ;;
+            *)
+              echo "::error::The NFL bankroll publisher could not reach the GitHub API (exit ${status}). No account was read. This is transient; the next scheduled run retries. Until a reading lands the NFL card authorises NO stakes."
+              exit "${status}" ;;
+          esac
+
+      - name: Read the balance
+        env:
+          KALSHI_API_KEY_ID: ${{ secrets.KALSHI_API_KEY_ID }}
+          KALSHI_PRIVATE_KEY: ${{ secrets.KALSHI_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          # RUNNER_TEMP, never the workspace: a file in the workspace can be
+          # picked up by a later `git add -A` in some future edit of this
+          # workflow. The runner is destroyed with the job.
+          python -m kalshi_router.cli bankroll --out "${RUNNER_TEMP}/bankroll.json"
+
+      # The seal VERIFIES: after the write, the destination's secret metadata
+      # (name and updated_at -- never its value, which the REST API does not
+      # expose) must show this run's write.
+      - name: Seal it into the NFL destination repository
+        env:
+          DOWNSTREAM_SECRETS_TOKEN_NFL: ${{ secrets.DOWNSTREAM_SECRETS_TOKEN_NFL }}
+          DESTINATION_REPO: chmoses98/nfl-edge-finder
+          DESTINATION_SECRET: KALSHI_BANKROLL_CONTEXT
+        run: |
+          set -euo pipefail
+          status=0
+          python "${GITHUB_WORKSPACE}/scripts/publish_bankroll_secret.py" \
+            --context "${RUNNER_TEMP}/bankroll.json" \
+            --token-env DOWNSTREAM_SECRETS_TOKEN_NFL \
+            --repo "${DESTINATION_REPO}" \
+            --secret-name "${DESTINATION_SECRET}" || status=$?
+          case "${status}" in
+            0) ;;
+            2) echo "::error::The bankroll context this run produced was REFUSED before sending. The reason is named above and carries no amount -- most likely the value is not ${DESTINATION_SECRET}'s required KALSHI_AVAILABLE_CASH_BALANCE, or the reading is already past the destination's 30-minute window. The NFL card authorises NO stakes without a fresh reading." ;;
+            3) echo "::error::DOWNSTREAM_SECRETS_TOKEN_NFL lost its 'Secrets: Read and write' access to ${DESTINATION_REPO} between the preflight and the write. OWNER ACTION: recreate or re-scope that PAT and store it as DOWNSTREAM_SECRETS_TOKEN_NFL. Until then the NFL card authorises NO stakes." ;;
+            5) echo "::error::The write was ACCEPTED but ${DESTINATION_SECRET} on ${DESTINATION_REPO} does not show it. Do not treat this run as a successful publication; the NFL card authorises NO stakes on this evidence." ;;
+            *) echo "::error::The NFL bankroll could not be sealed (exit ${status}). Until a reading lands the NFL card authorises NO stakes." ;;
+          esac
+          exit "${status}"
+
+      - name: Report (shape only, never the amount)
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -f "${RUNNER_TEMP}/bankroll.json" ]; then
+            python - "${RUNNER_TEMP}/bankroll.json" <<'PYEOF'
+          import json, sys
+          ctx = json.load(open(sys.argv[1]))
+          # Keys and non-monetary values only. `bankroll` is never read here.
+          print(f"observedAt: {ctx['observedAt']}")
+          print(f"valueType:  {ctx['valueType']}")
+          print(f"source:     {ctx['source']}")
+          print(f"currency:   {ctx['currency']}")
+          print("amount:     ***withheld*** (this repository is public)")
+          PYEOF
+          else
+            echo "no bankroll context was produced this run"
+          fi
