@@ -161,17 +161,8 @@ jobs:
           }
           # Transient clone failure on one destination must cost THAT sport its run, not abort the step under
           # `set -e` and skip every later destination (deliver run 41494783124). Retry, then count and continue.
-          clone_retry() {
-            local attempt delay=2
-            for attempt in 1 2 3 4; do
-              rm -rf "${@: -1}"
-              if git clone --quiet --depth 1 "$@"; then return 0; fi
-              [ "${attempt}" -lt 4 ] || break
-              echo "  clone attempt ${attempt} failed; retrying in ${delay}s" >&2
-              sleep "${delay}"; delay=$((delay * 2))
-            done
-            return 1
-          }
+          # shellcheck source=scripts/clone_retry.sh
+          source "${GITHUB_WORKSPACE}/scripts/clone_retry.sh"
           for payload in "${payloads[@]}"; do
             base="$(basename "${payload}" .json)"
             sport="${base%-settlements}"

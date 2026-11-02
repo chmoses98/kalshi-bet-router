@@ -216,7 +216,7 @@ def test_a_merged_wager_is_canonical_and_goes_to_the_importer_once_merged():
 @pytest.mark.parametrize("name", ["deliver-wagers.yml", "settle-wagers.yml"])
 def test_destination_clones_are_retried_and_scoped_to_their_own_sport(name):
     text = (ROOT / ".github/workflows" / name).read_text()
-    assert "clone_retry()" in text
+    assert 'source "${GITHUB_WORKSPACE}/scripts/clone_retry.sh"' in text  # behaviour: tests/test_clone_retry.py
     # no bare clone inside the per-destination loop: every clone goes through the retrying helper
     loop = text[text.index('for payload in "${payloads[@]}"'):]
     assert "git clone" not in loop, "a bare `git clone` under set -e would abort every later destination"
