@@ -159,6 +159,19 @@ jobs:
               failures=$((failures + 1))
             fi
           }
+          # Transient clone failure on one destination must cost THAT sport its run, not abort the step under
+          # `set -e` and skip every later destination (deliver run 41494783124). Retry, then count and continue.
+          clone_retry() {
+            local attempt delay=2
+            for attempt in 1 2 3 4; do
+              rm -rf "${@: -1}"
+              if git clone --quiet --depth 1 "$@"; then return 0; fi
+              [ "${attempt}" -lt 4 ] || break
+              echo "  clone attempt ${attempt} failed; retrying in ${delay}s" >&2
+              sleep "${delay}"; delay=$((delay * 2))
+            done
+            return 1
+          }
           for payload in "${payloads[@]}"; do
             base="$(basename "${payload}" .json)"
             sport="${base%-settlements}"
@@ -202,8 +215,11 @@ jobs:
 
             work="${RUNNER_TEMP}/settle-${sport}"
             rm -rf "${work}"
-            git clone --quiet --depth 1 --branch "${ledger_branch}" \
-              "https://github.com/${repo}" "${work}"
+            if ! clone_retry --branch "${ledger_branch}" "https://github.com/${repo}" "${work}"; then
+              echo "::error::${sport}: could not clone ${repo}@${ledger_branch} after retries. No settlement was imported."
+              failures=$((failures + 1))
+              continue
+            fi
 
             git -C "${work}" config credential.helper \
               '!f() { echo "username=x-access-token"; echo "password=${DOWNSTREAM_REPO_TOKEN}"; }; f'
@@ -256,8 +272,11 @@ jobs:
             if [ "${needs_code}" = "true" ]; then
               code="${RUNNER_TEMP}/settle-code-${sport}"
               rm -rf "${code}"
-              git clone --quiet --depth 1 --branch "${code_branch}" \
-                "https://github.com/${repo}" "${code}"
+              if ! clone_retry --branch "${code_branch}" "https://github.com/${repo}" "${code}"; then
+                echo "::error::${sport}: could not clone ${repo}@${code_branch} after retries. No settlement was imported."
+                failures=$((failures + 1))
+                continue
+              fi
             fi
 
             # THE SEASON COMES FROM THE WAGERS ALREADY IN THE LEDGER, not from

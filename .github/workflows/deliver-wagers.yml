@@ -177,6 +177,21 @@ jobs:
               failures=$((failures + 1))
             fi
           }
+          # A transient network failure on ONE destination's clone (run 41494783124: "curl 56 Connection reset" while
+          # cloning MLB) used to abort this whole step under `set -e`, so every LATER destination (NBA, NFL, ...) was
+          # silently skipped that run -- contradicting "one failing sport cannot take every other destination down".
+          # Retry with backoff; if it still fails, count THAT sport as failed and move on.
+          clone_retry() {
+            local attempt delay=2
+            for attempt in 1 2 3 4; do
+              rm -rf "${@: -1}"
+              if git clone --quiet --depth 1 "$@"; then return 0; fi
+              [ "${attempt}" -lt 4 ] || break
+              echo "  clone attempt ${attempt} failed; retrying in ${delay}s" >&2
+              sleep "${delay}"; delay=$((delay * 2))
+            done
+            return 1
+          }
           for payload in "${payloads[@]}"; do
             sport="$(basename "${payload}" .json)"
             note_sport_status
@@ -223,8 +238,11 @@ jobs:
             # ledger.
             work="${RUNNER_TEMP}/dest-${sport}"
             rm -rf "${work}"
-            git clone --quiet --depth 1 --branch "${ledger_branch}" \
-              "https://github.com/${repo}" "${work}"
+            if ! clone_retry --branch "${ledger_branch}" "https://github.com/${repo}" "${work}"; then
+              echo "::error::${sport}: could not clone ${repo}@${ledger_branch} after retries. Nothing was imported or pushed."
+              failures=$((failures + 1))
+              continue
+            fi
 
             # THE CODE CHECKOUT, when the importer's source is somewhere else.
             # Conflating the two is how a delivery runs an importer that does
@@ -233,8 +251,11 @@ jobs:
             if [ "${needs_code}" = "true" ]; then
               code="${RUNNER_TEMP}/code-${sport}"
               rm -rf "${code}"
-              git clone --quiet --depth 1 --branch "${code_branch}" \
-                "https://github.com/${repo}" "${code}"
+              if ! clone_retry --branch "${code_branch}" "https://github.com/${repo}" "${code}"; then
+                echo "::error::${sport}: could not clone ${repo}@${code_branch} after retries. Nothing was imported or pushed."
+                failures=$((failures + 1))
+                continue
+              fi
             fi
 
             # THE SEASON, for a ledger that is one file per season. Taken from
