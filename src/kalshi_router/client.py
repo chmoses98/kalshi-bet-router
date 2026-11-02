@@ -61,6 +61,7 @@ READ_ONLY_PATH_PREFIXES = (
     "/historical/fills",
     "/historical/cutoff",
     "/historical/settlements",
+    "/historical/markets/",
     "/markets/",
     "/events/",
     "/series/",
@@ -423,6 +424,37 @@ class KalshiReadOnlyClient:
     def get_market(self, ticker: str) -> dict[str, Any]:
         payload = self._get(f"/markets/{ticker}", "get_market")
         return _require_object(payload, "market", "get_market")
+
+    def get_market_candlesticks(
+        self,
+        *,
+        series_ticker: str,
+        ticker: str,
+        start_ts: int,
+        end_ts: int,
+        period_interval: int,
+        historical: bool = False,
+    ) -> list:
+        """Candlesticks for one market, strictly parsed (see :mod:`kalshi_router.closes`).
+
+        Bounded on the client side: a window that could return more than 5000 candles is refused rather than
+        silently truncated by the server, and the period must be one Kalshi documents (1, 60 or 1440 minutes).
+        """
+        from .closes import ALLOWED_PERIODS, MAX_CANDLES, parse_candlesticks
+
+        if period_interval not in ALLOWED_PERIODS:
+            raise SchemaError(f"period_interval must be one of {ALLOWED_PERIODS}")
+        if not (isinstance(start_ts, int) and isinstance(end_ts, int)) or isinstance(start_ts, bool) or start_ts >= end_ts:
+            raise SchemaError("start_ts and end_ts must be integers with start_ts < end_ts")
+        if (end_ts - start_ts) // (period_interval * 60) >= MAX_CANDLES:
+            raise SchemaError("candlestick window too large: it could exceed the per-request candle limit")
+        if historical:
+            path = f"/historical/markets/{ticker}/candlesticks"
+        else:
+            path = f"/series/{series_ticker}/markets/{ticker}/candlesticks"
+        payload = self._get(path, "get_market_candlesticks",
+                            {"start_ts": start_ts, "end_ts": end_ts, "period_interval": period_interval})
+        return parse_candlesticks(payload, "get_market_candlesticks")
 
     def get_event(self, event_ticker: str) -> dict[str, Any]:
         payload = self._get(f"/events/{event_ticker}", "get_event")

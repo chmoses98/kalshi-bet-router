@@ -388,6 +388,7 @@ def _subcommand_argvs(tmp_path):
         "bankroll": ["--out", str(tmp_path / "bankroll.json")],
         "deliver": ["--out-dir", str(tmp_path / "payloads")],
         "series-probe": [],
+        "closes": [],
         "backfill": ["--since", "2026-09-11T00:00:00Z"],
         "settle": ["--since", "2026-09-11T00:00:00Z", "--destination", "NFL"],
         "settle-live": ["--out-dir", str(tmp_path / "settlements")],

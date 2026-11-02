@@ -63,3 +63,46 @@ from their own Kalshi account to match a row. Nothing here changes a wager row, 
   second identical import changed nothing; branch `kalshi-router/settle-NBA` pushed and nba-edge-finder PR #86 opened; merge gate
   verdict `MERGE` but `HELD FOR OBSERVATION` (`auto_merge=False`), so it is **not** merged; reconciliation `on ledger 0, proposed
   not merged 47, UNACCOUNTED 0`. Same run: CFB 290, NFL 228, NHL 35, SOCCER 9 all `DUPLICATE_NOOP`; `destinations that failed: 0`.
+
+## Execution-evidence ledger, close resolver, and NBA verification (follow-up PR after #117)
+
+### What landed
+* **`contract/standalone/execution_evidence_ledger.py`** (single file, zero dependencies, schema
+  `edge_finder.execution_evidence.v1`, sha256-pinned in `contract/standalone/execution_evidence_ledger.sha256`).
+  An append-only ledger **beside** the wager ledger, keyed by the wager's `source_bet_key`, with three kinds:
+  `EXECUTION` (order/fill **digests**, first/last fill time, buy/sell verb, taker flag; producer `router`),
+  `CLOSE` (closing quote with a quality label; producer `router` or `edge_finder`), and `LINK` (recommendation ref,
+  model-run ref, `model_as_of`; producer `edge_finder` only).
+* **Why a separate file, not new wager fields.** `routed_ledger.WAGER_INPUT_FIELDS` is closed and every importer refuses
+  an unknown field; wager rows are never rewritten. A separate ledger means no wager importer can refuse a wager
+  because of evidence, and evidence for wagers already filed can be added without rewriting them. A test asserts the
+  wager contract is byte-for-byte unchanged and that an evidence file beside the wagers does not disturb the importer.
+* **Privacy (every repository is public).** Only 32-hex digests are accepted; any field *named* like a raw id and any
+  string *shaped* like a UUID is refused, and a refusal never echoes the offending value.
+* **Recommendation links are never guessed.** `link_recommendation` links only on an exact market+side match created
+  before the first fill and inside a caller-supplied window (no default window). Zero matches -> `MISSING`; two or
+  more distinct recommendations -> `AMBIGUOUS` (not resolved by "nearest").
+* **`kalshi_router/closes.py`**: strict candlestick parser, `get_market_candlesticks` (read-only, allowlisted, bounded),
+  and a resolver that labels every close `TRUE_CLOSE` / `EARLIER_QUOTE_PROXY` / `MISSING`. A proxy is never labelled a close; a
+  daily candle can never be a true close; the cutoff is an input and is never inferred.
+* **`closes` CLI subcommand + `resolve-closes.yml`**: read-only, counts only, main-only, `contents: read`, no artifacts,
+  no caches, never dispatched from a branch.
+* **Gate.** `DestinationProfile.evidence_importer` / `evidence_ledger_path` default to `None` and **no profile sets them**.
+  `evidence_emission.emission_allowed` needs both the operator switch `ROUTER_EMIT_EXECUTION_EVIDENCE=1` (default off) and a
+  destination that declares an importer, so the router can merge before the destinations without anyone being sent
+  something they cannot take.
+
+### Required merge order
+1. The six destination PRs that vendor the single file (nba, soccer, tennis, NHL, cfb, nfl) - each adds one file and one test.
+2. This router PR (inert: no profile accepts evidence yet).
+3. A later, separate router change sets `evidence_importer` / `evidence_ledger_path` per destination and wires emission into
+   `deliver-wagers.yml` - only after step 1 is merged for that destination, and only with the switch on.
+
+### Not verified, and why
+* **Candlestick response shape.** The build container's egress policy denies `api.elections.kalshi.com` (HTTP 403 on CONNECT),
+  so the parser follows Kalshi's *documented* shape and its fixtures are reproductions of it, not captured payloads. It
+  refuses anything else rather than coercing. `resolve-closes.yml` is the live verification and has **not** been run.
+* **Cutoff source.** The coverage runner takes the scheduled start from the event's `strike_date` only; a market whose
+  event states none is counted `no_cutoff`. Whether `strike_date` is the game start for sports events is unverified live.
+* **Historical route.** `/historical/markets/{ticker}/candlesticks` is allowlisted and tried only when the live route is
+  empty; its availability for the relevant markets is unverified.
