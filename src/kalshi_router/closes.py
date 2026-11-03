@@ -29,7 +29,7 @@ never logged.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from typing import Any
 
@@ -122,6 +122,8 @@ class ResolvedClose:
     minutes_before_cutoff: int | None = None
     flags: tuple[str, ...] = ()
     reason: str | None = None
+    #: Where the cutoff came from (e.g. ``EXCHANGE_STRIKE_DATE``); ``None`` when the caller did not say.
+    cutoff_source: str | None = None
 
     @property
     def yes_mid(self) -> Decimal | None:
@@ -142,7 +144,7 @@ class ResolvedClose:
             "yes_mid": num(self.yes_mid), "last_trade": num(self.last_trade), "as_of_ts": self.as_of_ts,
             "cutoff_ts": self.cutoff_ts, "period_minutes": self.period_minutes,
             "minutes_before_cutoff": self.minutes_before_cutoff, "source_endpoint": self.source_endpoint,
-            "flags": list(self.flags),
+            "flags": list(self.flags), "cutoff_source": self.cutoff_source,
         }
         return {k: v for k, v in body.items() if v is not None or k in ("flags",)}
 
@@ -197,7 +199,8 @@ def endpoint_name(historical: bool) -> str:
 
 def fetch_and_resolve(client: Any, *, series_ticker: str, ticker: str, cutoff_ts: int | None,
                       lookback_minutes: int = 120, wide_lookback_hours: int = 48,
-                      allow_historical: bool = True, **resolve_kwargs: Any) -> ResolvedClose:
+                      allow_historical: bool = True, cutoff_source: str | None = None,
+                      **resolve_kwargs: Any) -> ResolvedClose:
     """Two-tier fetch: 1-minute candles over the last ``lookback_minutes``, then 60-minute candles over
     ``wide_lookback_hours``; the live route first and the historical route only when allowed and the live one is
     empty. Bounded: a handful of requests per market, never a walk."""
@@ -212,10 +215,11 @@ def fetch_and_resolve(client: Any, *, series_ticker: str, ticker: str, cutoff_ts
                 period_interval=period, historical=historical)
             got = resolve_close(candles, cutoff_ts=cutoff_ts, period_minutes=period,
                                 source_endpoint=endpoint_name(historical), **resolve_kwargs)
+            got = replace(got, cutoff_source=cutoff_source)
             if got.quality == TRUE_CLOSE:
                 return got
             if got.quality == EARLIER_QUOTE_PROXY and (best is None or got.as_of_ts > (best.as_of_ts or 0)):
                 best = got
             if candles:
                 break  # the live route answered; do not also ask the historical one
-    return best or missing("NO_CANDLE_AT_OR_BEFORE_CUTOFF", cutoff_ts)
+    return best or replace(missing("NO_CANDLE_AT_OR_BEFORE_CUTOFF", cutoff_ts), cutoff_source=cutoff_source)
