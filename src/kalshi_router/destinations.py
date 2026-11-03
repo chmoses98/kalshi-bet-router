@@ -188,6 +188,18 @@ class DestinationProfile:
     (lib/edgelab/combo_contract_settlement.py), leaving it pending when that result is not final or not
     binary."""
 
+    evidence_importer: tuple[str, ...] | None = None
+    """The destination's execution-evidence importer (``scripts/accounting/execution_evidence_ledger.py import ...``).
+
+    None means THIS DESTINATION DOES NOT YET ACCEPT execution evidence, and the router emits none to it
+    (``evidence_emission.emission_allowed``). It is set per destination only AFTER that destination has merged the
+    vendored ``contract/standalone/execution_evidence_ledger.py``. No profile sets it in the change that introduced
+    the field: destinations first, router emission last."""
+
+    evidence_ledger_path: str | None = None
+    """Where the evidence JSONL lives on the destination's ledger branch (relative to the checkout root). Required
+    together with ``evidence_importer``; it must sit under one of ``committable_prefixes``."""
+
 
 #: Every destination production routing is willing to push to.
 #:

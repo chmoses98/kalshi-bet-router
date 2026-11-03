@@ -288,6 +288,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
+    closes_cmd = sub.add_parser(
+        "closes",
+        help="READ-ONLY: count how many traded markets have a TRUE close, an earlier-quote proxy, or none (counts only)",
+    )
+    closes_cmd.add_argument("--max-fills", type=int, default=500)
+    closes_cmd.add_argument("--max-markets", type=int, default=400)
+    closes_cmd.add_argument("--prefix", action="append", default=[],
+                            help="only markets whose ticker starts with this (repeatable)")
+    closes_cmd.set_defaults(show_sensitive_details=False, page_limit=None)
+
     audit = sub.add_parser("audit", help="fetch recent fills and report aggregate counts")
     audit.add_argument(
         "--max-fills",
@@ -957,6 +967,19 @@ def _nhl_live_sample(client, taxonomy) -> str:
     ])
 
 
+def _run_closes(args, client, out, err) -> int:
+    from .close_coverage import run_close_coverage
+
+    try:
+        cov = run_close_coverage(client, max_fills=args.max_fills, prefixes=tuple(args.prefix),
+                                 max_markets=args.max_markets)
+    except KalshiRouterError as exc:
+        print(f"closes failed: {type(exc).__name__}: {exc}", file=err)
+        return EXIT_API
+    print(json.dumps(cov.as_dict(), indent=2, sort_keys=True), file=out)
+    return 0
+
+
 def main(argv: list[str] | None = None, stdout=None, stderr=None) -> int:
     out = stdout if stdout is not None else sys.stdout
     err = stderr if stderr is not None else sys.stderr
@@ -1002,6 +1025,9 @@ def main(argv: list[str] | None = None, stdout=None, stderr=None) -> int:
         return EXIT_CONFIG
 
     client = KalshiReadOnlyClient(signer=signer, config=config)
+
+    if args.command == "closes":
+        return _run_closes(args, client, out, err)
 
     if args.command == "deliver":
         return _run_deliver(args, client, out, err)

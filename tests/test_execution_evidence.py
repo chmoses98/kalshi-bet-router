@@ -102,3 +102,51 @@ def test_the_sidecar_is_not_a_routed_wager_row():
     from edge_finder_contract.routed_ledger import WAGER_INPUT_FIELDS
     row = build_execution_evidence(order()).to_sidecar_row()
     assert {"order_id_digest", "fill_id_digests", "first_fill_ts"} <= set(row) - set(WAGER_INPUT_FIELDS)
+
+
+# --- cross-repository agreement ----------------------------------------------------------------------------
+# These four vectors are asserted verbatim in every destination's vendored test, with the formula inlined there
+# (hashlib only), so a sport repository that computes recommendation_ref / model_run_ref a different way fails
+# ITS OWN CI and the join in link_recommendation can never silently stop matching.
+GOLDEN_DIGESTS = (
+    ("order", "ORDER-X", "70b17cbeb58152c522d8be2a9a30ac34"),
+    ("fill", "FILL-X", "b34311e543285f452dd37dc618573dcb"),
+    ("recommendation", "rec_0001", "34284d398be9830fd5ca1d76f8a673f1"),
+    ("model_run", "run_0001", "6e039e855b3d236b125624c33b87427b"),
+)
+
+
+@pytest.mark.parametrize("kind,value,expected", GOLDEN_DIGESTS)
+def test_golden_digest_vectors_are_the_cross_repository_agreement(kind, value, expected):
+    assert id_digest(kind, value) == expected
+
+
+def test_unknown_digest_kinds_are_refused():
+    with pytest.raises(ValueError):
+        id_digest("trade", "x")
+
+
+def test_sidecar_carries_execution_price_quantity_fee_and_first_last_fill_times():
+    row = build_execution_evidence(order()).to_sidecar_row()
+    assert row["schema_version"] == SCHEMA_VERSION == "router_execution_evidence.v2"
+    assert (row["vwap_price"], row["total_quantity"], row["total_fee"]) == (0.56, 10, 0.01)
+    assert (row["first_fill_ts"], row["last_fill_ts"]) == (1788264060, 1788264075)
+    assert "PRICE_NOT_ESTABLISHED" not in row["flags"]
+
+
+def test_a_missing_price_is_flagged_never_filled_in():
+    row = build_execution_evidence(order(vwap_price=None, total_fee=None)).to_sidecar_row()
+    assert row["vwap_price"] is None and row["total_fee"] is None
+    assert "PRICE_NOT_ESTABLISHED" in row["flags"]
+
+
+def test_no_raw_identifier_reaches_any_output():
+    import re
+
+    uuid = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+    raw_order = "0f8fad5b-d9cb-469f-a165-70867728950e"
+    raw_fills = ("7c9e6679-7425-40de-944b-e07fc1f90ae7", "1b4e28ba-2fa1-11d2-883f-0016d3cca427")
+    ev = build_execution_evidence(order(order_id=raw_order, fill_ids=raw_fills))
+    blob = json.dumps(ev.to_sidecar_row(), sort_keys=True) + repr(ev)
+    assert raw_order not in blob and not any(f in blob for f in raw_fills)
+    assert not uuid.search(blob)
