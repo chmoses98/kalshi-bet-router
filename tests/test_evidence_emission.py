@@ -67,3 +67,11 @@ def test_rows_built_from_real_objects_validate_against_the_vendored_ledger():
     rc = ResolvedClose(TRUE_CLOSE, 1_790_000_100, 1, "series_market_candlesticks", as_of_ts=1_790_000_060,
                        yes_bid=Decimal("0.48"), yes_ask=Decimal("0.52"), minutes_before_cutoff=0)
     assert L.validate_row(em.close_row(key, "KXA-1", "YES", rc, NOW)) == []
+
+
+def test_no_payload_is_built_for_any_destination_even_with_the_switch_on():
+    # The compatibility record is the profile's own declaration of an importer. Until a destination has merged the
+    # vendored ledger and its profile says so, nothing is built for it, switch or no switch.
+    for sport, profile in PROFILES.items():
+        assert em.build_payload(profile, [{"x": 1}], {em.EMIT_ENV: "1"}) is None, sport
+        assert em.build_payload(profile, [{"x": 1}], {}) is None, sport

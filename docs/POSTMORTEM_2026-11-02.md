@@ -106,3 +106,13 @@ from their own Kalshi account to match a row. Nothing here changes a wager row, 
   event states none is counted `no_cutoff`. Whether `strike_date` is the game start for sports events is unverified live.
 * **Historical route.** `/historical/markets/{ticker}/candlesticks` is allowlisted and tried only when the live route is
   empty; its availability for the relevant markets is unverified.
+
+## Digest domains and golden vectors (cross-repository agreement)
+
+Every id that appears in an evidence ledger is a 32-hex digest: `sha256("kalshi-router.execution-evidence.v1|<kind>|<id>")[:32]`,
+with `<kind>` one of `order`, `fill`, `recommendation`, `model_run`. The router produces `order` and `fill`; the sport
+repositories produce `recommendation` and `model_run` from their own private decision-record ids, with the same formula
+(copy the formula, not the module). The golden vectors in `tests/test_execution_evidence.py::GOLDEN_DIGESTS` are asserted
+verbatim in each destination's vendored test, so a repository that derives a ref differently fails its own CI and the
+exact-match join (`link_recommendation`) cannot silently stop matching. The sidecar (`router_execution_evidence.v2`) also
+carries `vwap_price`, `total_quantity` and `total_fee`; the wager row remains the canonical price record.

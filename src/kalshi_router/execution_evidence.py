@@ -46,16 +46,22 @@ from typing import Any
 from .accounting.execution import OrderExecution
 from .production import ProductionWager, production_source_key
 
-SCHEMA_VERSION = "router_execution_evidence.v1"
+SCHEMA_VERSION = "router_execution_evidence.v2"  # v2 (additive): vwap_price / total_quantity / total_fee in the sidecar
 FILL_IDS_MISSING = "FILL_IDS_MISSING"
 ACTION_NOT_ESTABLISHED = "ACTION_NOT_ESTABLISHED"
 TAKER_NOT_ESTABLISHED = "TAKER_NOT_ESTABLISHED"
+PRICE_NOT_ESTABLISHED = "PRICE_NOT_ESTABLISHED"
+#: The digest DOMAINS. ``order`` and ``fill`` are produced by the router. ``recommendation`` and ``model_run`` are
+#: produced by the SPORT repositories from their own private decision-record ids, with this same function (copy the
+#: formula, not the module: ``sha256("kalshi-router.execution-evidence.v1|<kind>|<id>")[:32]``). The golden vectors in
+#: tests/test_execution_evidence.py are the cross-repository agreement; every vendored test asserts the same ones.
+ID_KINDS = ("order", "fill", "recommendation", "model_run")
 DIGEST_HEX_CHARS = 32  # 128 bits: ample for a collision-free match against the owner's own ids
 
 
 def id_digest(kind: str, value: str) -> str:
     """Domain-separated digest. ``kind`` stops an order id and a fill id that happen to be equal from colliding."""
-    if kind not in ("order", "fill"):
+    if kind not in ID_KINDS:
         raise ValueError(f"unknown id kind {kind!r}")
     material = f"kalshi-router.execution-evidence.v1|{kind}|{value}".encode()
     return hashlib.sha256(material).hexdigest()[:DIGEST_HEX_CHARS]
@@ -78,6 +84,11 @@ class ExecutionEvidence:
     execution_action: str | None
     all_taker: bool | None
     flags: tuple[str, ...]
+    #: Quantity-weighted average execution price in dollars; ``None`` (flag PRICE_NOT_ESTABLISHED) when any fill
+    #: lacked one. The wager row remains the canonical record of the price; this is the cross-check.
+    vwap_price: int | float | None = None
+    total_quantity: int | float | None = None
+    total_fee: int | float | None = None
 
     def to_sidecar_row(self) -> dict[str, Any]:
         return {
@@ -91,6 +102,9 @@ class ExecutionEvidence:
             "execution_action": self.execution_action,
             "all_taker": self.all_taker,
             "flags": list(self.flags),
+            "vwap_price": self.vwap_price,
+            "total_quantity": self.total_quantity,
+            "total_fee": self.total_fee,
         }
 
 
@@ -110,6 +124,8 @@ def build_execution_evidence(
         flags.append(ACTION_NOT_ESTABLISHED)
     if order.all_taker is None:
         flags.append(TAKER_NOT_ESTABLISHED)
+    if order.vwap_price is None:
+        flags.append(PRICE_NOT_ESTABLISHED)
     return ExecutionEvidence(
         source_bet_key=key,
         order_id_digest=id_digest("order", order.order_id),
@@ -120,4 +136,7 @@ def build_execution_evidence(
         execution_action=action,
         all_taker=order.all_taker,
         flags=tuple(flags),
+        vwap_price=None if order.vwap_price is None else _num(order.vwap_price),
+        total_quantity=_num(order.total_quantity),
+        total_fee=None if order.total_fee is None else _num(order.total_fee),
     )
