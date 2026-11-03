@@ -43,10 +43,11 @@ import json
 import math
 import re
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 SCHEMA_VERSION = "edge_finder.execution_evidence.v1"
 NEW, DUPLICATE_NOOP, CONFLICT, REFUSED = "NEW", "DUPLICATE_NOOP", "CONFLICT", "REFUSED"
@@ -61,16 +62,40 @@ LINK_LINKED, LINK_AMBIGUOUS, LINK_MISSING = "LINKED", "AMBIGUOUS", "MISSING"
 LINK_STATUSES = (LINK_LINKED, LINK_AMBIGUOUS, LINK_MISSING)
 
 DIGEST_RE = re.compile(r"^[0-9a-f]{32}$")
-_UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
-_RAW_ID_NAME_RE = re.compile(r"(^|_)(order|fill|trade|client_order|exec(ution)?)_?ids?$|^(fills?|orders?)$", re.I)
+_UUID_RE = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+)
+_RAW_ID_NAME_RE = re.compile(
+    r"(^|_)(order|fill|trade|client_order|exec(ution)?)_?ids?$|^(fills?|orders?)$", re.IGNORECASE
+)
 _SOURCE_KEY_RE = re.compile(r"^kalshi:v1:[0-9a-f]{64}$")
 
 _COMMON = {"schema_version", "kind", "producer", "source_bet_key", "recorded_at"}
-_EXECUTION = {"order_id_digest", "fill_id_digests", "fill_count", "first_fill_ts", "last_fill_ts",
-              "execution_action", "all_taker", "flags"}
+_EXECUTION = {
+    "order_id_digest",
+    "fill_id_digests",
+    "fill_count",
+    "first_fill_ts",
+    "last_fill_ts",
+    "execution_action",
+    "all_taker",
+    "flags",
+}
 _CLOSE = {"market_ticker", "side", "close"}
-_CLOSE_BODY = {"quality", "yes_bid", "yes_ask", "yes_mid", "last_trade", "as_of_ts", "cutoff_ts", "period_minutes",
-               "minutes_before_cutoff", "source_endpoint", "flags", "reason"}
+_CLOSE_BODY = {
+    "quality",
+    "yes_bid",
+    "yes_ask",
+    "yes_mid",
+    "last_trade",
+    "as_of_ts",
+    "cutoff_ts",
+    "period_minutes",
+    "minutes_before_cutoff",
+    "source_endpoint",
+    "flags",
+    "reason",
+}
 _LINK = {"status", "recommendation_ref", "model_run_ref", "model_as_of", "link_basis"}
 _ALLOWED = {
     KIND_EXECUTION: _COMMON | _EXECUTION,
@@ -96,7 +121,7 @@ def _aware_ts(v: Any) -> bool:
     if not isinstance(v, str) or "T" not in v:
         return False
     try:
-        return datetime.fromisoformat(v.replace("Z", "+00:00")).tzinfo is not None
+        return datetime.fromisoformat(v).tzinfo is not None
     except ValueError:
         return False
 
@@ -132,10 +157,14 @@ def privacy_problems(row: Any) -> list[str]:
     problems = []
     for key in _walk_keys(row):
         if _RAW_ID_NAME_RE.search(key):
-            problems.append(f"field name {key!r} looks like a raw exchange id; only *_digest fields are accepted")
+            problems.append(
+                f"field name {key!r} looks like a raw exchange id; only *_digest fields are accepted"
+            )
     for s in _walk_strings(row):
         if _UUID_RE.search(s):
-            problems.append("a string value is shaped like a UUID (a raw order/fill/trade id); refused")
+            problems.append(
+                "a string value is shaped like a UUID (a raw order/fill/trade id); refused"
+            )
             break
     return problems
 
@@ -157,7 +186,9 @@ def validate_row(row: Any) -> list[str]:
         out.append(f"schema_version must be {SCHEMA_VERSION}")
     if row.get("producer") not in _PRODUCERS[kind]:
         out.append(f"{kind} rows may only be produced by {sorted(_PRODUCERS[kind])}")
-    if not (isinstance(row.get("source_bet_key"), str) and _SOURCE_KEY_RE.match(row["source_bet_key"])):
+    if not (
+        isinstance(row.get("source_bet_key"), str) and _SOURCE_KEY_RE.match(row["source_bet_key"])
+    ):
         out.append("source_bet_key must be kalshi:v1:<64 hex>")
     if "recorded_at" in row and not _aware_ts(row["recorded_at"]):
         out.append("recorded_at must be an RFC 3339 timestamp with a zone")
@@ -172,10 +203,14 @@ def validate_row(row: Any) -> list[str]:
 
 def _validate_execution(row: dict) -> list[str]:
     out = []
-    if not (isinstance(row.get("order_id_digest"), str) and DIGEST_RE.match(row["order_id_digest"])):
+    if not (
+        isinstance(row.get("order_id_digest"), str) and DIGEST_RE.match(row["order_id_digest"])
+    ):
         out.append("order_id_digest must be 32 lowercase hex characters")
     fills = row.get("fill_id_digests")
-    if not isinstance(fills, list) or not all(isinstance(d, str) and DIGEST_RE.match(d) for d in fills):
+    if not isinstance(fills, list) or not all(
+        isinstance(d, str) and DIGEST_RE.match(d) for d in fills
+    ):
         out.append("fill_id_digests must be a list of 32-hex digests (possibly empty)")
     elif len(set(fills)) != len(fills):
         out.append("fill_id_digests contains a duplicate")
@@ -185,7 +220,8 @@ def _validate_execution(row: dict) -> list[str]:
     for name in ("first_fill_ts", "last_fill_ts"):
         if not _is_num(row.get(name)) or row[name] <= 0:
             out.append(f"{name} must be a positive epoch time")
-    if _is_num(row.get("first_fill_ts")) and _is_num(row.get("last_fill_ts")) and row["last_fill_ts"] < row["first_fill_ts"]:
+    first, last = row.get("first_fill_ts"), row.get("last_fill_ts")
+    if _is_num(first) and _is_num(last) and last < first:
         out.append("last_fill_ts precedes first_fill_ts")
     if row.get("execution_action") not in (None, "BUY", "SELL"):
         out.append("execution_action must be BUY, SELL or null (null = not established)")
@@ -230,7 +266,11 @@ def _validate_close(row: dict) -> list[str]:
     for n in ("as_of_ts", "cutoff_ts"):
         if not _is_num(c.get(n)) or c[n] <= 0:
             out.append(f"close.{n} must be a positive epoch time")
-    if _is_num(c.get("as_of_ts")) and _is_num(c.get("cutoff_ts")) and c["as_of_ts"] > c["cutoff_ts"]:
+    if (
+        _is_num(c.get("as_of_ts"))
+        and _is_num(c.get("cutoff_ts"))
+        and c["as_of_ts"] > c["cutoff_ts"]
+    ):
         out.append("a close observed AFTER its cutoff is not a pre-start close")
     if not (isinstance(c.get("source_endpoint"), str) and c["source_endpoint"]):
         out.append("close.source_endpoint is required")
@@ -256,9 +296,8 @@ def _validate_link(row: dict) -> list[str]:
             out.append("a LINKED row must carry recommendation_ref")
         if row.get("model_as_of") is None or not _aware_ts(row.get("model_as_of")):
             out.append("a LINKED row must carry model_as_of as an RFC 3339 timestamp with a zone")
-    else:
-        if refs or row.get("model_as_of") is not None:
-            out.append(f"a {status} row carries no reference and no model_as_of")
+    elif refs or row.get("model_as_of") is not None:
+        out.append(f"a {status} row carries no reference and no model_as_of")
     if not isinstance(row.get("link_basis"), dict) or not row["link_basis"]:
         out.append("link_basis (how the match was made) is required")
     return out
@@ -316,7 +355,9 @@ def import_rows(ledger: Path, rows: list) -> ImportResult:
         problems = validate_row(row)
         if problems:
             res.refused += 1
-            res.receipts.append({"row": i, "status": REFUSED, "success": False, "reason": "; ".join(problems)})
+            res.receipts.append(
+                {"row": i, "status": REFUSED, "success": False, "reason": "; ".join(problems)}
+            )
             continue
         key = row_key(row)
         prior = on_file.get(key)
@@ -326,9 +367,15 @@ def import_rows(ledger: Path, rows: list) -> ImportResult:
                 res.receipts.append({"row": i, "status": DUPLICATE_NOOP, "success": True})
             else:
                 res.refused += 1
-                res.receipts.append({"row": i, "status": CONFLICT, "success": False,
-                                     "reason": "same key already on the ledger with different content; "
-                                               "an existing row is never rewritten"})
+                res.receipts.append(
+                    {
+                        "row": i,
+                        "status": CONFLICT,
+                        "success": False,
+                        "reason": "same key already on the ledger with different content; "
+                        "an existing row is never rewritten",
+                    }
+                )
             continue
         on_file[key] = row
         new.append(row)
@@ -367,8 +414,9 @@ def validate_ledger(ledger: Path, wager_keys: set[str] | None = None) -> list[st
 # --------------------------------------------------------------------------- recommendation join
 
 
-def link_recommendation(execution: dict, candidates: list[dict], *, window_seconds: float,
-                        market_ticker: str, side: str) -> dict:
+def link_recommendation(
+    execution: dict, candidates: list[dict], *, window_seconds: float, market_ticker: str, side: str
+) -> dict:
     """The LINK row for one EXECUTION row. Exact, unique matches only -- never a guess.
 
     ``candidates`` come from the sport repository's own decision records. Each must carry ``market_ticker``,
@@ -379,23 +427,43 @@ def link_recommendation(execution: dict, candidates: list[dict], *, window_secon
     nearest, because choosing between two recommendations for one fill is exactly the guess this ledger must not make.
     """
     if window_seconds <= 0:
-        raise ValueError("window_seconds must be positive: there is no default window to hide a guess in")
+        raise ValueError(
+            "window_seconds must be positive: there is no default window to hide a guess in"
+        )
     first = execution["first_fill_ts"]
-    hits = [c for c in candidates
-            if c.get("market_ticker") == market_ticker and c.get("side") == side
-            and _is_num(c.get("created_at_ts")) and 0 <= first - c["created_at_ts"] <= window_seconds]
+    hits = [
+        c
+        for c in candidates
+        if c.get("market_ticker") == market_ticker
+        and c.get("side") == side
+        and _is_num(c.get("created_at_ts"))
+        and 0 <= first - c["created_at_ts"] <= window_seconds
+    ]
     refs = sorted({c.get("recommendation_ref") for c in hits})
-    basis = {"match": "market+side exact; created before first fill", "window_seconds": window_seconds,
-             "candidates_considered": len(hits)}
-    base = {"schema_version": SCHEMA_VERSION, "kind": KIND_LINK, "producer": PRODUCER_EDGE_FINDER,
-            "source_bet_key": execution["source_bet_key"], "link_basis": basis}
+    basis = {
+        "match": "market+side exact; created before first fill",
+        "window_seconds": window_seconds,
+        "candidates_considered": len(hits),
+    }
+    base = {
+        "schema_version": SCHEMA_VERSION,
+        "kind": KIND_LINK,
+        "producer": PRODUCER_EDGE_FINDER,
+        "source_bet_key": execution["source_bet_key"],
+        "link_basis": basis,
+    }
     if not hits:
         return {**base, "status": LINK_MISSING}
     if len(refs) > 1:
         return {**base, "status": LINK_AMBIGUOUS}
     pick = max(hits, key=lambda c: c["created_at_ts"])
-    return {**base, "status": LINK_LINKED, "recommendation_ref": pick["recommendation_ref"],
-            "model_run_ref": pick.get("model_run_ref"), "model_as_of": pick["model_as_of"]}
+    return {
+        **base,
+        "status": LINK_LINKED,
+        "recommendation_ref": pick["recommendation_ref"],
+        "model_run_ref": pick.get("model_run_ref"),
+        "model_as_of": pick["model_as_of"],
+    }
 
 
 # --------------------------------------------------------------------------- CLI
@@ -404,34 +472,50 @@ def link_recommendation(execution: dict, candidates: list[dict], *, window_secon
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
-    imp = sub.add_parser("import", help="append evidence rows from a payload {\"evidence\": [...]}")
+    imp = sub.add_parser("import", help='append evidence rows from a payload {"evidence": [...]}')
     imp.add_argument("--payload", required=True)
-    imp.add_argument("--ledger", required=True, help="path of the evidence JSONL on the destination's ledger branch")
+    imp.add_argument(
+        "--ledger",
+        required=True,
+        help="path of the evidence JSONL on the destination's ledger branch",
+    )
     imp.add_argument("--receipts-out")
     val = sub.add_parser("validate", help="check an existing evidence ledger")
     val.add_argument("--ledger", required=True)
-    val.add_argument("--wagers", help="optional wagers JSONL: every evidence row must belong to one of its wagers")
+    val.add_argument(
+        "--wagers",
+        help="optional wagers JSONL: every evidence row must belong to one of its wagers",
+    )
     val.add_argument("--result-out")
     args = ap.parse_args(argv)
     if args.cmd == "import":
         payload = json.loads(Path(args.payload).read_text(encoding="utf-8"))
         rows = payload.get("evidence") if isinstance(payload, dict) else None
         if not isinstance(rows, list):
-            print("payload must be {\"evidence\": [...]}", file=sys.stderr)
+            print('payload must be {"evidence": [...]}', file=sys.stderr)
             return 2
         res = import_rows(Path(args.ledger), rows)
         if args.receipts_out:
-            Path(args.receipts_out).write_text(json.dumps({"kind": "execution_evidence", **res.counts(),
-                                                           "rows": res.receipts}, indent=1) + "\n", encoding="utf-8")
+            Path(args.receipts_out).write_text(
+                json.dumps(
+                    {"kind": "execution_evidence", **res.counts(), "rows": res.receipts}, indent=1
+                )
+                + "\n",
+                encoding="utf-8",
+            )
         c = res.counts()
-        print(f"execution evidence: written={c['written']} alreadyPresent={c['alreadyPresent']} refused={c['refused']}")
+        print(
+            f"execution evidence: written={c['written']} alreadyPresent={c['alreadyPresent']} refused={c['refused']}"
+        )
         return 1 if res.refused else 0
     keys = None
     if args.wagers:
         keys = {r.get("source_bet_key") for r in read_jsonl(Path(args.wagers))}
     problems = validate_ledger(Path(args.ledger), keys)
     if args.result_out:
-        Path(args.result_out).write_text(json.dumps({"problems": len(problems)}) + "\n", encoding="utf-8")
+        Path(args.result_out).write_text(
+            json.dumps({"problems": len(problems)}) + "\n", encoding="utf-8"
+        )
     print(f"execution evidence ledger: problems={len(problems)}")
     return 1 if problems else 0
 
