@@ -139,7 +139,7 @@ def test_candlestick_paths_are_allowlisted_and_orders_still_are_not():
     _assert_read_only("/series/KXA/markets/KXA-1/candlesticks")
     _assert_read_only("/historical/markets/KXA-1/candlesticks")
     with pytest.raises(SchemaError):
-        _assert_read_only("/portfolio/orders")
+        _assert_read_only("/portfolio/orders/ORDER123")
     assert not any("order" in p for p in READ_ONLY_PATH_PREFIXES)
 
 

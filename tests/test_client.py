@@ -231,7 +231,7 @@ def test_only_get_requests_are_issued(signer):
 
 
 @pytest.mark.parametrize(
-    "path", ["/portfolio/orders", "/portfolio/balance/transfer", "/exchange/status"]
+    "path", ["/portfolio/orders/ORDER123", "/portfolio/balance/transfer", "/exchange/status"]
 )
 def test_non_allowlisted_paths_are_refused_before_any_request(signer, path):
     calls = []
@@ -304,7 +304,7 @@ def test_new_routes_are_still_signed_and_still_get_only(signer):
 
 @pytest.mark.parametrize(
     "path",
-    ["/portfolio/orders", "/portfolio/balances",
+    ["/portfolio/orders/ORDER123", "/portfolio/balances",
      "/search/anything_else", "/milestone_admin"],
 )
 def test_mutating_and_unlisted_routes_remain_refused(signer, path):
@@ -318,7 +318,6 @@ def test_mutating_and_unlisted_routes_remain_refused(signer, path):
 #: that widening must never cross: reading what the account HOLDS is allowed,
 #: acting on it is not.
 TRADING_ROUTES = [
-    "/portfolio/orders",
     "/portfolio/orders/batched",
     "/portfolio/orders/ORDER123",
     "/portfolio/orders/ORDER123/amend",
@@ -402,13 +401,14 @@ def test_balance_allowlist_is_exact_match_not_a_prefix(signer, path):
     assert calls == []
 
 
-def test_account_allowlist_admits_nothing_but_the_balance_read():
-    """Structural: the widening is one route, and stays one route."""
+def test_account_allowlist_admits_nothing_but_the_balance_and_order_list_reads():
+    """Structural: the widening is two exact routes (balance, order LIST), and stays two."""
     from kalshi_router.client import ACCOUNT_READ_ONLY_PATHS
 
-    assert ACCOUNT_READ_ONLY_PATHS == frozenset({"/portfolio/balance"})
+    assert ACCOUNT_READ_ONLY_PATHS == frozenset({"/portfolio/balance", "/portfolio/orders"})
     for path in ACCOUNT_READ_ONLY_PATHS:
-        for forbidden in ("order", "transfer", "withdraw", "deposit", "cancel", "amend"):
+        assert path.count("/") == 2                       # exact collection routes: no sub-route can ride in
+        for forbidden in ("transfer", "withdraw", "deposit", "cancel", "amend", "batched", "decrease"):
             assert forbidden not in path
 
 
@@ -422,6 +422,8 @@ def test_no_mutating_method_exists_on_the_client():
     from kalshi_router.client import KalshiReadOnlyClient as C
 
     names = [n for n in dir(C) if not n.startswith("__")]
+    allowed = {"iter_orders"}                              # the one authorised read of the order LIST
+    names = [n for n in names if n not in allowed]
     for verb in ("order", "place", "cancel", "amend", "withdraw",
                  "deposit", "transfer", "post", "put", "delete", "patch"):
         assert not any(verb in n.lower() for n in names), (
