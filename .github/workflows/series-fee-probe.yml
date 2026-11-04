@@ -1,0 +1,53 @@
+# Bounded read-only probe: the fee schedule Kalshi PUBLISHES per series we trade vs our own exchange-reported fees.
+# Prints public series tickers + fee fields and counters (no ids, prices, quantities, fee amounts or timestamps). Main branch only. No orders, amendments or cancels.
+name: Read-only series fee probe
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/series-fee-probe.yml"
+      - "scripts/probe_series_fees.py"
+  workflow_dispatch:
+    inputs:
+      sample:
+        description: "Recent fills to sample (bounded)"
+        type: choice
+        options: ["100", "200"]
+        default: "200"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: readonly-series-fee
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Refuse untrusted refs for credentialed requests
+        run: |
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::error::Read-only credentialed probe must run on main."
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install audited read-only router
+        run: python -m pip install --disable-pip-version-check --quiet .
+      - name: Probe published vs observed fee schedule
+        env:
+          KALSHI_API_KEY_ID: ${{ secrets.KALSHI_API_KEY_ID }}
+          KALSHI_PRIVATE_KEY: ${{ secrets.KALSHI_PRIVATE_KEY }}
+          SAMPLE: ${{ github.event_name == 'push' && '200' || inputs.sample }}
+        run: |
+          set -euo pipefail
+          case "${SAMPLE}" in 100|200) ;; *) echo "::error::unsupported sample size"; exit 1;; esac
+          python scripts/probe_series_fees.py --sample "${SAMPLE}"
