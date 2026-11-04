@@ -1,0 +1,65 @@
+# Manual, bounded, aggregate-only Kalshi execution availability diagnostic.
+# NO orders, cancellations, wagers, data commits, artifacts, caching, or
+# credential handling outside this one read-only step.
+name: Read-only execution evidence availability
+
+on:
+  workflow_dispatch:
+    inputs:
+      sample:
+        description: "Most recent fills to inspect (bounded; never a complete history)"
+        type: choice
+        options:
+          - "25"
+          - "100"
+          - "200"
+        default: "100"
+      historical:
+        description: "Read the historical fills route instead of recent fills"
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: readonly-execution-availability
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Reject untrusted refs for credentialed requests
+        run: |
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::error::Read-only credentialed probe must run on main."
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install audited read-only router
+        run: python -m pip install --disable-pip-version-check --quiet .
+      - name: Probe only aggregate field availability
+        env:
+          KALSHI_API_KEY_ID: ${{ secrets.KALSHI_API_KEY_ID }}
+          KALSHI_PRIVATE_KEY: ${{ secrets.KALSHI_PRIVATE_KEY }}
+          SAMPLE: ${{ inputs.sample }}
+          HISTORICAL: ${{ inputs.historical }}
+        run: |
+          set -euo pipefail
+          case "${SAMPLE}" in 25|100|200) ;; *) echo "::error::unsupported sample size"; exit 1;; esac
+          if [ "${HISTORICAL}" = "true" ]; then
+            python scripts/probe_execution_capture.py --max-fills "${SAMPLE}" --historical
+          elif [ "${HISTORICAL}" = "false" ]; then
+            python scripts/probe_execution_capture.py --max-fills "${SAMPLE}"
+          else
+            echo "::error::unsupported historical flag"
+            exit 1
+          fi
