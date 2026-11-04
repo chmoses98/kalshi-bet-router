@@ -105,6 +105,11 @@ ACCOUNT_READ_ONLY_PATHS = frozenset({
 ORDER_QUERY_PARAMS = frozenset({"limit", "cursor", "status", "ticker", "min_ts", "max_ts"})
 ORDER_STATUSES = frozenset({"resting", "canceled", "executed"})
 
+#: PUBLIC market-catalogue list route (no account data), matched EXACTLY: ``/markets/{ticker}`` already rides the prefix list, but the
+#: list itself has no trailing slash. Query params are restricted to those below.
+PUBLIC_EXACT_PATHS = frozenset({"/markets"})
+MARKET_LIST_PARAMS = frozenset({"series_ticker", "event_ticker", "status", "limit", "cursor"})
+
 @dataclass
 class WalkStats:
     """How a paginated walk ended.
@@ -141,7 +146,7 @@ def _assert_read_only(path: str) -> None:
     prefix (they carry ids and query strings), account-state routes are
     matched exactly so no sub-route can ever ride in behind one.
     """
-    if path in ACCOUNT_READ_ONLY_PATHS:
+    if path in ACCOUNT_READ_ONLY_PATHS or path in PUBLIC_EXACT_PATHS:
         return
     if not any(path.startswith(prefix) for prefix in READ_ONLY_PATH_PREFIXES):
         raise SchemaError(
@@ -493,6 +498,29 @@ class KalshiReadOnlyClient:
         return self._get(BALANCE_PATH, "get_balance")
 
     # --------------------------------------------------------------- metadata
+
+    def iter_markets(self, series_ticker: str, *, status: str = "open", limit: int = 1000, max_pages: int = 5) -> Iterator[dict[str, Any]]:
+        """Yield public market objects of one series (GET /markets), bounded by ``max_pages``. Top-of-book fields only matter here."""
+        if not isinstance(series_ticker, str) or not series_ticker.isalnum():
+            raise SchemaError("series_ticker must be alphanumeric")
+        if status not in ("open", "unopened", "closed", "settled"):
+            raise SchemaError("unsupported market status")
+        if not isinstance(max_pages, int) or isinstance(max_pages, bool) or not 1 <= max_pages <= 20:
+            raise SchemaError("max_pages must be between 1 and 20")
+        cursor: str | None = None
+        seen: set[str] = set()
+        for _ in range(max_pages):
+            params: dict[str, Any] = {"series_ticker": series_ticker, "status": status, "limit": limit}
+            if cursor:
+                params["cursor"] = cursor
+            assert set(params) <= MARKET_LIST_PARAMS
+            payload = self._get("/markets", "get_markets", params)
+            for row in _require_list(payload, "markets", "markets"):
+                if isinstance(row, dict):
+                    yield row
+            cursor = _next_cursor(payload, "markets", seen)
+            if cursor is None:
+                return
 
     def get_market(self, ticker: str) -> dict[str, Any]:
         payload = self._get(f"/markets/{ticker}", "get_market")
