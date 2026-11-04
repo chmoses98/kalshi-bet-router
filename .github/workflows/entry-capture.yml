@@ -1,0 +1,89 @@
+# Prospective ENTRY-MARKET capture (research only, GET-only; no orders, no cancels, no amendments).
+#
+# Why it exists: real orders reach their final state within ~5 s of placement, so the only book that counts as an entry quote is one observed
+# seconds before the order. This conductor loops a fast public top-of-book sampler (GET /markets, every 20 s) and joins each NEW order to the latest
+# snapshot observed AT OR BEFORE its placement. Orders placed before a link started are counted as historical_not_capturable and never joined.
+# Only aggregates (counters + per-game-digest sums in cents) are published, to the `entry-capture-data` branch. Per-order rows never leave memory.
+#
+# Same chaining pattern as nfl-edge-finder's capture conductor: dispatch the successor first, loop ~5h35m, publish every 10 minutes.
+name: Entry-market capture conductor (research only)
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: "how long this link loops (max 335)"
+        required: false
+        default: "335"
+      interval:
+        description: "seconds between sampling passes (min 20)"
+        required: false
+        default: "20"
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: entry-capture
+  cancel-in-progress: false
+
+jobs:
+  conduct:
+    runs-on: ubuntu-latest
+    timeout-minutes: 358
+    steps:
+      - name: Refuse untrusted refs for credentialed requests
+        run: |
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then echo "::error::credentialed capture must run on main"; exit 1; fi
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Dispatch the successor link (a refused dispatch leaves the hourly cron as backstop)
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run entry-capture.yml --ref main && echo "successor dispatched"
+      - name: Install audited read-only router
+        run: python -m pip install --disable-pip-version-check --quiet .
+      - name: Restore cumulative aggregate state
+        run: |
+          mkdir -p cap
+          git fetch --depth=1 origin entry-capture-data 2>/dev/null && git show origin/entry-capture-data:state.json > cap/state.json 2>/dev/null || echo "no prior state (first link)"
+          ls -la cap
+      - name: Loop sampler + joiner, publishing aggregates every 10 minutes
+        env:
+          KALSHI_API_KEY_ID: ${{ secrets.KALSHI_API_KEY_ID }}
+          KALSHI_PRIVATE_KEY: ${{ secrets.KALSHI_PRIVATE_KEY }}
+          MINUTES: ${{ inputs.minutes || '335' }}
+          INTERVAL: ${{ inputs.interval || '20' }}
+          GH_PUSH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          case "${MINUTES}" in ''|*[!0-9]*) echo "::error::bad minutes"; exit 1;; esac
+          case "${INTERVAL}" in ''|*[!0-9]*) echo "::error::bad interval"; exit 1;; esac
+          [ "${MINUTES}" -le 335 ] || { echo "::error::minutes > 335"; exit 1; }
+          publish() {
+            [ -f cap/public.json ] || return 0
+            rm -rf /tmp/pub && mkdir /tmp/pub && cp cap/public.json /tmp/pub/stats.json && cp cap/state.json /tmp/pub/state.json
+            ( cd /tmp/pub && git init -q . && git checkout -q -b entry-capture-data \
+              && git -c user.name=github-actions[bot] -c user.email=github-actions[bot]@users.noreply.github.com add -A \
+              && git -c user.name=github-actions[bot] -c user.email=github-actions[bot]@users.noreply.github.com commit -q -m "entry capture aggregates $(date -u +%FT%TZ)" \
+              && git remote add origin "https://x-access-token:${GH_PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+              && git push -q --force origin entry-capture-data ) >/dev/null 2>&1 && echo "published $(date -u +%T)" || echo "publish failed (will retry)"
+          }
+          python scripts/entry_capture.py --state cap/state.json --public cap/public.json --minutes "${MINUTES}" --interval "${INTERVAL}" > cap/final.txt 2> cap/err.txt &
+          PID=$!
+          while kill -0 "${PID}" 2>/dev/null; do
+            for i in $(seq 1 30); do kill -0 "${PID}" 2>/dev/null || break; sleep 20; done
+            publish
+          done
+          wait "${PID}"; RC=$?
+          publish
+          cat cap/final.txt; tail -c 300 cap/err.txt
+          exit ${RC}
