@@ -1,13 +1,19 @@
-# Manual, bounded, aggregate-only Kalshi execution availability diagnostic.
-# NO orders, cancellations, wagers, data commits, artifacts, caching, or
-# credential handling outside this one read-only step.
+# Bounded, read-only Kalshi execution-source availability diagnostic.
+# Samples at most 100 recent fills when merged to main; afterward manual
+# except when the probe or workflow is edited on main.
+# No orders, cancellations, wagers, data commits, artifacts or caching.
 name: Read-only execution evidence availability
 
 on:
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/execution-capture-availability.yml"
+      - "scripts/probe_execution_capture.py"
   workflow_dispatch:
     inputs:
       sample:
-        description: "Most recent fills to inspect (bounded; never a complete history)"
+        description: "Recent fill sample (bounded; not complete history)"
         type: choice
         options:
           - "25"
@@ -15,7 +21,7 @@ on:
           - "200"
         default: "100"
       historical:
-        description: "Read the historical fills route instead of recent fills"
+        description: "Read historical fills instead of recent fills"
         type: boolean
         required: false
         default: false
@@ -32,7 +38,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Reject untrusted refs for credentialed requests
+      - name: Refuse untrusted refs for credentialed requests
         run: |
           if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
             echo "::error::Read-only credentialed probe must run on main."
@@ -50,8 +56,8 @@ jobs:
         env:
           KALSHI_API_KEY_ID: ${{ secrets.KALSHI_API_KEY_ID }}
           KALSHI_PRIVATE_KEY: ${{ secrets.KALSHI_PRIVATE_KEY }}
-          SAMPLE: ${{ inputs.sample }}
-          HISTORICAL: ${{ inputs.historical }}
+          SAMPLE: ${{ github.event_name == 'push' && '100' || inputs.sample }}
+          HISTORICAL: ${{ github.event_name == 'push' && 'false' || inputs.historical }}
         run: |
           set -euo pipefail
           case "${SAMPLE}" in 25|100|200) ;; *) echo "::error::unsupported sample size"; exit 1;; esac
