@@ -5,14 +5,15 @@ Phase 0 is read-only by construction, not by convention:
 * :meth:`KalshiReadOnlyClient._get` is the only request path, and it hard-codes
   ``GET``.
 * Every path is checked against :data:`READ_ONLY_PATH_PREFIXES` before a request
-  is signed, so a future edit that reaches for ``/portfolio/orders`` fails a
-  test rather than placing a trade.
+  is signed. Only the order LIST route is allowlisted (exact match, GET only);
+  order entry, amendment and cancellation remain unreachable and test-pinned.
 
 Endpoints used (all documented Kalshi ``/trade-api/v2`` routes):
 
 =========================================  ===============================================
 ``GET /portfolio/balance``                 available cash balance (READ ONLY)
 ``GET /portfolio/fills``                   member fills, cursor-paginated
+``GET /portfolio/orders``                  order list (read-only research: client_order_id availability)
 ``GET /portfolio/positions``               the exchange's own position view
 ``GET /portfolio/settlements``             markets the exchange settled and paid
 ``GET /historical/fills``                  fills older than the live route's cutoff
@@ -87,9 +88,22 @@ READ_ONLY_PATH_PREFIXES = (
 #:
 #: Every mutating route (orders, amend, cancel, withdrawals, transfers)
 #: remains unreachable and is pinned so by tests.
+#:
+#: Second owner-authorised read (execution-research mission): the order LIST,
+#: ``GET /portfolio/orders``, so research can learn whether the exchange exposes
+#: ``client_order_id`` or any other explicit link from an order to its origin.
+#: Matched EXACTLY: ``/portfolio/orders/{id}``, ``/batched``, ``/amend``,
+#: ``/decrease``, ``/queue_position`` and every other sub-route stay refused.
+#: ``POST /portfolio/orders`` shares this path, which is why the only request
+#: method this client can emit is the hard-coded GET in ``_get`` (pinned by test).
 ACCOUNT_READ_ONLY_PATHS = frozenset({
     "/portfolio/balance",
+    "/portfolio/orders",
 })
+
+#: Query parameters the order list may carry; anything else is refused.
+ORDER_QUERY_PARAMS = frozenset({"limit", "cursor", "status", "ticker", "min_ts", "max_ts"})
+ORDER_STATUSES = frozenset({"resting", "canceled", "executed"})
 
 @dataclass
 class WalkStats:
@@ -114,6 +128,7 @@ BALANCE_PATH = "/portfolio/balance"
 FILLS_PATH = "/portfolio/fills"
 POSITIONS_PATH = "/portfolio/positions"
 SETTLEMENTS_PATH = "/portfolio/settlements"
+ORDERS_PATH = "/portfolio/orders"
 HISTORICAL_FILLS_PATH = "/historical/fills"
 HISTORICAL_CUTOFF_PATH = "/historical/cutoff"
 HISTORICAL_SETTLEMENTS_PATH = "/historical/settlements"
@@ -337,6 +352,64 @@ class KalshiReadOnlyClient:
     def get_historical_cutoff(self) -> dict[str, Any]:
         """The timestamp before which fills live only in the archive."""
         return self._get(HISTORICAL_CUTOFF_PATH, "get_historical_cutoff")
+
+    def iter_orders(
+        self,
+        max_orders: int,
+        page_limit: int | None = None,
+        stats: "WalkStats | None" = None,
+        status: str | None = None,
+        min_ts: int | None = None,
+        max_ts: int | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        """Yield raw order objects (GET only), newest first, at most ``max_orders``.
+
+        Research use: does the exchange expose ``client_order_id``? Bounded by
+        construction (``max_orders`` is mandatory) and never walks to exhaustion.
+        """
+        if not isinstance(max_orders, int) or isinstance(max_orders, bool) or max_orders < 1:
+            raise SchemaError("max_orders must be a positive integer")
+        if status is not None and status not in ORDER_STATUSES:
+            raise SchemaError("unsupported order status filter")
+        per_page = min(self._config.page_limit if page_limit is None else page_limit, max_orders)
+        base: dict[str, Any] = {}
+        if status is not None:
+            base["status"] = status
+        for name, value in (("min_ts", min_ts), ("max_ts", max_ts)):
+            if value is not None:
+                if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                    raise SchemaError(f"{name} must be a non-negative integer")
+                base[name] = value
+        cursor: str | None = None
+        seen: set[str] = set()
+        yielded = 0
+        while yielded < max_orders:
+            params = {**base, "limit": per_page}
+            if cursor:
+                params["cursor"] = cursor
+            assert set(params) <= ORDER_QUERY_PARAMS
+            payload = self._get(ORDERS_PATH, "get_orders", params)
+            rows = _require_list(payload, "orders", "orders")
+            if stats is not None:
+                stats.pages += 1
+            for row in rows:
+                if not isinstance(row, dict):
+                    raise SchemaError("orders response contained a non-object entry")
+                if stats is not None:
+                    stats.rows += 1
+                yield row
+                yielded += 1
+                if yielded >= max_orders:
+                    if stats is not None:
+                        stats.truncated = True
+                    return
+            cursor = _next_cursor(payload, "orders", seen)
+            if cursor is None:
+                if stats is not None:
+                    stats.exhausted = True
+                return
+            if not rows:
+                raise SchemaError("orders pagination returned an empty page with a live cursor")
 
     def iter_positions(self, page_limit: int | None = None) -> Iterator[dict[str, Any]]:
         """Yield the exchange's own position rows, one per ticker.

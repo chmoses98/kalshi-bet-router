@@ -1,0 +1,63 @@
+# Bounded, GET-only Kalshi order-list probe: does the exchange expose client_order_id / an explicit order origin link?
+# Counters only (no ids, tickers, prices, quantities, fees or timestamps). Main branch only. No orders, amendments or cancels.
+name: Read-only order linkage probe
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/order-linkage-probe.yml"
+      - "scripts/probe_order_linkage.py"
+  workflow_dispatch:
+    inputs:
+      sample:
+        description: "Orders and fills to sample (bounded)"
+        type: choice
+        options: ["25", "100", "200"]
+        default: "100"
+      status:
+        description: "Order status filter"
+        type: choice
+        options: ["all", "executed", "resting", "canceled"]
+        default: "all"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: readonly-order-linkage
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Refuse untrusted refs for credentialed requests
+        run: |
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::error::Read-only credentialed probe must run on main."
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install audited read-only router
+        run: python -m pip install --disable-pip-version-check --quiet .
+      - name: Probe order-linkage field availability (counters only)
+        env:
+          KALSHI_API_KEY_ID: ${{ secrets.KALSHI_API_KEY_ID }}
+          KALSHI_PRIVATE_KEY: ${{ secrets.KALSHI_PRIVATE_KEY }}
+          SAMPLE: ${{ github.event_name == 'push' && '100' || inputs.sample }}
+          STATUS: ${{ github.event_name == 'push' && 'all' || inputs.status }}
+        run: |
+          set -euo pipefail
+          case "${SAMPLE}" in 25|100|200) ;; *) echo "::error::unsupported sample size"; exit 1;; esac
+          case "${STATUS}" in
+            all) python scripts/probe_order_linkage.py --sample "${SAMPLE}" ;;
+            executed|resting|canceled) python scripts/probe_order_linkage.py --sample "${SAMPLE}" --status "${STATUS}" ;;
+            *) echo "::error::unsupported status"; exit 1;;
+          esac
