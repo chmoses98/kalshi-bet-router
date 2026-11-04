@@ -292,7 +292,8 @@ class MilestoneStartIndex:
             self.conflicted_events.add(key)
 
     def start_for_event(self, event_ticker: str | None) -> int | None:
-        if not event_ticker:
+        # An incomplete sweep may have missed a later untrusted or conflicting claim for the same event: trust nothing.
+        if not event_ticker or self.budget_exhausted or self.fetch_failed:
             return None
         return self.starts.get(event_ticker.strip().upper())
 

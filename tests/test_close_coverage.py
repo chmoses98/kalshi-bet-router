@@ -213,3 +213,14 @@ def test_milestone_start_can_be_turned_off():
     markets = {"KXNCAAFGAME-A-1": {"strike": None, "candles": near_close()}}
     cov, c = run(markets, [milestone(["EV-KXNCAAFGAME-A-1"])], use_milestone_start=False)
     assert (cov.no_cutoff, cov.milestone_sweep_requests) == (1, 0) and c.milestone_params == []
+
+
+def test_an_incomplete_sweep_trusts_no_start():
+    from kalshi_router.milestones import MilestoneStartIndex
+
+    for flag in ("budget_exhausted", "fetch_failed"):
+        idx = MilestoneStartIndex()
+        idx.record("EV-X", 1_800_000_000)
+        assert idx.start_for_event("EV-X") == 1_800_000_000
+        setattr(idx, flag, True)
+        assert idx.start_for_event("EV-X") is None
