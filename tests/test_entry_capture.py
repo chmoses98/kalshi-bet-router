@@ -122,3 +122,81 @@ def test_no_side_price_derivation_and_one_sided_book():
     assert row.status == EC.ENTRY_FRESH and row.spread_cents == pytest.approx(2.0) and row.paid_vs_ask_cents == pytest.approx(0.0)
     r2 = EC.Ring(); r2.add(TK, EC.Snap(T0, None, D("0.50")))
     assert EC.join_order(r2, ticker=TK, outcome_side="yes", placed_at=T0 + timedelta(seconds=5), vwap=D("0.5"), qty=D(1)).status == EC.ONE_SIDED
+
+
+def test_bought_no_uses_the_no_leg_price_not_the_yes_axis():
+    """A 40c NO fill is not a 60c fill merely because the YES axis is 60c."""
+    clock, c, col = setup()
+    c.markets["KXNFLGAME"] = [mkt("0.60", "0.62")]
+    col.one_pass()  # book at T0: NO bid 38c / NO ask 40c
+    placed = T0 + timedelta(seconds=15)
+    f = make_fill(71, ticker=TK, action="buy", side="no", order_id="ORD-NO")
+    f["yes_price_dollars"] = "0.60"
+    f["no_price_dollars"] = "0.40"
+    c.orders = [order("ORD-NO", placed)]
+    c.fills = [f]
+    clock.tick(20)
+    assert col.one_pass()["new"] == 1
+    cell = col.agg.public()["cells"]["KXNFLGAME"]
+    assert cell["ENTRY_FRESH"] == 1
+    assert cell["fresh_paid_vs_ask_sum"] == pytest.approx(0.0)
+    assert cell["fresh_paid_vs_mid_sum"] == pytest.approx(1.0)
+    assert col.public()["metrics_version"] == "purchased_leg_v2"
+
+
+def test_sell_does_not_get_treated_as_a_purchase_or_repeat_as_new():
+    clock, c, col = setup()
+    c.markets["KXNFLGAME"] = [mkt("0.48", "0.50")]
+    col.one_pass()
+    c.orders = [order("ORD-SELL", T0 + timedelta(seconds=10))]
+    c.fills = [make_fill(72, ticker=TK, order_id="ORD-SELL", action="sell", side="yes")]
+    clock.tick(20)
+    assert col.one_pass()["new"] == 0
+    assert col.public()["totals"]["orders"] == 0
+    assert col.health["non_buy_orders_excluded"] == 1
+    col.one_pass()
+    assert col.health["non_buy_orders_excluded"] == 1
+    assert col.public()["totals"]["ENTRY_FRESH"] == 0
+
+
+def test_upgrade_separates_unverifiable_old_yes_axis_aggregates():
+    """Old NO fills cannot be reconstructed from legacy aggregate-only state."""
+    clock, c, col = setup()
+    c.markets["KXNFLGAME"] = [mkt("0.48", "0.50")]
+    col.one_pass()
+    c.orders = [order("ORD-OLD", T0 + timedelta(seconds=10))]
+    c.fills = [fill("ORD-OLD", "0.50")]
+    clock.tick(20)
+    col.one_pass()
+    saved = col.state()
+    # Simulate code before the purchased-side correction: no metrics_version.
+    saved.pop("metrics_version")
+    saved.pop("ignored_orders")
+    saved.pop("legacy_unreconciled")
+    reopened = Collector(c, ["KXNFLGAME"], state=saved, now=clock, sleep=lambda _: None)
+    pub = reopened.public()
+    assert pub["totals"]["orders"] == 0
+    assert pub["legacy_unreconciled"]["orders"] == 1
+    assert pub["legacy_unreconciled"]["fresh_entry_quotes"] == 1
+    reopened.one_pass()
+    assert reopened.agg.public()["totals"]["orders"] == 0
+    assert reopened.state()["metrics_version"] == "purchased_leg_v2"
+    # A second restart does not resurrect the unverifiable cohort.
+    again = Collector(c, ["KXNFLGAME"], state=reopened.state(), now=clock, sleep=lambda _: None)
+    assert again.public()["legacy_unreconciled"]["orders"] == 1
+    assert again.public()["totals"]["orders"] == 0
+
+
+def test_mixed_contract_fills_do_not_generate_price_comparisons():
+    clock, c, col = setup()
+    c.markets["KXNFLGAME"] = [mkt("0.48", "0.50")]
+    col.one_pass()
+    c.orders = [order("ORD-MIX", T0 + timedelta(seconds=15))]
+    c.fills = [
+        make_fill(73, ticker=TK, side="yes", order_id="ORD-MIX"),
+        make_fill(74, ticker=TK, side="no", order_id="ORD-MIX"),
+    ]
+    clock.tick(20)
+    assert col.one_pass()["new"] == 0
+    assert col.health["mixed_contract_orders_excluded"] == 1
+    assert col.agg.public()["totals"]["ENTRY_FRESH"] == 0
