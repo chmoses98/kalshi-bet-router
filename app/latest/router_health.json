@@ -1,0 +1,214 @@
+{
+  "awaiting_manual_merge": 6,
+  "bets_discovered": 757,
+  "blocked": 14,
+  "by_sport": {
+    "CBB": {
+      "auto_merge": null,
+      "classification": "UNSUPPORTED",
+      "delivered": null,
+      "destination_repo": null,
+      "eligible": null,
+      "failed": 0,
+      "last_error_type": null,
+      "ledger_branch": null,
+      "on_ledger": null,
+      "proposed_not_merged": null,
+      "routable": false,
+      "settlement": null,
+      "status": "NOT_ROUTABLE"
+    },
+    "CFB": {
+      "auto_merge": true,
+      "classification": "SUPPORTED",
+      "delivered": 295,
+      "destination_repo": "chmoses98/cfb-edge-finder",
+      "eligible": 295,
+      "failed": 0,
+      "last_error_type": null,
+      "ledger_branch": "accounting-data",
+      "on_ledger": 295,
+      "proposed_not_merged": 0,
+      "routable": true,
+      "settlement": {
+        "on_ledger": 294,
+        "proposed_not_merged": 0,
+        "refused": 0,
+        "rows": 294,
+        "status": "SETTLED",
+        "unaccounted": 0,
+        "waiting_for_parent_wager": 0
+      },
+      "status": "DELIVERED"
+    },
+    "MLB": {
+      "auto_merge": true,
+      "classification": "SUPPORTED",
+      "delivered": 131,
+      "destination_repo": "chmoses98/edge-finder-api",
+      "eligible": 131,
+      "failed": 0,
+      "last_error_type": null,
+      "ledger_branch": "main",
+      "on_ledger": 131,
+      "proposed_not_merged": 0,
+      "routable": true,
+      "settlement": null,
+      "status": "DELIVERED"
+    },
+    "NBA": {
+      "auto_merge": false,
+      "classification": "SUPPORTED",
+      "delivered": 53,
+      "destination_repo": "chmoses98/nba-edge-finder",
+      "eligible": 53,
+      "failed": 0,
+      "last_error_type": null,
+      "ledger_branch": "accounting-data",
+      "on_ledger": 47,
+      "proposed_not_merged": 6,
+      "routable": true,
+      "settlement": {
+        "on_ledger": 47,
+        "proposed_not_merged": 0,
+        "refused": 0,
+        "rows": 53,
+        "status": "WAITING_FOR_PARENT_WAGER",
+        "unaccounted": 0,
+        "waiting_for_parent_wager": 6
+      },
+      "status": "AWAITING_MANUAL_MERGE"
+    },
+    "NFL": {
+      "auto_merge": true,
+      "classification": "SUPPORTED",
+      "delivered": 231,
+      "destination_repo": "chmoses98/nfl-edge-finder",
+      "eligible": 231,
+      "failed": 0,
+      "last_error_type": null,
+      "ledger_branch": "handicap-data",
+      "on_ledger": 231,
+      "proposed_not_merged": 0,
+      "routable": true,
+      "settlement": {
+        "on_ledger": 231,
+        "proposed_not_merged": 0,
+        "refused": 0,
+        "rows": 231,
+        "status": "SETTLED",
+        "unaccounted": 0,
+        "waiting_for_parent_wager": 0
+      },
+      "status": "DELIVERED"
+    },
+    "NHL": {
+      "auto_merge": true,
+      "classification": "SUPPORTED",
+      "delivered": 38,
+      "destination_repo": "chmoses98/NHL-edge-finder",
+      "eligible": 38,
+      "failed": 0,
+      "last_error_type": null,
+      "ledger_branch": "accounting-data",
+      "on_ledger": 38,
+      "proposed_not_merged": 0,
+      "routable": true,
+      "settlement": {
+        "on_ledger": 38,
+        "proposed_not_merged": 0,
+        "refused": 0,
+        "rows": 38,
+        "status": "SETTLED",
+        "unaccounted": 0,
+        "waiting_for_parent_wager": 0
+      },
+      "status": "DELIVERED"
+    },
+    "SOCCER": {
+      "auto_merge": true,
+      "classification": "SUPPORTED",
+      "delivered": 9,
+      "destination_repo": "chmoses98/soccer-edge-finder",
+      "eligible": 9,
+      "failed": 0,
+      "last_error_type": null,
+      "ledger_branch": "accounting-data",
+      "on_ledger": 9,
+      "proposed_not_merged": 0,
+      "routable": true,
+      "settlement": {
+        "on_ledger": 9,
+        "proposed_not_merged": 0,
+        "refused": 0,
+        "rows": 9,
+        "status": "SETTLED",
+        "unaccounted": 0,
+        "waiting_for_parent_wager": 0
+      },
+      "status": "DELIVERED"
+    },
+    "TENNIS": {
+      "auto_merge": false,
+      "classification": "SUPPORTED",
+      "delivered": 0,
+      "destination_repo": "chmoses98/Tennis-Edge-Finder",
+      "eligible": null,
+      "failed": 0,
+      "last_error_type": null,
+      "ledger_branch": "accounting-data",
+      "on_ledger": null,
+      "proposed_not_merged": null,
+      "routable": true,
+      "settlement": null,
+      "status": "NO_OP"
+    }
+  },
+  "commit_sha": "c57a6354697c15e915acbe65469039a8cfd59858",
+  "deferred": 0,
+  "delivered": 757,
+  "errors": [],
+  "failed": 0,
+  "generated_at": "2026-11-07T17:53:37Z",
+  "kind": "router_health",
+  "last_delivery_run": {
+    "concluded_at": "2026-11-07T17:05:03Z",
+    "conclusion": "success",
+    "health_state": "blocked",
+    "run_id": "42387573038",
+    "started_at": "2026-11-07T15:41:10Z",
+    "url": "https://github.com/chmoses98/kalshi-bet-router/actions/runs/42387573038"
+  },
+  "last_poll_at": "2026-11-07T15:41:10Z",
+  "last_settlement_run": {
+    "concluded_at": "2026-11-07T17:53:24Z",
+    "conclusion": "success",
+    "health_state": null,
+    "run_id": "42394941793",
+    "started_at": "2026-11-07T17:09:58Z",
+    "url": "https://github.com/chmoses98/kalshi-bet-router/actions/runs/42394941793"
+  },
+  "overall_status": "DEGRADED",
+  "poll_age_seconds": 7947.5,
+  "router_health_state": "blocked",
+  "run_id": "run_20261107175337000000",
+  "schema_version": "edge_finder.app.v1",
+  "sport": "ALL",
+  "thresholds": {
+    "router": {
+      "fresh_after_seconds": 1800,
+      "stale_after_seconds": 14400
+    },
+    "settlement": {
+      "fresh_after_seconds": 86400,
+      "stale_after_seconds": 259200
+    }
+  },
+  "waiting_for_parent_wager": 6,
+  "warnings": [
+    "router health is BLOCKED: a wager exists that no destination can record; see the refusal counts",
+    "NBA: 6 wager(s) delivered to the open proposal, awaiting a person's merge (observation period, auto_merge off) -- pending by design, not a failure",
+    "NBA: 6 settlement(s) WAITING_FOR_PARENT_WAGER -- their wagers are on the open, unmerged proposal; withheld, re-offered every run, imported once the wager merges",
+    "TENNIS: observation period (auto_merge off); deliveries open a pull request a person merges"
+  ]
+}
